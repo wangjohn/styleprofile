@@ -13,10 +13,12 @@ content words masked, character trigrams, and part-of-speech trigrams.
 
 ### The reference profile
 
-A reference profile stores, per window, every metric; each metric's mean and spread; and how
-much each metric varies in the writer's own held-out writing (each document scored against
-the others). With `--contrast`, it also learns which metrics separate the writer from the
-contrast drafts.
+`styleprofile build` makes a reference profile. It stores, per window (500 words by default,
+`--window-words`), every metric; each metric's mean and spread; and how much each metric
+varies in the writer's own held-out writing (each document scored against the others). With
+`--contrast`, it also learns which metrics separate the writer from the contrast drafts.
+`styleprofile score` reads the window size and other settings back from the profile, so a
+draft is always cut the way the reference was.
 
 ## Two scores
 
@@ -43,7 +45,8 @@ Two scores answer two questions:
   certain than it looks.
 - **Is it just length?** The profile also reports how well chunk word count alone separates
   the two sets. If length alone reaches an AUC of 0.75 or more, it warns: the likeness score
-  may partly reflect length, so match lengths or window the drafts with `--window-words`.
+  may partly reflect length, so match lengths, or keep windowing on (`build` windows the
+  writer and the drafts alike unless given `--no-window`).
 
 ## Resolution floors
 

@@ -48,7 +48,7 @@ def load_parser(model: str = DEFAULT_MODEL) -> Parser:
     except (ImportError, OSError) as error:
         raise SyntaxUnavailableError(
             f"syntax metrics need spaCy and {model!r}; install the `syntax` extra "
-            "(pip install 'styleprofile[syntax]') or pass --no-syntax"
+            "(pip install 'styleprofile[syntax]') or profile without syntax metrics"
         ) from error
     nlp.max_length = 5_000_000
     return Parser(nlp, model, str(nlp.meta.get("version", "")), str(spacy.__version__))

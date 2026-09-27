@@ -2,7 +2,8 @@
 
 A small corpus for trying styleprofile end to end. Run `make demo` from the repository root:
 it builds a reference from `writer/`, contrasted with `llm-drafts/`, into
-`profiles/demo-writer.json` (git-ignored), then scores `draft.md` against it.
+`profiles/demo-writer.json` (git-ignored) with `styleprofile build`, then scores `draft.md`
+against it with `styleprofile score`.
 
 All text here is original, written for this repository, and released under the repository's
 MIT license. No third-party or public-domain text is included.

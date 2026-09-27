@@ -10,7 +10,9 @@ from styleprofile import (
     Chunk,
     StyleProfileError,
     build_profile,
+    build_reference,
     load_chunks,
+    load_reference,
     surface_metrics,
     window,
 )
@@ -201,7 +203,7 @@ def test_profile_scores_chunks_against_a_reference() -> None:
     assert any("fewer than 150 words" in warning for warning in scored["warnings"])
 
 
-def test_style_profile_cli_writes_report(
+def test_legacy_flat_form_still_works_with_a_deprecation_note(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = tmp_path / "essay.md"
@@ -211,16 +213,28 @@ def test_style_profile_cli_writes_report(
     command = [str(source), "--no-syntax", "--window-words", "100"]
 
     assert main([*command, "--output", str(reference)]) == 0
+    built = capsys.readouterr()
+    assert "deprecated" in built.err
+    assert f"use: styleprofile build {source} -o {reference} --no-syntax --window-words 100" in (
+        built.err
+    )
     assert main([*command, "--reference", str(reference), "--output", str(output)]) == 0
 
     report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["kind"] == "score"
     assert report["chunk_count"] == 3
     assert report["settings"]["window_words"] == 100
     assert report["settings"]["syntax"] is None
-    output_text = capsys.readouterr().out
-    assert "STYLE COMPARISON" in output_text
-    assert "Overall: close" in output_text
-    assert "No metric differs by 1 sd or more on average." in output_text
+    scored = capsys.readouterr()
+    assert f"use: styleprofile score {source} {reference} -o {output}" in scored.err
+    assert "STYLE COMPARISON" in scored.out
+    assert "Overall: close" in scored.out
+    assert "No metric differs by 1 sd or more on average." in scored.out
+
+    # A reference built by the flat form keeps its old default of no windowing.
+    assert main([str(source), "--no-syntax", "--output", str(reference)]) == 0
+    assert "--no-window" in capsys.readouterr().err
+    assert json.loads(reference.read_text(encoding="utf-8"))["chunk_count"] == 1
 
 
 def test_syntax_metrics_when_spacy_is_installed() -> None:
@@ -467,7 +481,7 @@ def test_style_profile_cli_rejects_non_positive_top_k(
 ) -> None:
     source = tmp_path / "essay.md"
     source.write_text(AUTHOR, encoding="utf-8")
-    command = [str(source), "--no-syntax", "--top-k", "0", "--output", str(tmp_path / "out.json")]
+    command = ["build", str(source), "--no-syntax", "--top-k", "0", "-o", str(tmp_path / "o.json")]
 
     assert main(command) == 1
     assert "--top-k must be positive" in capsys.readouterr().err
@@ -682,12 +696,12 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
     sample = tmp_path / "sample.md"
     sample.write_text(GENERIC, encoding="utf-8")
 
-    build = [str(author_dir), "--contrast", str(llm_dir), "--output", str(reference)]
-    assert main(["--no-syntax", *build]) == 0
+    build = ["build", str(author_dir), "--contrast", str(llm_dir), "-o", str(reference)]
+    assert main([*build, "--no-syntax"]) == 0
     assert "Contrast: LLM drafts" in capsys.readouterr().out
 
-    score = [str(sample), "--reference", str(reference), "--output", str(tmp_path / "o.json")]
-    assert main(["--no-syntax", *score]) == 0
+    score = ["score", str(sample), str(reference), "-o", str(tmp_path / "o.json")]
+    assert main([*score, "--no-syntax"]) == 0
     output = capsys.readouterr().out
     assert "LLM-likeness: " in output
     assert "The reference's own writing scores" in output
@@ -916,18 +930,18 @@ def test_output_cannot_overwrite_the_reference(tmp_path: Path, capsys: Any) -> N
     source = tmp_path / "a.md"
     source.write_text(AUTHOR, encoding="utf-8")
     reference = tmp_path / "ref.json"
-    assert main([str(source), "--no-syntax", "--output", str(reference)]) == 0
+    assert main(["build", str(source), "--no-syntax", "-o", str(reference)]) == 0
     saved = reference.read_text(encoding="utf-8")
     capsys.readouterr()
 
     same = str(tmp_path / "." / "ref.json")
-    assert main([str(source), "--no-syntax", "--reference", str(reference), "--output", same]) == 1
-    assert "--output is the --reference file" in capsys.readouterr().err
+    assert main(["score", str(source), str(reference), "--no-syntax", "-o", same]) == 1
+    assert "--output is the reference file" in capsys.readouterr().err
     assert reference.read_text(encoding="utf-8") == saved
 
 
 def test_stdin_can_be_read_only_once(tmp_path: Path, capsys: Any) -> None:
-    assert main(["-", "-", "--no-syntax", "--output", str(tmp_path / "out.json")]) == 1
+    assert main(["build", "-", "-", "--no-syntax", "-o", str(tmp_path / "out.json")]) == 1
     assert "can be given only once" in capsys.readouterr().err
 
 
@@ -961,7 +975,7 @@ def test_unreadable_encodings_are_reported_and_a_bom_is_accepted(
     records.write_bytes(b'{"text": "caf\xe9"}\n')
     with pytest.raises(StyleProfileError, match="is not UTF-8 text"):
         load_chunks([str(records)])
-    assert main([str(binary), "--no-syntax", "--output", str(tmp_path / "o.json")]) == 1
+    assert main(["build", str(binary), "--no-syntax", "-o", str(tmp_path / "o.json")]) == 1
     assert "is not UTF-8 text" in capsys.readouterr().err
 
     marked = tmp_path / "bom.jsonl"
@@ -1082,3 +1096,362 @@ def test_registry_definitions_are_complete() -> None:
     assert rows[0] == ("Size", "Words", "", METRIC_BY_NAME["words"].about)
     assert ("Punctuation", "Em dashes", "/1k") in [row[:3] for row in rows]
     assert len(describe(syntax=False)) == sum(not metric.syntax for metric in METRICS)
+
+
+# Command line: build once, score many times.
+
+
+def _write_docs(folder: Path, chunks: list[Chunk]) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    for chunk in chunks:
+        (folder / f"{chunk.id}.md").write_text(chunk.text, encoding="utf-8")
+    return folder
+
+
+def _built(tmp_path: Path, *flags: str) -> Path:
+    """A no-syntax reference built from four short documents with 100-word windows."""
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    reference = tmp_path / "writer.json"
+    command = ["build", str(posts), "-o", str(reference), "--no-syntax", "--window-words", "100"]
+    assert main([*command, *flags]) == 0
+    return reference
+
+
+def _sample(tmp_path: Path, text: str = GENERIC) -> Path:
+    sample = tmp_path / "draft.md"
+    sample.write_text(text, encoding="utf-8")
+    return sample
+
+
+def test_build_and_score_split_the_workflow(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    sample = _sample(tmp_path)
+    capsys.readouterr()
+    before = sorted(tmp_path.iterdir())
+
+    assert main(["score", str(sample), str(reference)]) == 0
+    scored = capsys.readouterr()
+    assert "STYLE COMPARISON" in scored.out
+    assert "wrote" not in scored.out and not scored.err
+    assert sorted(tmp_path.iterdir()) == before, "score writes no file without -o"
+
+    output = tmp_path / "out" / "draft.json"
+    # Options may sit between the sample and the reference.
+    assert main(["score", str(sample), "-o", str(output), str(reference)]) == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["kind"] == "score"
+    # Inherited from the reference: 100-word windows, min words and no syntax.
+    assert report["settings"]["window_words"] == 100
+    assert report["settings"]["min_words"] == 1
+    assert report["settings"]["syntax"] is None
+    assert not any("window sizes differ" in warning for warning in report["warnings"])
+    assert f"wrote {output}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("flags", "note", "window_words", "min_words"),
+    [
+        ([], None, 100, 1),
+        (["--window-words", "100"], None, 100, 1),
+        (["--window-words", "50"], "window words 100 -> 50", 50, 1),
+        (["--no-window"], "window words 100 -> off", None, 1),
+        (["--window-words", "0"], "window words 100 -> off", None, 1),
+        (["--min-words", "5"], "min words 1 -> 5", 100, 5),
+    ],
+)
+def test_score_overrides_win_with_a_note(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    flags: list[str],
+    note: str | None,
+    window_words: int | None,
+    min_words: int,
+) -> None:
+    reference = _built(tmp_path)
+    capsys.readouterr()
+    output = tmp_path / "draft.json"
+
+    command = ["score", str(_sample(tmp_path, AUTHOR)), str(reference), "-o", str(output)]
+    assert main([*command, *flags]) == 0
+    err = capsys.readouterr().err
+    settings = json.loads(output.read_text(encoding="utf-8"))["settings"]
+    assert (settings["window_words"], settings["min_words"]) == (window_words, min_words)
+    if note is None:
+        assert "overriding" not in err
+    else:
+        assert note in err and "may not be comparable" in err
+
+
+def test_json_output_is_the_only_thing_on_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    capsys.readouterr()
+    output = tmp_path / "draft.json"
+    sample = str(_sample(tmp_path))
+
+    command = ["score", sample, str(reference), "--json", "-o", str(output), "--window-words", "50"]
+    assert main(command) == 0
+    captured = capsys.readouterr()
+    printed = json.loads(captured.out)
+    assert printed == json.loads(output.read_text(encoding="utf-8"))
+    assert printed["kind"] == "score" and printed["reference"]["delta_mean"] > 0
+    assert "overriding" in captured.err and f"wrote {output}" in captured.err
+
+    assert main(["score", sample, str(reference), "--quiet", "--window-words", "50"]) == 0
+    quiet = capsys.readouterr()
+    assert quiet.out.count("\n") == 1 and quiet.out.startswith(f"{sample}: ")
+    assert "Delta" in quiet.out and not quiet.err
+
+
+def test_score_reports_cannot_be_used_as_references(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    scored = tmp_path / "draft.json"
+    sample = str(_sample(tmp_path))
+    assert main(["score", sample, str(reference), "-o", str(scored)]) == 0
+    capsys.readouterr()
+
+    assert main(["score", sample, str(scored)]) == 1
+    err = capsys.readouterr().err
+    assert "is a score report" in err and "hint: score against the reference profile" in err
+
+    # Reports written before `kind` existed are recognized by their reference section.
+    legacy = json.loads(scored.read_text(encoding="utf-8"))
+    del legacy["kind"]
+    scored.write_text(json.dumps(legacy), encoding="utf-8")
+    with pytest.raises(StyleProfileError, match="is a score report"):
+        load_reference(scored)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["score", "{sample}"], "score needs a sample and then a reference profile"),
+        (["score", "{reference}", "{sample}"], "the reference profile goes last"),
+        (["score", "{sample}", "-"], "must be a file"),
+        (["score", "{sample}", "missing.json"], "missing.json not found; it goes last"),
+        (["score", "{sample}", "--reference", "{reference}"], "not --reference"),
+        (["score", "{sample}", "{reference}", "-o", "{reference}"], "--output is the reference"),
+        (["score", "-", "-", "{reference}"], "can be given only once"),
+        (["build", "{sample}", "-o", "x.json", "--window-words", "-1"], "0 (no windowing)"),
+        (["build", "{sample}", "--contrast", "{sample}", "-o", "x.json"], "at least two"),
+    ],
+)
+def test_cli_errors_say_how_to_fix_them(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    message: str,
+) -> None:
+    reference = _built(tmp_path)
+    sample = _sample(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+    paths = {"sample": str(sample), "reference": str(reference)}
+
+    assert main([argument.format(**paths) for argument in arguments]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_library_errors_do_not_name_flags() -> None:
+    with pytest.raises(StyleProfileError) as error:
+        build_reference([Chunk("one", "s", AUTHOR)], parser=None, contrast=_llm_docs())
+    assert error.value.code == "contrast_needs_documents" and "--" not in str(error.value)
+
+
+def test_repeatable_contrast_does_not_swallow_inputs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    first = _write_docs(tmp_path / "llm-a", _llm_docs()[:1])
+    second = _write_docs(tmp_path / "llm-b", _llm_docs()[1:])
+    reference = tmp_path / "writer.json"
+
+    command = ["build", "--contrast", str(first), str(posts), "--contrast", str(second)]
+    assert main([*command, "-o", str(reference), "--no-syntax", "--contrast-label", "GPT"]) == 0
+    report = json.loads(reference.read_text(encoding="utf-8"))
+    assert report["kind"] == "reference"
+    assert report["settings"]["inputs"] == [str(posts)]
+    assert report["settings"]["contrast"] == [str(first), str(second)]
+    assert (report["contrast"]["label"], report["contrast"]["sources"]) == ("GPT", 2)
+    assert "Contrast: GPT drafts" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("documents", "repeats", "window", "expected"),
+    [
+        (1, 1, "100", ["from 1 document", "chunks; aim for 15", "words; aim for 20,000"]),
+        (4, 1, "0", ["by adding documents or using --window-words 500", "words; aim for"]),
+        (16, 22, "0", []),
+    ],
+)
+def test_build_warns_about_thin_references_and_names_the_next_command(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    documents: int,
+    repeats: int,
+    window: str,
+    expected: list[str],
+) -> None:
+    text = "\n\n".join([AUTHOR] * repeats)
+    _write_docs(tmp_path / "posts", [Chunk(f"d{i}", "s", text) for i in range(documents)])
+    monkeypatch.chdir(tmp_path)
+
+    command = ["build", "posts", "-o", "out/writer.json", "--no-syntax", "--window-words", window]
+    assert main(command) == 0
+    out = capsys.readouterr().out
+    thin = [line for line in out.splitlines() if line.startswith("Thin reference:")]
+    assert len(thin) == len(expected)
+    assert all(any(phrase in line for line in thin) for phrase in expected)
+    assert "\nwrote out/writer.json\n" in out
+    assert out.rstrip().endswith("styleprofile score <draft> out/writer.json")
+
+
+def test_missing_spacy_falls_back_with_a_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from styleprofile import SyntaxUnavailableError, cli
+
+    def unavailable() -> None:
+        raise SyntaxUnavailableError("no spaCy")
+
+    monkeypatch.setattr(cli, "load_parser", unavailable)
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    reference = tmp_path / "writer.json"
+
+    assert main(["build", str(posts), "-o", str(reference)]) == 0
+    assert "surface metrics only" in capsys.readouterr().err
+    report = json.loads(reference.read_text(encoding="utf-8"))
+    assert report["settings"]["syntax"] is None
+
+    # A reference with syntax: score follows it, and leaves syntax out when spaCy is missing.
+    report["settings"]["syntax"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    reference.write_text(json.dumps(report), encoding="utf-8")
+    sample = str(_sample(tmp_path))
+    assert main(["score", sample, str(reference)]) == 0
+    captured = capsys.readouterr()
+    assert "syntax is left out" in captured.err and "overriding" not in captured.err
+    assert main(["score", sample, str(reference), "--no-syntax"]) == 0
+    assert "syntax on -> off" in capsys.readouterr().err
+
+
+def test_show_renders_saved_reports_without_recomputing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    scored = tmp_path / "draft.json"
+    assert main(["score", str(_sample(tmp_path)), str(reference), "-o", str(scored)]) == 0
+    live = capsys.readouterr().out
+
+    assert main(["show", str(reference)]) == 0
+    assert capsys.readouterr().out.startswith("STYLE PROFILE")
+    assert main(["show", str(scored), "--all"]) == 0
+    shown = capsys.readouterr().out
+    assert shown.startswith("STYLE COMPARISON") and "All metrics" in shown
+    overall = next(line for line in live.splitlines() if line.startswith("Overall"))
+    assert overall in shown
+
+    # A score report from before baselines were saved falls back to its reference file.
+    report = json.loads(scored.read_text(encoding="utf-8"))
+    del report["reference"]["baseline"]
+    scored.write_text(json.dumps(report), encoding="utf-8")
+    assert main(["show", str(scored)]) == 0
+    captured = capsys.readouterr()
+    assert overall in captured.out and "no saved copy of its reference" in captured.err
+    reference.unlink()
+    assert main(["show", str(scored)]) == 1
+    assert "score the sample again" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("flags", "syntax"), [([], None), (["--no-syntax"], False), (["--syntax"], True)]
+)
+def test_metrics_lists_the_registry_by_area(
+    capsys: pytest.CaptureFixture[str], flags: list[str], syntax: bool | None
+) -> None:
+    from styleprofile.metrics import describe
+
+    assert main(["metrics", *flags]) == 0
+    out = capsys.readouterr().out
+    rows = describe(syntax=syntax is not False)
+    if syntax:
+        rows = [row for row in rows if row not in describe(syntax=False)]
+    assert out.startswith(f"{len(rows)} metrics.")
+    assert all(row.about in out for row in rows)
+    assert ("\nSyntax\n" in out) is (syntax is not False)
+    assert ("\nPunctuation\n" in out) is (syntax is not True)
+
+
+@pytest.mark.parametrize("command", ["build", "score", "show", "metrics"])
+def test_each_command_has_short_help_with_an_example(
+    capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        main([command, "--help"])
+    assert exit_.value.code == 0
+    out = capsys.readouterr().out
+    assert f"example:\n  styleprofile {command}" in out
+    assert len(out.splitlines()) < 40
+
+
+def test_version_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> None:
+    from styleprofile import __version__
+    from styleprofile.profile import VERSION
+
+    with pytest.raises(SystemExit) as exit_:
+        main(["--version"])
+    assert exit_.value.code == 0
+    assert (
+        capsys.readouterr().out.strip() == f"styleprofile {__version__} (report schema {VERSION})"
+    )
+    with pytest.raises(SystemExit) as exit_:
+        main(["scor", "draft.md"])
+    assert exit_.value.code == 2
+    assert "invalid choice: 'scor'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("environment", "tty", "expected"),
+    [
+        ({}, False, False),
+        ({}, True, True),
+        ({"NO_COLOR": "1"}, True, False),
+        ({"FORCE_COLOR": "1"}, False, True),
+        ({"FORCE_COLOR": "0"}, True, True),
+        ({"FORCE_COLOR": "0"}, False, False),
+        ({"FORCE_COLOR": "1", "NO_COLOR": "1"}, False, False),
+    ],
+)
+def test_color_honors_no_color_and_force_color(
+    monkeypatch: pytest.MonkeyPatch, environment: dict[str, str], tty: bool, expected: bool
+) -> None:
+    import sys
+
+    from styleprofile import cli
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    for name, setting in environment.items():
+        monkeypatch.setenv(name, setting)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
+    assert cli._color() is expected
+
+
+def test_build_profile_wraps_build_reference_and_score() -> None:
+    from styleprofile import report_kind, score
+
+    reference = build_reference(_author_docs(), parser=None)
+    assert reference == build_profile(_author_docs(), parser=None)
+    assert report_kind(reference) == "reference"
+    sample = [Chunk("g", "s", GENERIC)]
+    scored = score(sample, reference, parser=None)
+    assert scored == build_profile(sample, parser=None, reference=reference)
+    assert report_kind(scored) == "score"
+    baseline = scored["reference"]["baseline"]
+    assert baseline["summary"]["voice"]["contractions_per_1k"].keys() == {"mean", "sd"}
