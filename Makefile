@@ -20,10 +20,11 @@ typecheck:
 
 check: test lint typecheck
 
-# Build a reference from the sample corpus in examples/ and score a draft against it.
-# Outputs go to profiles/, which is git-ignored.
+# Build a reference from the sample corpus in examples/, score a draft against it, and show
+# the saved score. Outputs go to profiles/, which is git-ignored.
 demo:
-	$(UV) run styleprofile examples/writer --window-words 500 \
-		--contrast examples/llm-drafts --output profiles/demo-writer.json
-	$(UV) run styleprofile examples/draft.md --window-words 500 \
-		--reference profiles/demo-writer.json --output profiles/demo-draft.json
+	$(UV) run styleprofile build examples/writer --contrast examples/llm-drafts \
+		-o profiles/demo-writer.json
+	$(UV) run styleprofile score examples/draft.md profiles/demo-writer.json \
+		-o profiles/demo-draft.json
+	$(UV) run styleprofile show profiles/demo-draft.json > /dev/null

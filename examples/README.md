@@ -2,7 +2,8 @@
 
 A small corpus for trying styleprofile end to end. Run `make demo` from the repository root:
 it builds a reference from `writer/`, contrasted with `llm-drafts/`, into
-`profiles/demo-writer.json` (git-ignored), then scores `draft.md` against it.
+`profiles/demo-writer.json` (git-ignored) with `styleprofile build`, then scores `draft.md`
+against it with `styleprofile score`.
 
 All text here is original, written for this repository, and released under the repository's
 MIT license. No third-party or public-domain text is included.
@@ -19,6 +20,6 @@ MIT license. No third-party or public-domain text is included.
   narrator's voice but with two paragraphs that slip into the LLM register, so the comparison
   has something to find.
 
-The corpus is far smaller than the README recommends (15 or more documents and 20,000 or
-more words), so treat the demo's numbers as an illustration of the output, not as calibrated
+The corpus is far smaller than the README recommends (15 or more chunks from several
+documents, and 20,000 or more words), so treat the demo's numbers as an illustration of the output, not as calibrated
 scores.

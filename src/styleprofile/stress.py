@@ -223,16 +223,19 @@ def evaluate_rewording(
     out together.
     """
     if not edited:
-        raise StyleProfileError("pass at least one --edited LABEL=DIR")
+        raise StyleProfileError("no edited sets to evaluate", code="no_edited_sets")
     if ORIGINAL in edited:
-        raise StyleProfileError(f"{ORIGINAL!r} names the unedited drafts; use another label")
+        raise StyleProfileError(
+            f"{ORIGINAL!r} names the unedited drafts; use another label", code="reserved_label"
+        )
     for set_label, chunks in {"contrast": contrast_chunks, **edited}.items():
         duplicated = _duplicates(chunks)
         if duplicated:
             raise StyleProfileError(
                 f"{set_label}: {len(duplicated)} name(s) belong to more than one draft, e.g. "
                 f"{duplicated[0]!r}, so edited copies cannot be matched to originals; give "
-                "every draft a distinct name"
+                "every draft a distinct name",
+                code="duplicate_names",
             )
     profile, fit = build_contrast_reference(
         reference_chunks,
@@ -272,7 +275,8 @@ def evaluate_rewording(
         if unmatched:
             raise StyleProfileError(
                 f"{set_label}: {len(unmatched)} edited file(s) have no original among the "
-                f"contrast drafts (matched by name), e.g. {unmatched[0]!r}"
+                f"contrast drafts (matched by name), e.g. {unmatched[0]!r}",
+                code="unmatched_edits",
             )
         kept_chunks, z_rows = z_against_reference(profile, chunks, parser, min_words)
         documents = [documents_by_key[match_key(chunk)] for chunk in kept_chunks]

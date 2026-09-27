@@ -174,9 +174,8 @@ def test_removing_the_top_signal_lowers_the_auc_and_shows_it_removed(
     assert "REWORDING STRESS TEST" in shown
     assert "Em dashes" in shown and "% gone" in shown
     assert "weaker evidence" in shown and "Retrained" in shown
-    # The top-level profile command still works as before.
-    profile = [str(author), "--no-syntax", "--output", str(tmp_path / "p.json")]
-    assert main(profile) == 0
+    # evaluate is one command among the others; build still runs on its own.
+    assert main(["build", str(author), "--no-syntax", "-o", str(tmp_path / "p.json")]) == 0
 
 
 def test_edited_drafts_are_matched_to_originals_by_name(tmp_path: Path) -> None:
@@ -289,7 +288,7 @@ def test_evaluate_rejects_stdin_twice_and_overwriting_an_input(
     target = drafts / "draft0.md"
     clobber = [*base, "--reference-inputs", str(author), "--contrast", str(target)]
     assert main([*clobber, "--output", str(target)]) == 1
-    assert "one of the inputs" in capsys.readouterr().err
+    assert "would overwrite input" in capsys.readouterr().err
 
 
 def test_ngram_changed_counts_verbatim_sequences() -> None:
