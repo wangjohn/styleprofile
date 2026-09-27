@@ -101,7 +101,11 @@ A `progress` callback, if given, is called with a `Progress` at the start of eac
 
 - `profile.save("writer.json")` and `sp.Profile.load("writer.json")` read and write the
   same files as `styleprofile build` and `styleprofile score`. `save` also sets
-  `profile.path`, which later scores record. `result.save(path)` writes a score report.
+  `profile.path`, whose file name later scores record. `result.save(path)` writes a score
+  report. Reports never save paths: inputs are recorded by their final name (`posts`,
+  `posts/2024/a.md`; see [method.md](method.md)), while `result.sources` lists the real
+  files read, unsaved. A profile keeps summaries only; `sp.build(..., keep_chunks=True)`
+  also saves every chunk's metrics, for debugging.
   A report saved by another version of styleprofile is refused with a message saying to
   build (or score) it again; nothing is migrated before 0.2.0.
 - `sp.evaluate(inputs, contrast, {"light": Path("edits/light")})` runs the rewording stress

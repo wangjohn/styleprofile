@@ -204,10 +204,10 @@ def test_syntax_metrics_when_spacy_is_installed() -> None:
     except SyntaxUnavailableError:
         pytest.skip("spaCy English model is not installed")
     report = build_reference([Chunk("a", "src", AUTHOR)], parser=parser)
-    chunk = report["chunks"][0]["metrics"]
+    summary = report["summary"]
 
-    assert chunk["syntax"]["parse_depth_mean"] > 0
-    assert chunk["sentence_openers"]["opens_pronoun_pct"] > 0
+    assert summary["syntax"]["parse_depth_mean"]["mean"] > 0
+    assert summary["sentence_openers"]["opens_pronoun_pct"]["mean"] > 0
     assert "pos_trigram" in report["distributions"]
     assert report["settings"]["syntax_used"]["model"] == "en_core_web_sm"
 
@@ -393,7 +393,9 @@ def test_chunks_without_prose_are_skipped() -> None:
     assert surface_metrics("```\ncode only\n```")["punctuation"]["commas_per_1k"] is None
 
     report = build_reference(
-        [Chunk("code", "s", "```\nx = 1\n```"), Chunk("text", "s", AUTHOR)], parser=None
+        [Chunk("code", "s", "```\nx = 1\n```"), Chunk("text", "s", AUTHOR)],
+        parser=None,
+        keep_chunks=True,
     )
     assert [row["id"] for row in report["chunks"]] == ["text"]
     assert any("skipped 1 chunk(s) with no prose" in warning for warning in report["warnings"])
@@ -469,7 +471,10 @@ def test_rules_inline_fences_quotes_and_number_abbreviations() -> None:
 
 def test_min_words_and_rounded_references() -> None:
     report = build_reference(
-        [Chunk("short", "s", "Too short."), Chunk("long", "s", AUTHOR)], parser=None, min_words=10
+        [Chunk("short", "s", "Too short."), Chunk("long", "s", AUTHOR)],
+        parser=None,
+        min_words=10,
+        keep_chunks=True,
     )
     assert [row["id"] for row in report["chunks"]] == ["long"]
     assert any("fewer than 10 prose words" in warning for warning in report["warnings"])
@@ -785,7 +790,9 @@ def test_contrast_auc_has_a_document_bootstrap_interval() -> None:
 
     low, high = calibration["auc_ci"]
     assert low <= calibration["auc"] <= high
-    assert calibration["bootstrap"] == {"resamples": 2000, "unit": "document"}
+    # These drafts separate perfectly, so the interval needs no resampling.
+    bootstrap = calibration["bootstrap"]
+    assert (calibration["auc"], bootstrap["method"], bootstrap["resamples"]) == (1.0, "exact", 0)
     assert second["contrast"]["calibration"]["auc_ci"] == [low, high]
 
     single = build_reference(_author_docs(), parser=None, contrast=_llm_docs()[:1])
@@ -1241,8 +1248,9 @@ def test_repeatable_contrast_does_not_swallow_inputs(
     assert main([*command, "-o", str(reference), "--no-syntax", "--contrast-label", "GPT"]) == 0
     report = json.loads(reference.read_text(encoding="utf-8"))
     assert report["kind"] == "reference"
-    assert report["settings"]["inputs"] == [str(posts)]
-    assert report["settings"]["contrast"] == [str(first), str(second)]
+    # Absolute inputs are saved by name only.
+    assert report["settings"]["inputs"] == [posts.name]
+    assert report["settings"]["contrast"] == [first.name, second.name]
     assert (report["contrast"]["label"], report["contrast"]["sources"]) == ("GPT", 2)
     assert "Contrast: GPT drafts" in capsys.readouterr().out
 

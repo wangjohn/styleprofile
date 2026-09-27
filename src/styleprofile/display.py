@@ -219,7 +219,10 @@ def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
     separation = ""
     if auc is not None:
         separation = f"; separates them from the reference with AUC {auc:.2f}"
-        if interval:
+        exact = _exact(calibration)
+        if exact:
+            separation += f" ({exact})"
+        elif interval:
             low, high = interval
             separation += f" (95% CI {low:.2f}–{high:.2f}, resampling whole documents)"  # noqa: RUF001
     lines = [
@@ -618,10 +621,29 @@ def format_summary(
     return "\n".join(lines)
 
 
+def _exact(result: dict[str, Any]) -> str | None:
+    """How to describe an AUC whose interval is exact rather than resampled, or None.
+
+    Every resample of a perfectly separated sample gives the same AUC, so its "interval" has
+    no width; printed as one it would read as certainty however few documents there are.
+    """
+    found = result.get("bootstrap") or {}
+    if found.get("method") != "exact" or not result.get("auc_ci"):
+        return None
+    counts = (found.get("reference_documents"), found.get("contrast_documents"))
+    kind = "no difference" if result["auc_ci"][0] == 0.5 else "perfect separation"
+    if None in counts:
+        return kind
+    return f"{kind} on {counts[0]} reference and {counts[1]} contrast documents"
+
+
 def _auc_cell(result: dict[str, Any]) -> str:
     auc = result.get("auc")
     if auc is None:
         return "-"
+    if _exact(result):
+        # The table is narrow; the note under it says what "exact" means.
+        return f"{auc:.2f} (exact)"
     interval = result.get("auc_ci")
     return f"{auc:.2f} ({interval[0]:.2f}-{interval[1]:.2f})" if interval else f"{auc:.2f}"
 
@@ -734,6 +756,16 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
                 f"  {item:12}{_auc_cell(entry):>20}"
                 + (style.dim(f"   was {before:.2f}") if before is not None else "")
             )
+    entries = [*sets.values(), *([retrain, *retrain["by_set"].values()] if retrain else [])]
+    if any(_exact(entry) for entry in entries):
+        lines += [
+            "",
+            style.dim(
+                '"exact": every resample gives the same AUC (the drafts and the reference\'s '
+                "chunks never overlap, or every chunk scores the same), so there is no interval "
+                "to show. That is not certainty: with few documents, new drafts may differ."
+            ),
+        ]
     lines += [
         "",
         style.dim(

@@ -55,10 +55,11 @@ from styleprofile.profile import (
     REFERENCE,
     TEXT_FIELDS,
     Chunk,
+    SourceNames,
     build_reference,
     check_version,
-    document_of,
     dumps_report,
+    expand_path,
     load_chunks,
     load_reference,
     report_kind,
@@ -217,7 +218,8 @@ class _Result:
     @property
     def sources(self) -> tuple[str, ...]:
         """Where the chunks this run read came from: file paths, ``stdin``, or ``<text>``
-        (``<contrast>``, ``<LABEL>``) for ``Text`` inputs."""
+        (``<contrast>``, ``<LABEL>``) for ``Text`` inputs. These are the real paths, which
+        reports never save (they save ``Chunk.source`` names instead)."""
         return self._sources
 
     @property
@@ -250,7 +252,7 @@ class Profile(_Result):
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> Profile:
         """Read a reference profile saved by ``save`` or ``styleprofile build``."""
-        return cls(load_reference(Path(path).expanduser()), path=path)
+        return cls(load_reference(expand_path(os.fspath(path))), path=path)
 
     def save(self, path: str | os.PathLike[str]) -> None:
         """Write the profile as JSON. This also sets ``path`` in place, so scores made
@@ -330,7 +332,8 @@ class Profile(_Result):
             step(Phase.READ)
             items = _items(inputs)
             _stdin_once(items)
-            chunks = _read(items, fields, set(), notes, "<text>")
+            names = SourceNames()
+            chunks = _read(items, fields, set(), notes, "<text>", names)
             parser = _parser(
                 chosen.syntax,
                 notes,
@@ -353,12 +356,10 @@ class Profile(_Result):
                 top_k=chosen.top_k,
                 min_words=chosen.min_words,
                 reference_path=self._path,
-                settings={"inputs": _described(items), **chosen.to_report()},
+                settings={"inputs": _described(items, names), **chosen.to_report()},
             )
             step(Phase.DONE)
-            return ScoreResult(
-                report, self._report, notes=notes, sources=[chunk.source for chunk in chunks]
-            )
+            return ScoreResult(report, self._report, notes=notes, sources=_sources(chunks))
 
     def __repr__(self) -> str:
         where = f" from {self._path}" if self._path else ""
@@ -452,6 +453,7 @@ def build(
     contrast: Inputs | None = None,
     contrast_label: str = "LLM",
     progress: ProgressCallback | None = None,
+    keep_chunks: bool = False,
 ) -> Profile:
     """Build a reference profile from a writer's texts, as ``styleprofile build`` does.
 
@@ -459,6 +461,10 @@ def build(
     what separates the writer from them and scores likeness to them. A file or folder given
     twice, in ``inputs`` or ``contrast``, is read once, with a note. A reference too small
     to trust gets one ``NoteCode.THIN_REFERENCE`` note per reason.
+
+    The profile keeps summaries only; ``keep_chunks`` also saves every chunk's metrics, for
+    debugging. It is an option of this build rather than a ``Settings`` field: it changes
+    what is saved, not how texts are read or cut, and scoring has nothing to inherit from it.
     """
     notes: list[Note] = []
     with _notes_on_error(notes):
@@ -468,9 +474,10 @@ def build(
         contrast_items = _items(contrast) if contrast is not None else None
         _stdin_once([*items, *(contrast_items or [])])
         seen: set[str] = set()
-        chunks = _read(items, settings.text_field, seen, notes, "<text>")
+        names = SourceNames()
+        chunks = _read(items, settings.text_field, seen, notes, "<text>", names)
         contrast_chunks = (
-            _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
+            _read(contrast_items, settings.text_field, seen, notes, "<contrast>", names)
             if contrast_items is not None
             else None
         )
@@ -494,14 +501,17 @@ def build(
             ),
             contrast_label=contrast_label,
             settings={
-                "inputs": _described(items),
-                "contrast": _described(contrast_items) if contrast_items is not None else None,
+                "inputs": _described(items, names),
+                "contrast": (
+                    _described(contrast_items, names) if contrast_items is not None else None
+                ),
                 **settings.to_report(),
             },
+            keep_chunks=keep_chunks,
         )
         notes += _thin_reference(report, settings)
         step(Phase.DONE)
-        sources = [chunk.source for chunk in [*chunks, *(contrast_chunks or [])]]
+        sources = _sources([*chunks, *(contrast_chunks or [])])
         # Keep the profile exactly as it is saved (floats rounded), so scoring it before or
         # after a save and load gives the same numbers.
         return Profile(json.loads(dumps_report(report)), notes=notes, sources=sources)
@@ -531,18 +541,25 @@ def evaluate(
         every = [*items, *contrast_items, *(item for v in edited_items.values() for item in v)]
         _stdin_once(every)
         seen: set[str] = set()
-        reference_chunks = _read(items, settings.text_field, seen, notes, "<text>")
-        contrast_chunks = _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
+        names = SourceNames()
+        reference_chunks = _read(items, settings.text_field, seen, notes, "<text>", names)
+        contrast_chunks = _read(
+            contrast_items, settings.text_field, seen, notes, "<contrast>", names
+        )
         edited_chunks: dict[str, list[Chunk]] = {}
+        # Each edited set is named on its own: its files carry the originals' names.
+        edited_names = {label: SourceNames() for label in edited_items}
         for label, value in edited_items.items():
-            edited_chunks[label] = _read(value, settings.text_field, set(), notes, f"<{label}>")
-            overlap = {chunk.source for chunk in edited_chunks[label]} & seen
+            edited_chunks[label] = _read(
+                value, settings.text_field, set(), notes, f"<{label}>", edited_names[label]
+            )
+            overlap = {chunk.path for chunk in edited_chunks[label] if chunk.path} & seen
             if overlap:
                 count = len(overlap)
                 notes.append(
                     Note(
                         f"{label}: {count:,} file{'' if count == 1 else 's'} in "
-                        f"{', '.join(_described(value))} are also given as the writer's "
+                        f"{', '.join(_typed(value))} are also given as the writer's "
                         "texts or the original drafts, so that set is not an edit of them",
                         NoteCode.EDITED_OVERLAP,
                     )
@@ -567,9 +584,12 @@ def evaluate(
             contrast_label=contrast_label,
             retrain=retrain,
             settings={
-                "inputs": _described(items),
-                "contrast": _described(contrast_items),
-                "edited": {label: _described(value) for label, value in edited_items.items()},
+                "inputs": _described(items, names),
+                "contrast": _described(contrast_items, names),
+                "edited": {
+                    label: _described(value, edited_names[label])
+                    for label, value in edited_items.items()
+                },
                 # top_k shapes only a reference's saved distributions, which this never saves.
                 **{name: value for name, value in settings.to_report().items() if name != "top_k"},
             },
@@ -577,7 +597,7 @@ def evaluate(
         step(Phase.DONE)
         loaded = [*reference_chunks, *contrast_chunks]
         loaded += [chunk for chunks in edited_chunks.values() for chunk in chunks]
-        return Evaluation(report, notes=notes, sources=[chunk.source for chunk in loaded])
+        return Evaluation(report, notes=notes, sources=_sources(loaded))
 
 
 @contextmanager
@@ -598,7 +618,7 @@ def _notes_on_error(notes: list[Note]) -> Iterator[None]:
 
 def _thin_reference(report: dict[str, Any], settings: Settings) -> list[Note]:
     """Why a reference may be too small to trust, each with its fix."""
-    documents = len({document_of(row["source"], row["id"]) for row in report["chunks"]})
+    documents = report["document_count"]
     thin: list[Note] = []
 
     def note(message: str, setting: str | None = None) -> None:
@@ -633,7 +653,7 @@ def _plural(count: int, word: str) -> str:
 
 
 def _resolved(path: str | os.PathLike[str]) -> Path:
-    return Path(path).expanduser().resolve()
+    return expand_path(os.fspath(path)).resolve()
 
 
 def _progress(callback: ProgressCallback | None) -> Callable[[Phase], None]:
@@ -665,18 +685,38 @@ def _items(inputs: Inputs) -> list[Input]:
     return items
 
 
-def _described(items: Sequence[Input]) -> list[str]:
-    """How inputs are recorded in a report's settings: paths as given, texts and chunks by
-    name."""
+def _described(items: Sequence[Input], names: SourceNames) -> list[str]:
+    """How inputs are recorded in a report's settings: paths by the name their sources were
+    saved under (``posts``, ``posts (2)``; see ``load_chunks``), never as paths; texts and
+    chunks by name. A path that gave no sources of its own (all its files came from an
+    earlier input, or it was given twice) is left out."""
 
-    def name(item: Input) -> str:
+    described: list[str] = []
+    listed: set[str] = set()
+    for item in items:
         if isinstance(item, Text):
-            return item.name or "<text>"
-        if isinstance(item, Chunk):
-            return item.id
-        return os.fspath(item)
+            described.append(item.name or "<text>")
+        elif isinstance(item, Chunk):
+            described.append(item.id)
+        else:
+            value = os.fspath(item)
+            # An input whose files all came from an earlier one, or the same path given
+            # again, gave no sources of its own, so it is not listed.
+            if value in listed or (value != "-" and value not in names.roots):
+                continue
+            listed.add(value)
+            described.append(names.roots[value] if value != "-" else "stdin")
+    return described
 
-    return [name(item) for item in items]
+
+def _typed(items: Sequence[Input]) -> list[str]:
+    """Inputs as the user gave them, for notes (which are shown, never saved)."""
+    return [os.fspath(item) if isinstance(item, str | os.PathLike) else "<text>" for item in items]
+
+
+def _sources(chunks: Sequence[Chunk]) -> list[str]:
+    """Where each chunk was read from: its file when it has one, else its source."""
+    return [chunk.path or chunk.source for chunk in chunks]
 
 
 def _stdin_once(items: Sequence[Input]) -> None:
@@ -684,10 +724,12 @@ def _stdin_once(items: Sequence[Input]) -> None:
         raise StyleProfileError("- (stdin) can be given only once", code="stdin_twice")
 
 
-def _exists(value: str) -> bool:
+def path_exists(value: str) -> bool:
+    """Whether ``value`` names an existing path; False rather than an error for one that
+    cannot (too long, a NUL character, or ``~user`` for an unknown user)."""
     try:
-        return Path(value).expanduser().exists()
-    except (OSError, ValueError):  # too long for a path, or a NUL character
+        return expand_path(value).exists()
+    except (OSError, ValueError):  # StyleProfileError is a ValueError
         return False
 
 
@@ -695,7 +737,7 @@ def require_path(value: str, *, suggest_text: bool = True) -> None:
     """Refuse a path input that does not exist (``"-"``, stdin, always does). With
     ``suggest_text``, a value that reads like text points to ``Text``; a command line, whose
     arguments are paths by construction, passes False."""
-    if value != "-" and not _exists(value):
+    if value != "-" and not path_exists(value):
         raise _missing(value, suggest_text)
 
 
@@ -746,10 +788,12 @@ def _read(
     seen: set[str],
     notes: list[Note],
     role: str,
+    names: SourceNames,
 ) -> list[Chunk]:
     """Chunks from each input, in order, skipping files an earlier path (tracked in
-    ``seen``) already gave. ``Text`` inputs get ``role`` as their source, so texts in
-    different roles (writer, contrast) are never the same document."""
+    ``seen`` by real path) already gave. ``Text`` inputs get ``role`` as their source, so
+    texts in different roles (writer, contrast) are never the same document. ``names`` is
+    shared across calls, so two inputs' files never get the same saved source."""
     texts = iter(_text_chunks([item for item in items if isinstance(item, Text)], role))
     chunks: list[Chunk] = []
     for item in items:
@@ -761,11 +805,16 @@ def _read(
             continue
         value = os.fspath(item)
         require_path(value)
-        loaded = load_chunks([value], text_field)
-        sources = {chunk.source for chunk in loaded if value != "-"}
-        repeated = sources & seen
-        if repeated and repeated == sources:
+        contributed = value in names.roots
+        loaded = load_chunks([value], text_field, names=names)
+        files = {chunk.path for chunk in loaded if chunk.path is not None}
+        repeated = files & seen
+        if repeated and repeated == files:
             notes.append(Note(f"{value} was already given; using it once", NoteCode.REPEATED_INPUT))
+            if not contributed:
+                # Every file came from an earlier input, so no source carries this name:
+                # leave it out of the report's settings (``_described``).
+                names.roots.pop(value, None)
         elif repeated:
             notes.append(
                 Note(
@@ -773,8 +822,8 @@ def _read(
                     NoteCode.REPEATED_INPUT,
                 )
             )
-        chunks += [chunk for chunk in loaded if chunk.source not in repeated]
-        seen |= sources
+        chunks += [chunk for chunk in loaded if chunk.path not in repeated]
+        seen |= files
     return chunks
 
 

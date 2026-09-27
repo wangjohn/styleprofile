@@ -71,8 +71,9 @@ def test_api_and_cli_give_identical_reports(
     # Scored in memory, the report differs only in where the reference was saved.
     cli_report = _saved(scored)
     library_report = _as_saved(profile.score([DRAFT]).report)
-    assert cli_report["reference"].pop("path") == str(reference)
-    assert library_report["reference"].pop("path") == str(library_reference)
+    # Reports save only the profile's file name, never where it lives.
+    assert cli_report["reference"].pop("path") == reference.name
+    assert library_report["reference"].pop("path") == library_reference.name
     assert library_report == cli_report
     # Loaded from the CLI's file, it is identical, path included.
     assert _as_saved(sp.Profile.load(reference).score([DRAFT]).report) == _saved(scored)
@@ -137,7 +138,7 @@ def test_texts_are_scored_like_the_same_file(examples: Path) -> None:
 
 def test_unnamed_texts_skip_taken_names_and_duplicates_are_refused() -> None:
     texts = [sp.Text(POSTS[0], name="text2"), sp.Text(POSTS[1]), sp.Text(POSTS[2])]
-    profile = sp.build(texts, sp.Settings(syntax=False, window_words=0))
+    profile = sp.build(texts, sp.Settings(syntax=False, window_words=0), keep_chunks=True)
     assert [row["id"] for row in profile.report["chunks"]] == ["text2", "text1", "text3"]
 
     twice = [sp.Text(POSTS[0], name="a"), sp.Text(POSTS[1], name="a")]
@@ -169,10 +170,11 @@ def test_evaluate_pairs_edited_texts_with_their_originals(examples: Path) -> Non
 
 def test_inputs_can_be_chunks_paths_or_an_iterator(examples: Path) -> None:
     profile = sp.build(Path(WRITER), sp.Settings(syntax=False, window_words=0))
-    assert profile.report["settings"]["inputs"] == [WRITER]
+    # Paths are recorded by the name their sources were saved under, never as paths.
+    assert profile.report["settings"]["inputs"] == [Path(WRITER).name]
     chunk = Chunk("mine", "mine.md", POSTS[1] * 20)
     result = profile.score(iter([chunk, Path(DRAFT)]))
-    assert result.report["settings"]["inputs"] == ["mine", DRAFT]
+    assert result.report["settings"]["inputs"] == ["mine", Path(DRAFT).name]
     assert [row["id"] for row in result.report["chunks"]] == ["mine", "draft.md"]
     with pytest.raises(TypeError, match="expected a path"):
         profile.score([3])  # type: ignore[list-item]
@@ -368,7 +370,7 @@ def test_profiles_save_load_and_refuse_other_reports(examples: Path, tmp_path: P
     assert loaded.report == _saved(path) and loaded.settings == profile.settings
 
     result = loaded.score(DRAFT)
-    assert result.report["reference"]["path"] == str(path.resolve())
+    assert result.report["reference"]["path"] == path.name
     assert isinstance(result.warnings, tuple) and isinstance(result.notes, tuple)
     report_path = tmp_path / "draft.json"
     result.save(report_path)
@@ -432,10 +434,10 @@ def test_os_errors_keep_the_notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     post.write_text(POSTS[0], encoding="utf-8")
     locked.write_text(POSTS[1], encoding="utf-8")
 
-    def unreadable(inputs: Any, text_field: Any = None) -> Any:
+    def unreadable(inputs: Any, text_field: Any = None, **options: Any) -> Any:
         if str(inputs[0]) == str(locked):
             raise PermissionError(13, "Permission denied", str(locked))
-        return load_chunks(inputs, text_field)
+        return load_chunks(inputs, text_field, **options)
 
     monkeypatch.setattr(api, "load_chunks", unreadable)
     with pytest.raises(sp.StyleProfileError, match="Permission denied") as error:

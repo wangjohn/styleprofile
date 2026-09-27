@@ -36,7 +36,7 @@ from styleprofile.weighting import (
     Key,
     ZScores,
     auc,
-    auc_interval,
+    auc_confidence,
     by_document,
     cross_validate,
     fold_scores,
@@ -131,7 +131,7 @@ def _set_summary(
         "drafts": len(drafts),
         "chunks": len(scores),
         "auc": auc(scores, learned.reference_scores),
-        "auc_ci": auc_interval(
+        **auc_confidence(
             by_document(learned.reference_scores, reference_documents),
             list(per_draft.values()),
         ),
@@ -201,10 +201,10 @@ def _duplicates(chunks: Sequence[Chunk]) -> list[str]:
     seen: set[tuple[str, str]] = set()
     repeated: set[str] = set()
     for chunk in chunks:
-        sources[match_key(chunk)].add(chunk.source)
-        if (chunk.source, chunk.id) in seen:
+        sources[match_key(chunk)].add(chunk.path or chunk.source)
+        if (chunk.path or chunk.source, chunk.id) in seen:
             repeated.add(match_key(chunk))
-        seen.add((chunk.source, chunk.id))
+        seen.add((chunk.path or chunk.source, chunk.id))
     return sorted(repeated | {key for key, found in sources.items() if len(found) > 1})
 
 
@@ -382,7 +382,7 @@ def _retrain(
         scores = retrained.contrast_scores[start:end]
         by_set[label] = {
             "auc": auc(scores, retrained.reference_scores),
-            "auc_ci": auc_interval(
+            **auc_confidence(
                 by_document(retrained.reference_scores, reference_documents),
                 by_document(scores, documents[start:end]),
             ),
@@ -393,7 +393,7 @@ def _retrain(
         }
     return {
         "auc": auc(retrained.contrast_scores, retrained.reference_scores),
-        "auc_ci": auc_interval(
+        **auc_confidence(
             by_document(retrained.reference_scores, reference_documents),
             by_document(retrained.contrast_scores, documents),
         ),

@@ -174,7 +174,7 @@ How sentences open
 
 As a reference   held-out Delta 0.78 typically, 95% under 0.99 (7 documents)
 
-Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (95% CI 1.00–1.00, resampling whole documents)
+Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on 7 reference and 5 contrast documents)
   LLM-likeness on held-out text: reference 0.20 typically (95% under 0.86), LLM drafts 13.88
   Length alone: AUC 0.73 (reference 640 words per chunk, LLM drafts 624): some length difference
   Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, Headings ▲

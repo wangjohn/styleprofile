@@ -41,6 +41,7 @@ from styleprofile.profile import (
     UNREADABLE,
     VERSION,
     dumps_report,
+    expand_path,
     load_report,
     report_kind,
 )
@@ -65,7 +66,7 @@ FLAGS = {
 
 
 def _path(value: str) -> Path:
-    return Path(value).expanduser().resolve()
+    return expand_path(value).resolve()
 
 
 def _color(stream: TextIO | None = None) -> bool:
@@ -193,6 +194,11 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         help=f"distribution entries kept in the profile (default: {DEFAULT_TOP_K})",
     )
     build.add_argument("--all", action="store_true", help="show every metric, not just key ones")
+    build.add_argument(
+        "--keep-chunks",
+        action="store_true",
+        help="also save every chunk's metrics in the profile, for debugging (much larger)",
+    )
 
     score_parser = commands.add_parser(
         "score",
@@ -380,7 +386,11 @@ def _run_build(args: argparse.Namespace) -> int:
     _inputs_exist(typed)
     _refuse_overwrite(args.output, typed)
     profile = api.build(
-        args.inputs, settings, contrast=args.contrast, contrast_label=args.contrast_label
+        args.inputs,
+        settings,
+        contrast=args.contrast,
+        contrast_label=args.contrast_label,
+        keep_chunks=args.keep_chunks,
     )
     _notes(profile.notes)
     # Files found inside a folder are known only once it has been read.
@@ -488,7 +498,7 @@ def _run_score(args: argparse.Namespace) -> int:
 
 def _run_show(args: argparse.Namespace) -> int:
     try:
-        report = load_report(Path(args.report).expanduser())
+        report = load_report(expand_path(args.report))
     except StyleProfileError as error:
         # Name the path as typed: Path() drops a trailing slash or a leading ./
         problems = {
@@ -623,7 +633,7 @@ def _dispatch(argv: Sequence[str]) -> int:
         parser.print_help(sys.stderr)
         return 2
     if argv[0] not in commands:
-        if not argv[0].startswith("-") and Path(argv[0]).expanduser().exists():
+        if not argv[0].startswith("-") and api.path_exists(argv[0]):
             parser.print_usage(sys.stderr)
             print(
                 f"{PROG}: error: {argv[0]} is not a command; did you mean "

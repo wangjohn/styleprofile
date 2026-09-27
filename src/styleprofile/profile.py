@@ -1,10 +1,11 @@
 """Profile arbitrary chunks of prose and optionally score them against a saved profile.
 
-A profile is the per-chunk metrics plus, for every metric, its mean and spread across
-chunks. The spread is what makes a reference useful: a new chunk's z-score on each metric
-says how unusual it is *relative to how much that writer normally varies*, and the mean
-absolute z-score over a group of metrics is Burrows' Delta for that group. How metrics are
-weighted into Delta and into the optional contrast-likeness score is in ``weighting``.
+A profile is, for every metric, its mean and spread across chunks (a score report also
+keeps each of its chunks' metrics and z-scores). The spread is what makes a reference
+useful: a new chunk's z-score on each metric says how unusual it is *relative to how much
+that writer normally varies*, and the mean absolute z-score over a group of metrics is
+Burrows' Delta for that group. How metrics are weighted into Delta and into the optional
+contrast-likeness score is in ``weighting``.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ import statistics
 import sys
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from styleprofile.core import StyleProfileError
@@ -66,6 +67,9 @@ from styleprofile.weighting import (
 # asked ("auto", true or false) and ``syntax_used`` the parser that ran; ``window_words`` 0
 # is no windowing; ``inputs`` is always a list.
 # Reports of any other version are refused (``check_version``): rebuild them.
+# Also in 6, before any release: reference profiles leave out per-chunk rows (unless built
+# with keep_chunks) and store ``document_count``; sources are saved by their input's name,
+# never as paths; the contrast AUC's ``bootstrap`` records its method and resamples.
 VERSION = 6
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
@@ -80,15 +84,26 @@ TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 # Directory walks skip dot-directories (.git, .venv) and these vendored ones.
 SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "site-packages"})
 OTHER = "<other>"
+# The saved name of an input whose own name says nothing (the home directory, "/").
+UNNAMED_ROOT = "input"
 DEVIATIONS_SHOWN = 8
 SHORT_CHUNK_WORDS = 150
 
 
 @dataclass(frozen=True)
 class Chunk:
+    """A piece of text to profile.
+
+    ``source`` names where it came from as saved in reports: its input's name plus its path
+    inside it (see ``load_chunks``), never an absolute path. ``path`` is the file it was read
+    from, which identifies its document and recognizes a file given twice; it is never
+    saved.
+    """
+
     id: str
     source: str
     text: str
+    path: str | None = field(default=None, compare=False, repr=False)
 
 
 def _decode(data: bytes, name: str | Path) -> str:
@@ -110,7 +125,7 @@ def _text_fields(text_field: str | Sequence[str] | None) -> tuple[str, ...]:
     return tuple(text_field) if text_field else TEXT_FIELDS
 
 
-def _jsonl_chunks(path: Path, text_field: str | Sequence[str] | None) -> list[Chunk]:
+def _jsonl_chunks(path: Path, source: str, text_field: str | Sequence[str] | None) -> list[Chunk]:
     fields = _text_fields(text_field)
     chunks: list[Chunk] = []
     for line_number, line in enumerate(_read_text(path).split("\n"), start=1):
@@ -131,45 +146,145 @@ def _jsonl_chunks(path: Path, text_field: str | Sequence[str] | None) -> list[Ch
         record_id = record.get("id")
         # An id of 0 is kept; a missing, null or empty id falls back to the line.
         chunk_id = f"{path.name}:{line_number}" if record_id in (None, "") else str(record_id)
-        chunks.append(Chunk(chunk_id, str(path), record[field]))
+        chunks.append(Chunk(chunk_id, source, record[field], str(path)))
     return chunks
 
 
+def expand_path(value: str) -> Path:
+    """A path as typed with ``~`` expanded, as an error rather than a crash when it names an
+    unknown user (``~other``)."""
+    try:
+        return Path(value).expanduser()
+    except RuntimeError as error:
+        raise StyleProfileError(f"{value}: {error}", code="not_found") from error
+
+
+def root_name(value: str) -> str:
+    """The name a report saves for an input: the final part of its normalized path, however
+    it was typed (``posts``, ``./posts/``, ``../x/posts`` and ``/home/me/posts`` all give
+    ``posts``), so nothing above it is saved and the same corpus gives the same names from
+    any directory. The working directory itself (``.``) gives ``""``, so its files are saved
+    by their paths inside it. A home directory (``$HOME``, or any folder directly in
+    ``/home`` or ``/Users``, or ``/root``: another user's, or yours under sudo or CI), a
+    filesystem root, or anything else without a telling final part gives ``input``, since
+    its name is a user name. Standard input is ``stdin``."""
+    if value in ("-", "stdin"):
+        return "stdin"
+    typed = expand_path(value)
+    absolute = Path(os.path.abspath(typed))
+    if absolute == Path(os.path.abspath(Path.cwd())) and not typed.is_absolute():
+        return ""
+    if _is_home(absolute) or absolute.name in ("", ".", ".."):
+        return UNNAMED_ROOT
+    return absolute.name
+
+
+# Folders whose children are home directories, and home directories outside them.
+HOME_PARENTS = (Path("/home"), Path("/Users"))
+OTHER_HOMES = (Path("/root"),)
+
+
+def _is_home(absolute: Path) -> bool:
+    """Whether ``absolute`` is a home directory, whose name is a user name."""
+    if absolute == Path(os.path.abspath(Path.home())) or absolute in OTHER_HOMES:
+        return True
+    return absolute.parent in HOME_PARENTS
+
+
+@dataclass
+class SourceNames:
+    """How ``load_chunks`` names what it reads, shared across calls so names never collide.
+
+    ``files`` maps each saved source to the file it names; ``roots`` maps each input, as
+    typed, to the root name its sources were saved under (``posts``, or ``posts (2)`` when
+    another input already took ``posts``; ``.`` for the working directory).
+    """
+
+    files: dict[str, str] = field(default_factory=lambda: {"stdin": "-"})
+    roots: dict[str, str] = field(default_factory=lambda: {"-": "stdin"})
+
+
+def _numbered(name: str, number: int, is_file: bool) -> str:
+    """``name`` for the ``number``-th input to claim it: ``posts (2)``, ``notes (2).md``."""
+    if number == 1:
+        return name
+    if not name:
+        return f"{UNNAMED_ROOT} ({number})"
+    if is_file:
+        stem, suffix = os.path.splitext(name)
+        return f"{stem} ({number}){suffix}"
+    return f"{name} ({number})"
+
+
+def _files(path: Path) -> list[Path]:
+    files = sorted(
+        item
+        for item in path.rglob("*")
+        if item.is_file()
+        and item.suffix.lower() in {*TEXT_SUFFIXES, ".jsonl"}
+        and not any(
+            part.startswith(".") or part in SKIPPED_DIRS
+            for part in item.relative_to(path).parts[:-1]
+        )
+    )
+    if not files:
+        raise StyleProfileError(f"{path} contains no .md, .markdown, .txt, or .jsonl files")
+    return files
+
+
+def _name_sources(value: str, path: Path, files: Sequence[Path], names: SourceNames) -> list[str]:
+    """Each file's source: the input's ``root_name``, joined for a directory with the file's
+    path inside it. A name another file already has (two folders both called ``posts``, say)
+    gets a number, ``posts (2)``, so every source still names one file."""
+    root = root_name(value)
+    is_dir = path.is_dir()
+    relative = [item.relative_to(path).as_posix() for item in files] if is_dir else [""]
+    number = 1
+    while True:
+        prefix = PurePosixPath(_numbered(root, number, not is_dir))
+        sources = [(prefix / part).as_posix() if part else prefix.as_posix() for part in relative]
+        pairs = list(zip(sources, (str(item) for item in files), strict=True))
+        if all(names.files.get(source, item) == item for source, item in pairs):
+            names.files.update(pairs)
+            names.roots[value] = prefix.as_posix()
+            return sources
+        number += 1
+
+
 def load_chunks(
-    inputs: Sequence[str], text_field: str | Sequence[str] | None = None
+    inputs: Sequence[str],
+    text_field: str | Sequence[str] | None = None,
+    *,
+    names: SourceNames | None = None,
 ) -> list[Chunk]:
     """Read JSONL records, Markdown/text files, directories of them, or ``-`` for stdin.
 
     ``text_field`` names the JSONL field that holds the text, or several to try in order;
-    by default the first of ``TEXT_FIELDS`` that a record has."""
+    by default the first of ``TEXT_FIELDS`` that a record has.
+
+    Each chunk's ``source`` is its input's ``root_name`` (``posts``), joined for a file in a
+    directory with its path inside it (``posts/2024/a.md``); nothing above the input is
+    saved. ``names`` records the names given out; pass the same one to several calls to keep
+    sources distinct across them, as one call does across its inputs. Chunks remember the
+    file they came from (``Chunk.path``), so documents stay distinct either way."""
+    names = SourceNames() if names is None else names
     chunks: list[Chunk] = []
     for value in inputs:
         if value == "-":
             chunks.append(Chunk("stdin", "stdin", _decode(sys.stdin.buffer.read(), "stdin")))
             continue
-        path = Path(value).expanduser().resolve()
-        if path.is_dir():
-            files = sorted(
-                item
-                for item in path.rglob("*")
-                if item.is_file()
-                and item.suffix.lower() in {*TEXT_SUFFIXES, ".jsonl"}
-                and not any(
-                    part.startswith(".") or part in SKIPPED_DIRS
-                    for part in item.relative_to(path).parts[:-1]
+        path = expand_path(value).resolve()
+        files = _files(path) if path.is_dir() else [path]
+        sources = _name_sources(value, path, files, names)
+        for item, source in zip(files, sources, strict=True):
+            if item.suffix.lower() == ".jsonl":
+                chunks.extend(_jsonl_chunks(item, source, text_field))
+            elif path.is_dir():
+                chunks.append(
+                    Chunk(str(item.relative_to(path)), source, _read_text(item), str(item))
                 )
-            )
-            if not files:
-                raise StyleProfileError(f"{path} contains no .md, .markdown, .txt, or .jsonl files")
-            for item in files:
-                if item.suffix.lower() == ".jsonl":
-                    chunks.extend(_jsonl_chunks(item, text_field))
-                else:
-                    chunks.append(Chunk(str(item.relative_to(path)), str(item), _read_text(item)))
-        elif path.suffix.lower() == ".jsonl":
-            chunks.extend(_jsonl_chunks(path, text_field))
-        else:
-            chunks.append(Chunk(path.name, str(path), _read_text(path)))
+            else:
+                chunks.append(Chunk(item.name, source, _read_text(item), str(item)))
     return chunks
 
 
@@ -207,7 +322,7 @@ def window(chunks: Sequence[Chunk], window_words: int) -> list[Chunk]:
             # A chunk with no prose stays as one window, so it is counted as skipped.
             pieces.append((current, count))
         windows.extend(
-            Chunk(f"{chunk.id}#w{index}", chunk.source, "\n\n".join(raw_blocks))
+            Chunk(f"{chunk.id}#w{index}", chunk.source, "\n\n".join(raw_blocks), chunk.path)
             for index, (raw_blocks, _) in enumerate(pieces, start=1)
         )
     return windows
@@ -495,16 +610,26 @@ def _measure(
     return _Measured([chunk for chunk, _ in kept], chunk_metrics, chunk_distributions, empty, below)
 
 
-def _calibrate(report: dict[str, Any], chunk_metrics: Sequence[Metrics]) -> list[ZScores] | None:
+def chunk_document(chunk: Chunk) -> str:
+    """The document ``chunk`` belongs to, keyed on the file it was read from when known:
+    saved sources are short names, which two separately loaded inputs can share."""
+    return document_of(chunk.path or chunk.source, chunk.id)
+
+
+def _documents(chunks: Sequence[Chunk]) -> list[str]:
+    return [chunk_document(chunk) for chunk in chunks]
+
+
+def _calibrate(report: dict[str, Any], measured: _Measured) -> list[ZScores] | None:
     """Held-out reliability and Delta range, when the chunks span at least two documents.
 
     Without them the profile still works as a reference, but Delta falls back to capped z
     and --contrast is unavailable; scoring against such a reference warns about it.
     """
-    documents = [document_of(row["source"], row["id"]) for row in report["chunks"]]
+    documents = _documents(measured.chunks)
     if len(set(documents)) < 2:
         return None
-    held = held_out_z(chunk_metrics, documents, floors(report["summary"]))
+    held = held_out_z(measured.metrics, documents, floors(report["summary"]))
     calibration = calibrate_delta(held, documents)
     if calibration is None:
         return None
@@ -532,6 +657,7 @@ class ContrastFit:
 
 def _learn_contrast(
     report: dict[str, Any],
+    reference: _Measured,
     held: list[ZScores] | None,
     contrast: Sequence[Chunk],
     label: str,
@@ -552,8 +678,8 @@ def _learn_contrast(
         )
     floor = floors(report["summary"])
     contrast_z = [_z_against(metrics, report["summary"], floor) for metrics in measured.metrics]
-    contrast_sources = [document_of(chunk.source, chunk.id) for chunk in measured.chunks]
-    reference_sources = [document_of(row["source"], row["id"]) for row in report["chunks"]]
+    contrast_sources = _documents(measured.chunks)
+    reference_sources = _documents(reference.chunks)
     fit = ContrastFit(
         reference_held=held,
         reference_documents=reference_sources,
@@ -566,7 +692,8 @@ def _learn_contrast(
         fit.learned,
         reference_sources,
         contrast_sources,
-        [row["metrics"]["size"]["words"] for row in report["chunks"]],
+        # Measured chunks all have prose, so words is never None.
+        [metrics["size"]["words"] or 0.0 for metrics in reference.metrics],
         # Measured chunks all have prose, so words is never None.
         [metrics["size"]["words"] or 0.0 for metrics in measured.metrics],
     )
@@ -604,8 +731,12 @@ def _base_report(
     top_k: int,
     min_words: int,
     settings: dict[str, Any] | None,
+    keep_chunks: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Counter[str]]]:
-    """The part of every report that describes its own chunks, plus the pooled counts."""
+    """The part of every report that describes its own chunks, plus the pooled counts.
+
+    ``keep_chunks`` adds a row of metrics per chunk: score reports need them to show which
+    chunks stand out, while a reference stores only its summary unless asked to keep them."""
     chunk_metrics = measured.metrics
     totals: dict[str, Counter[str]] = {}
     for distributions in measured.distributions:
@@ -644,15 +775,17 @@ def _base_report(
             ),
         },
         "chunk_count": len(measured.chunks),
+        "document_count": len(set(_documents(measured.chunks))),
         "word_count": sum(int(metrics["size"]["words"] or 0) for metrics in chunk_metrics),
         "summary": summarize(chunk_metrics),
         "distributions": {name: _distribution(counts, top_k) for name, counts in totals.items()},
-        "chunks": [
-            {"id": chunk.id, "source": chunk.source, "metrics": metrics}
-            for chunk, metrics in zip(measured.chunks, chunk_metrics, strict=True)
-        ],
         "warnings": warnings,
     }
+    if keep_chunks:
+        report["chunks"] = [
+            {"id": chunk.id, "source": chunk.source, "metrics": metrics}
+            for chunk, metrics in zip(measured.chunks, chunk_metrics, strict=True)
+        ]
     return report, totals
 
 
@@ -665,6 +798,7 @@ def build_reference(
     settings: dict[str, Any] | None = None,
     contrast: Sequence[Chunk] | None = None,
     contrast_label: str = "LLM",
+    keep_chunks: bool = False,
 ) -> dict[str, Any]:
     """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
     reliability when the chunks span two or more documents and, given ``contrast`` chunks
@@ -674,7 +808,10 @@ def build_reference(
     given, not cut into windows, and syntax metrics are left out unless ``parser`` (from
     ``load_parser``) is passed. Use ``styleprofile.build`` to get the same profile as
     ``styleprofile build``. Unless ``settings`` says otherwise, the profile records
-    ``window_words`` 0, since these chunks were not windowed here."""
+    ``window_words`` 0, since these chunks were not windowed here.
+
+    Scoring needs only the summary, so the per-chunk metrics are left out, which keeps the
+    profile small however large the corpus; ``keep_chunks`` saves them too, for debugging."""
     return _build_reference(
         chunks,
         parser=parser,
@@ -683,6 +820,7 @@ def build_reference(
         settings={"window_words": 0, **(settings or {})},
         contrast=contrast,
         contrast_label=contrast_label,
+        keep_chunks=keep_chunks,
     )[0]
 
 
@@ -706,6 +844,7 @@ def build_contrast_reference(
         settings=settings,
         contrast=contrast,
         contrast_label=contrast_label,
+        keep_chunks=False,
     )
     assert fit is not None  # a contrast always produces a fit or raises
     return report, fit
@@ -732,6 +871,7 @@ def _build_reference(
     settings: dict[str, Any] | None,
     contrast: Sequence[Chunk] | None,
     contrast_label: str,
+    keep_chunks: bool,
 ) -> tuple[dict[str, Any], ContrastFit | None]:
     measured = _measure(chunks, parser, min_words)
     report, _ = _base_report(
@@ -741,12 +881,13 @@ def _build_reference(
         top_k=top_k,
         min_words=min_words,
         settings=settings,
+        keep_chunks=keep_chunks,
     )
-    held = _calibrate(report, measured.metrics)
+    held = _calibrate(report, measured)
     fit: ContrastFit | None = None
     if contrast is not None:
         report["contrast"], fit = _learn_contrast(
-            report, held, contrast, contrast_label, parser, min_words
+            report, measured, held, contrast, contrast_label, parser, min_words
         )
     return report, fit
 
@@ -863,7 +1004,8 @@ def score(
                 "syntax metrics may not be comparable"
             )
     report["reference"] = {
-        "path": str(reference_path) if reference_path else None,
+        # Only the profile's file name: a saved report never reveals where files live.
+        "path": root_name(str(reference_path)) if reference_path else None,
         "chunk_count": reference.get("chunk_count"),
         "delta_mean": _mean_of([scores["delta"] for scores in scored]),
         "likeness_mean": _mean_of([scores.get("likeness") for scores in scored]),
