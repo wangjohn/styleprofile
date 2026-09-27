@@ -1157,21 +1157,22 @@ def test_build_and_score_split_the_workflow(
 
 
 @pytest.mark.parametrize(
-    ("flags", "note", "window_words", "min_words"),
+    ("flags", "note", "warning", "window_words", "min_words"),
     [
-        ([], None, 100, 1),
-        (["--window-words", "100"], None, 100, 1),
-        (["--window-words", "50"], "window words 100 -> 50", 50, 1),
-        (["--no-window"], "window words 100 -> off", None, 1),
-        (["--window-words", "0"], "window words 100 -> off", None, 1),
-        (["--min-words", "5"], "min words 1 -> 5", 100, 5),
+        ([], None, None, 100, 1),
+        (["--window-words", "100"], None, None, 100, 1),
+        (["--window-words", "50"], None, "(50 vs 100)", 50, 1),
+        (["--no-window"], None, "(off vs 100)", None, 1),
+        (["--window-words", "0"], None, "(off vs 100)", None, 1),
+        (["--min-words", "5"], "--min-words 5 overrides the reference's 1", None, 100, 5),
     ],
 )
-def test_score_overrides_win_with_a_note(
+def test_score_overrides_win_and_are_reported_once(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     flags: list[str],
     note: str | None,
+    warning: str | None,
     window_words: int | None,
     min_words: int,
 ) -> None:
@@ -1181,13 +1182,19 @@ def test_score_overrides_win_with_a_note(
 
     command = ["score", str(_sample(tmp_path, AUTHOR)), str(reference), "-o", str(output)]
     assert main([*command, *flags]) == 0
-    err = capsys.readouterr().err
-    settings = json.loads(output.read_text(encoding="utf-8"))["settings"]
+    captured = capsys.readouterr()
+    report = json.loads(output.read_text(encoding="utf-8"))
+    settings = report["settings"]
     assert (settings["window_words"], settings["min_words"]) == (window_words, min_words)
-    if note is None:
-        assert "overriding" not in err
-    else:
-        assert note in err and "may not be comparable" in err
+    # Window overrides are warned about once, in the report; the CLI notes only the rest.
+    assert captured.err == (f"note: {note}\n" if note else "")
+    differ = [line for line in report["warnings"] if "window sizes differ" in line]
+    assert differ == (
+        [f"window sizes differ from the reference {warning}; z-scores assume equal-sized chunks"]
+        if warning
+        else []
+    )
+    assert captured.out.count("window sizes differ") == len(differ)
 
 
 def test_json_output_is_the_only_thing_on_stdout(
@@ -1204,12 +1211,15 @@ def test_json_output_is_the_only_thing_on_stdout(
     printed = json.loads(captured.out)
     assert printed == json.loads(output.read_text(encoding="utf-8"))
     assert printed["kind"] == "score" and printed["reference"]["delta_mean"] > 0
-    assert "overriding" in captured.err and f"wrote {output}" in captured.err
+    assert any("window sizes differ" in warning for warning in printed["warnings"])
+    assert captured.err == f"note: wrote {output}\n"
 
     assert main(["score", sample, str(reference), "--quiet", "--window-words", "50"]) == 0
     quiet = capsys.readouterr()
     assert quiet.out.count("\n") == 1 and quiet.out.startswith(f"{sample}: ")
-    assert "Delta" in quiet.out and not quiet.err
+    assert "Delta" in quiet.out
+    # The caveats stay out of stdout, but -q still says they exist.
+    assert quiet.err.endswith("warnings; run without -q to see them\n")
 
 
 def test_score_reports_cannot_be_used_as_references(
@@ -1299,7 +1309,7 @@ def test_repeatable_contrast_does_not_swallow_inputs(
 @pytest.mark.parametrize(
     ("documents", "repeats", "window", "expected"),
     [
-        (1, 1, "100", ["from 1 document", "chunks; aim for 15", "words; aim for 20,000"]),
+        (1, 1, "100", ["from 1 document", "aim for 15 or more", "words; aim for 20,000"]),
         (4, 1, "0", ["by adding documents or using --window-words 500", "words; aim for"]),
         (16, 22, "0", []),
     ],
@@ -1319,8 +1329,9 @@ def test_build_warns_about_thin_references_and_names_the_next_command(
 
     command = ["build", "posts", "-o", "out/writer.json", "--no-syntax", "--window-words", window]
     assert main(command) == 0
-    out = capsys.readouterr().out
-    thin = [line for line in out.splitlines() if line.startswith("Thin reference:")]
+    out, err = capsys.readouterr()
+    assert "Thin reference" not in out
+    thin = [line for line in err.splitlines() if line.startswith("Thin reference:")]
     assert len(thin) == len(expected)
     assert all(any(phrase in line for line in thin) for phrase in expected)
     assert "\nwrote out/writer.json\n" in out
@@ -1350,9 +1361,11 @@ def test_missing_spacy_falls_back_with_a_note(
     sample = str(_sample(tmp_path))
     assert main(["score", sample, str(reference)]) == 0
     captured = capsys.readouterr()
-    assert "syntax is left out" in captured.err and "overriding" not in captured.err
+    assert "syntax is left out" in captured.err
     assert main(["score", sample, str(reference), "--no-syntax"]) == 0
-    assert "syntax on -> off" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "syntax is left out" not in captured.err
+    assert "the reference has syntax metrics but this run does not" in captured.out
 
 
 def test_show_renders_saved_reports_without_recomputing(
@@ -1489,3 +1502,168 @@ def test_build_profile_wraps_build_reference_and_score() -> None:
     assert report_kind(scored) == "score"
     baseline = scored["reference"]["baseline"]
     assert baseline["summary"]["voice"]["contractions_per_1k"].keys() == {"mean", "sd"}
+
+
+def test_output_never_overwrites_an_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reference = _built(tmp_path)
+    posts = tmp_path / "posts"
+    inside = next(posts.iterdir())
+    sample = _sample(tmp_path)
+    before = sample.read_bytes(), inside.read_bytes()
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+
+    cases = [
+        (["score", "draft.md", str(reference), "-o", "draft.md"], "input draft.md"),
+        (["score", "posts", str(reference), "-o", str(inside)], f"input {inside}"),
+        (["build", "draft.md", "-o", "./draft.md", "--no-syntax"], "input draft.md"),
+        (["build", "posts", "-o", str(inside), "--no-syntax"], f"input {inside}"),
+        (["build", "posts", "--contrast", "draft.md", "-o", "draft.md"], "input draft.md"),
+    ]
+    for command, named in cases:
+        assert main(command) == 1
+        assert f"--output would overwrite {named}; choose another path" in capsys.readouterr().err
+    assert (sample.read_bytes(), inside.read_bytes()) == before
+
+
+def test_score_tries_the_reference_text_field_then_the_defaults(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posts = tmp_path / "posts.jsonl"
+    posts.write_text(
+        "".join(json.dumps({"id": c.id, "post": c.text}) + "\n" for c in _author_docs()),
+        encoding="utf-8",
+    )
+    reference = tmp_path / "writer.json"
+    command = ["build", str(posts), "--text-field", "post", "-o", str(reference), "--no-syntax"]
+    assert main(command) == 0
+    drafts = tmp_path / "drafts.jsonl"
+    drafts.write_text(json.dumps({"text": GENERIC}) + "\n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert main(["score", str(drafts), str(reference), "-q"]) == 0
+    assert capsys.readouterr().out.startswith(f"{drafts}: ")
+    # An explicit --text-field is the only field read.
+    assert main(["score", str(drafts), str(reference), "--text-field", "post"]) == 1
+    assert "no string field among post" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["show", "nope.json"], "error: nope.json not found\n"),
+        (["show", "draft.md"], "error: draft.md is not a style profile\n"),
+        (["show", "posts/"], "error: posts/ is a directory, not a profile\n"),
+        (["score", "draft.md", "other.md"], "error: other.md is not a style profile; the "),
+        (["score", "draft.md", "posts/"], "error: posts/ is a directory, not a profile; the "),
+        (["score", "draft.md", "writer.json", "--min-words", "-1"], "error: --min-words must"),
+        (["build", "posts", "-o", "x.json", "--min-words", "-1"], "error: --min-words must"),
+    ],
+)
+def test_error_messages_name_the_path_and_the_problem(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    message: str,
+) -> None:
+    _built(tmp_path)
+    _sample(tmp_path)
+    (tmp_path / "other.md").write_text(GENERIC, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+
+    assert main(arguments) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(message)
+    assert "Errno" not in err and "Expecting value" not in err and str(tmp_path) not in err
+
+
+def test_a_missing_command_before_a_path_suggests_build_or_score(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sample(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["draft.md", "writer.json"]) == 2
+    err = capsys.readouterr().err
+    assert "draft.md is not a command; did you mean `styleprofile build draft.md" in err
+    assert "`styleprofile score draft.md writer.json`?" in err
+
+
+def test_legacy_score_says_it_now_windows_like_the_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    output = tmp_path / "report.json"
+    capsys.readouterr()
+    sample = str(_sample(tmp_path))
+    assert (
+        main([sample, "--no-syntax", "--reference", str(reference), "--output", str(output)]) == 0
+    )
+    assert "the samples are split into windows the same size as the reference's" in (
+        capsys.readouterr().err
+    )
+    assert json.loads(output.read_text(encoding="utf-8"))["settings"]["window_words"] == 100
+
+
+def test_metrics_without_syntax_does_not_mention_spacy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["metrics", "--no-syntax"]) == 0
+    assert "spaCy" not in capsys.readouterr().out.splitlines()[0]
+
+
+def test_quiet_names_stdin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import sys
+
+    reference = _built(tmp_path)
+    capsys.readouterr()
+    stdin = io.TextIOWrapper(io.BytesIO(GENERIC.encode("utf-8")))
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert main(["score", "-", str(reference), "-q"]) == 0
+    assert capsys.readouterr().out.startswith("stdin: ")
+
+
+def test_build_prints_a_short_summary_unless_asked_for_all(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    drafts = _write_docs(tmp_path / "llm", _llm_docs())
+    reference = tmp_path / "writer.json"
+    command = ["build", str(posts), "--contrast", str(drafts), "-o", str(reference), "--no-syntax"]
+
+    assert main(command) == 0
+    short = capsys.readouterr().out
+    assert short.startswith("STYLE PROFILE")
+    assert "As a reference" in short and "Contrast: LLM drafts" in short
+    assert "usual range" not in short, "no metric table by default"
+    assert f"wrote {reference}" in short
+
+    assert main([*command, "--all"]) == 0
+    full = capsys.readouterr().out
+    assert "usual range" in full and "Contrast: LLM drafts" in full
+    assert main(["show", str(reference)]) == 0
+    assert "usual range" in capsys.readouterr().out
+
+
+def test_repeated_inputs_are_read_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    one = next(posts.iterdir())
+    reference = tmp_path / "writer.json"
+    once = tmp_path / "once.json"
+    assert main(["build", str(posts), "-o", str(once), "--no-syntax"]) == 0
+    capsys.readouterr()
+
+    command = ["build", str(posts), str(one), str(posts), "-o", str(reference), "--no-syntax"]
+    assert main(command) == 0
+    err = capsys.readouterr().err
+    assert f"note: {one} was already given; using it once" in err
+    assert f"note: {posts} was already given; using it once" in err
+    built, expected = (json.loads(p.read_text(encoding="utf-8")) for p in (reference, once))
+    assert built["chunk_count"] == expected["chunk_count"]
+    assert built["summary"] == expected["summary"]

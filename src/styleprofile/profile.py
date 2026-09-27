@@ -104,7 +104,14 @@ def _read_text(path: Path) -> str:
     return _decode(path.read_bytes(), path)
 
 
-def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
+def _text_fields(text_field: str | Sequence[str] | None) -> tuple[str, ...]:
+    if isinstance(text_field, str):
+        return (text_field,)
+    return tuple(text_field) if text_field else TEXT_FIELDS
+
+
+def _jsonl_chunks(path: Path, text_field: str | Sequence[str] | None) -> list[Chunk]:
+    fields = _text_fields(text_field)
     chunks: list[Chunk] = []
     for line_number, line in enumerate(_read_text(path).split("\n"), start=1):
         if not line.strip():
@@ -115,7 +122,6 @@ def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
             raise StyleProfileError(f"{path}:{line_number}: invalid JSON: {error}") from error
         if not isinstance(record, dict):
             raise StyleProfileError(f"{path}:{line_number}: expected a JSON object")
-        fields = (text_field,) if text_field else TEXT_FIELDS
         field = next((name for name in fields if isinstance(record.get(name), str)), None)
         if field is None:
             raise StyleProfileError(
@@ -129,8 +135,13 @@ def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
     return chunks
 
 
-def load_chunks(inputs: Sequence[str], text_field: str | None = None) -> list[Chunk]:
-    """Read JSONL records, Markdown/text files, directories of them, or ``-`` for stdin."""
+def load_chunks(
+    inputs: Sequence[str], text_field: str | Sequence[str] | None = None
+) -> list[Chunk]:
+    """Read JSONL records, Markdown/text files, directories of them, or ``-`` for stdin.
+
+    ``text_field`` names the JSONL field that holds the text, or several to try in order;
+    by default the first of ``TEXT_FIELDS`` that a record has."""
     chunks: list[Chunk] = []
     for value in inputs:
         if value == "-":
@@ -376,12 +387,16 @@ def report_kind(report: dict[str, Any]) -> str:
 
 def load_report(path: Path) -> dict[str, Any]:
     """Read any styleprofile report, reference or score."""
+    if path.is_dir():
+        raise StyleProfileError(f"{path} is a directory, not a profile", code="directory")
+    if not path.exists():
+        raise StyleProfileError(f"{path} not found", code="not_found")
     try:
         report = json.loads(_read_text(path))
-    except json.JSONDecodeError as error:
-        raise StyleProfileError(f"{path} is not a style profile: {error}") from error
+    except (json.JSONDecodeError, StyleProfileError):
+        report = None
     if not isinstance(report, dict) or "summary" not in report:
-        raise StyleProfileError(f"{path} is not a style profile (no summary)")
+        raise StyleProfileError(f"{path} is not a style profile", code="not_a_profile")
     return report
 
 
@@ -687,8 +702,9 @@ def score(
     if reference_settings.get("window_words") != report["settings"].get("window_words"):
         warnings.append(
             "window sizes differ from the reference "
-            f"({report['settings'].get('window_words')} vs "
-            f"{reference_settings.get('window_words')}); z-scores assume equal-sized chunks"
+            f"({report['settings'].get('window_words') or 'off'} vs "
+            f"{reference_settings.get('window_words') or 'off'}); "
+            "z-scores assume equal-sized chunks"
         )
     own_syntax = report["settings"]["syntax"]
     reference_syntax = reference_settings.get("syntax")

@@ -19,11 +19,12 @@ import sys
 import textwrap
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from styleprofile import __version__
 from styleprofile.display import (
     describe_delta,
+    format_reference_summary,
     format_summary,
     likeness_level,
     likeness_words,
@@ -32,6 +33,7 @@ from styleprofile.display import (
 from styleprofile.metrics import describe
 from styleprofile.profile import (
     REFERENCE,
+    TEXT_FIELDS,
     VERSION,
     Chunk,
     StyleProfileError,
@@ -69,13 +71,13 @@ def _path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
-def _color() -> bool:
+def _color(stream: TextIO | None = None) -> bool:
     """NO_COLOR turns color off and FORCE_COLOR on (NO_COLOR wins); else color a terminal."""
     if os.environ.get("NO_COLOR"):
         return False
     if os.environ.get("FORCE_COLOR", "0") not in ("", "0"):
         return True
-    return sys.stdout.isatty()
+    return (stream or sys.stdout).isatty()
 
 
 def _note(message: str) -> None:
@@ -268,14 +270,54 @@ def _window_words(value: int) -> int | None:
     return value or None
 
 
+def _min_words(value: int) -> int:
+    if value < 0:
+        raise StyleProfileError("--min-words must be 0 or more")
+    return value
+
+
 def _stdin_once(paths: Sequence[str]) -> None:
     if list(paths).count("-") > 1:
         raise StyleProfileError("- (stdin) can be given only once")
 
 
-def _load(paths: Sequence[str], text_field: str | None, window_words: int | None) -> list[Chunk]:
-    chunks = load_chunks(paths, text_field)
+def _plural(count: int, word: str) -> str:
+    return f"{count:,} {word}" + ("" if count == 1 else "s")
+
+
+def _read(
+    paths: Sequence[str], text_field: str | Sequence[str] | None, seen: set[str]
+) -> list[Chunk]:
+    """Load each path, skipping files an earlier path (tracked in ``seen``) already gave."""
+    chunks: list[Chunk] = []
+    for value in paths:
+        loaded = load_chunks([value], text_field)
+        sources = {chunk.source for chunk in loaded if value != "-"}
+        repeated = sources & seen
+        if repeated and repeated == sources:
+            _note(f"{value} was already given; using it once")
+        elif repeated:
+            _note(f"skipping {_plural(len(repeated), 'file')} in {value} already given")
+        chunks += [chunk for chunk in loaded if chunk.source not in repeated]
+        seen |= sources
+    return chunks
+
+
+def _windowed(chunks: list[Chunk], window_words: int | None) -> list[Chunk]:
     return window(chunks, window_words) if window_words else chunks
+
+
+def _refuse_overwrite(output: str, typed: Sequence[str], chunks: Sequence[Chunk]) -> None:
+    """Refuse an output path that is one of the input files, typed or inside a directory."""
+    target = _path(output)
+    for value in typed:
+        if value != "-" and _path(value) == target:
+            raise StyleProfileError(f"--output would overwrite input {value}; choose another path")
+    for chunk in chunks:
+        if chunk.source != "stdin" and Path(chunk.source) == target:
+            raise StyleProfileError(
+                f"--output would overwrite input {chunk.source}; choose another path"
+            )
 
 
 def _thin_reference(report: dict[str, Any], window_words: int | None) -> list[str]:
@@ -284,19 +326,19 @@ def _thin_reference(report: dict[str, Any], window_words: int | None) -> list[st
     thin = []
     if documents < ENOUGH_DOCUMENTS:
         thin.append(
-            f"it comes from {documents} document, so it has no held-out calibration and "
-            "cannot learn a contrast; add more of the writer's documents"
+            f"it comes from {_plural(documents, 'document')}, so it has no held-out calibration "
+            "and cannot learn a contrast; add more of the writer's documents"
         )
     if report["chunk_count"] < ENOUGH_CHUNKS:
         smaller = "a smaller --window-words" if window_words else "--window-words 500"
         thin.append(
-            f"it has {report['chunk_count']} chunks; aim for {ENOUGH_CHUNKS} or more by adding "
-            f"documents or using {smaller}"
+            f"it has {_plural(report['chunk_count'], 'chunk')}; aim for {ENOUGH_CHUNKS} or more "
+            f"by adding documents or using {smaller}"
         )
     if report["word_count"] < ENOUGH_WORDS:
         thin.append(
-            f"it has {report['word_count']:,} words; aim for {ENOUGH_WORDS:,} or more of the "
-            "writer's text, in one genre"
+            f"it has {_plural(report['word_count'], 'word')}; aim for {ENOUGH_WORDS:,} or more "
+            "of the writer's text, in one genre"
         )
     return thin
 
@@ -307,9 +349,15 @@ def _warn(text: str, color: bool) -> str:
 
 def _run_build(args: argparse.Namespace) -> int:
     window_words = _window_words(args.window_words)
+    min_words = _min_words(args.min_words)
     if args.top_k < 1:
         raise StyleProfileError("--top-k must be positive")
-    _stdin_once([*args.inputs, *(args.contrast or [])])
+    typed = [*args.inputs, *(args.contrast or [])]
+    _stdin_once(typed)
+    seen: set[str] = set()
+    chunks = _read(args.inputs, args.text_field, seen)
+    contrast = _read(args.contrast, args.text_field, seen) if args.contrast else None
+    _refuse_overwrite(args.output, typed, [*chunks, *(contrast or [])])
     parser: Parser | None = None
     if not args.no_syntax:
         try:
@@ -319,31 +367,27 @@ def _run_build(args: argparse.Namespace) -> int:
                 f"spaCy is not installed, so this profile has surface metrics only; for syntax "
                 f"metrics, {SYNTAX_INSTALL} and build again"
             )
-    chunks = _load(args.inputs, args.text_field, window_words)
-    contrast = _load(args.contrast, args.text_field, window_words) if args.contrast else None
     report = build_reference(
-        chunks,
+        _windowed(chunks, window_words),
         parser=parser,
         top_k=args.top_k,
-        min_words=args.min_words,
-        contrast=contrast,
+        min_words=min_words,
+        contrast=_windowed(contrast, window_words) if contrast is not None else None,
         contrast_label=args.contrast_label,
         settings={
             "inputs": args.inputs,
             "text_field": args.text_field,
             "window_words": window_words,
-            "min_words": args.min_words,
+            "min_words": min_words,
             "contrast": args.contrast,
         },
     )
     write_report(report, _path(args.output))
-    color = _color()
-    print(format_summary(report, color=color, full=args.all))
-    thin = _thin_reference(report, window_words)
-    if thin:
-        print()
-        for reason in thin:
-            print(_warn(f"Thin reference: {reason}.", color))
+    print(format_reference_summary(report, color=_color(), full=args.all))
+    sys.stdout.flush()  # keep the warnings after the summary when both go to one pipe
+    color_err = _color(sys.stderr)
+    for reason in _thin_reference(report, window_words):
+        print(_warn(f"Thin reference: {reason}.", color_err), file=sys.stderr)
     print(f"\nwrote {args.output}")
     print(f"Next, score a draft against it:\n  {PROG} score <draft> {shlex.quote(args.output)}")
     return 0
@@ -362,16 +406,20 @@ def _split_score_paths(args: argparse.Namespace) -> tuple[list[str], str]:
         raise StyleProfileError(
             f"the reference profile (the last argument) must be a file: {usage}"
         )
+    if _path(reference).is_dir():
+        raise StyleProfileError(
+            f"{reference} is a directory, not a profile; the reference profile goes last: {usage}"
+        )
     if not _path(reference).is_file():
         raise StyleProfileError(f"reference profile {reference} not found; it goes last: {usage}")
     return samples, reference
 
 
-def _load_score_reference(samples: Sequence[str], reference_arg: str) -> dict[str, Any]:
+def _load_score_reference(reference_arg: str) -> dict[str, Any]:
     try:
         return load_reference(Path(reference_arg).expanduser())
     except StyleProfileError as error:
-        if error.code is None and any(Path(path).suffix.lower() == ".json" for path in samples):
+        if error.code == "not_a_profile":
             raise StyleProfileError(
                 f"{reference_arg} is not a style profile; the reference profile goes last: "
                 f"{PROG} score DRAFT [DRAFT ...] REFERENCE.json"
@@ -381,7 +429,10 @@ def _load_score_reference(samples: Sequence[str], reference_arg: str) -> dict[st
 
 def _headline(report: dict[str, Any], reference: dict[str, Any], samples: Sequence[str]) -> str:
     """One line with the same verdict words as the full comparison view."""
-    name = samples[0] if len(samples) == 1 else f"{len(samples)} inputs"
+    if len(samples) == 1:
+        name = "stdin" if samples[0] == "-" else samples[0]
+    else:
+        name = f"{len(samples)} inputs"
     scored = report["reference"]
     delta = scored["delta_mean"]
     if delta is None:
@@ -398,14 +449,22 @@ def _headline(report: dict[str, Any], reference: dict[str, Any], samples: Sequen
     return "; ".join(parts)
 
 
+def _score_fields(explicit: str | None, inherited: str | None) -> str | tuple[str, ...] | None:
+    """An explicit --text-field is the only field read; the reference's is tried first."""
+    if explicit:
+        return explicit
+    if inherited:
+        return (inherited, *(name for name in TEXT_FIELDS if name != inherited))
+    return None
+
+
 def _run_score(args: argparse.Namespace) -> int:
     samples, reference_arg = _split_score_paths(args)
     reference_path = _path(reference_arg)
     if args.output and _path(args.output) == reference_path:
         raise StyleProfileError("--output is the reference file; choose another output path")
     _stdin_once(samples)
-    note: Callable[[str], None] = (lambda _: None) if args.quiet else _note
-    reference = _load_score_reference(samples, reference_arg)
+    reference = _load_score_reference(reference_arg)
 
     inherited = reference.get("settings") or {}
     reference_window = inherited.get("window_words")
@@ -414,32 +473,26 @@ def _run_score(args: argparse.Namespace) -> int:
     window_words = (
         reference_window if args.window_words is None else _window_words(args.window_words)
     )
-    min_words = reference_min_words if args.min_words is None else args.min_words
-    text_field = inherited.get("text_field") if args.text_field is None else args.text_field
-    changed = []
-    if window_words != reference_window:
-        changed.append(f"window words {reference_window or 'off'} -> {window_words or 'off'}")
+    min_words = reference_min_words if args.min_words is None else _min_words(args.min_words)
+    text_field = args.text_field or inherited.get("text_field")
+    # Window and syntax overrides are warned about in the report itself.
     if min_words != reference_min_words:
-        changed.append(f"min words {reference_min_words} -> {min_words}")
-    if args.no_syntax and reference_syntax:
-        changed.append("syntax on -> off")
-    if changed:
-        note(
-            f"overriding the reference's settings ({'; '.join(changed)}); results may not be "
-            "comparable with the reference"
-        )
+        _note(f"--min-words {min_words} overrides the reference's {reference_min_words}")
     parser: Parser | None = None
     if reference_syntax and not args.no_syntax:
         try:
             parser = load_parser()
         except SyntaxUnavailableError:
-            note(
+            _note(
                 "the reference has syntax metrics but spaCy is not installed, so syntax is left "
                 f"out of this score; {SYNTAX_INSTALL} to include it"
             )
 
+    chunks = _read(samples, _score_fields(args.text_field, inherited.get("text_field")), set())
+    if args.output:
+        _refuse_overwrite(args.output, samples, chunks)
     report = score(
-        _load(samples, text_field, window_words),
+        _windowed(chunks, window_words),
         reference,
         parser=parser,
         top_k=args.top_k or inherited.get("top_k") or DEFAULT_TOP_K,
@@ -457,9 +510,11 @@ def _run_score(args: argparse.Namespace) -> int:
     if args.json:
         sys.stdout.write(dumps_report(report))
         if args.output:
-            note(f"wrote {args.output}")
+            _note(f"wrote {args.output}")
     elif args.quiet:
-        print(_headline(report, reference, samples))
+        print(_headline(report, reference, samples), flush=True)
+        if report["warnings"]:
+            _note(f"{_plural(len(report['warnings']), 'warning')}; run without -q to see them")
     else:
         print(format_summary(report, reference, color=_color(), full=args.all))
         if args.output:
@@ -468,7 +523,18 @@ def _run_score(args: argparse.Namespace) -> int:
 
 
 def _run_show(args: argparse.Namespace) -> int:
-    report = load_report(Path(args.report).expanduser())
+    try:
+        report = load_report(Path(args.report).expanduser())
+    except StyleProfileError as error:
+        # Name the path as typed: Path() drops a trailing slash or a leading ./
+        problems = {
+            "not_found": "not found",
+            "directory": "is a directory, not a profile",
+            "not_a_profile": "is not a style profile",
+        }
+        if error.code in problems:
+            raise StyleProfileError(f"{args.report} {problems[error.code]}") from error
+        raise
     color = _color()
     if report_kind(report) == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
@@ -499,7 +565,8 @@ def _run_metrics(args: argparse.Namespace) -> int:
     indent = " " * (2 + width + unit_width)
     columns = shutil.get_terminal_size().columns if sys.stdout.isatty() else 0
     group = None
-    print(f"{len(rows)} metrics. Syntax and sentence-opening metrics need spaCy.")
+    spacy = "" if args.syntax is False else " Syntax and sentence-opening metrics need spaCy."
+    print(f"{len(rows)} metrics.{spacy}")
     for row in rows:
         if row.group != group:
             group = row.group
@@ -599,9 +666,15 @@ def _legacy(argv: Sequence[str]) -> int:
             top_k=DEFAULT_TOP_K if old.top_k is None else old.top_k,
         )
         runner = _run_build
+    change = ""
+    if old.reference and old.window_words is None:
+        change = (
+            "; unlike before, the samples are split into windows the same size as the "
+            "reference's (pass --no-window to turn that off)"
+        )
     print(
         "note: this form of the command is deprecated and will be removed in the next release; "
-        f"use: {shlex.join(command)}",
+        f"use: {shlex.join(command)}{change}",
         file=sys.stderr,
     )
     return runner(args)
@@ -626,6 +699,15 @@ def _dispatch(argv: Sequence[str]) -> int:
         parser.print_help(sys.stderr)
         return 2
     if argv[0] not in commands:
+        if not argv[0].startswith("-") and Path(argv[0]).expanduser().exists():
+            parser.print_usage(sys.stderr)
+            rest = shlex.join(argv)
+            print(
+                f"{PROG}: error: {argv[0]} is not a command; did you mean "
+                f"`{PROG} build {rest}` or `{PROG} score {rest}`?",
+                file=sys.stderr,
+            )
+            return 2
         parser.parse_args(argv)  # --help, --version, or an error naming the valid commands
         return 2
     # Intermixed parsing lets options sit anywhere, e.g. `score draft.md -o out.json ref.json`.
