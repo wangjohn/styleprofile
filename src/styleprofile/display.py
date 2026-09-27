@@ -190,7 +190,13 @@ def _profile_view(report: dict[str, Any], style: _Style, full: bool) -> list[str
             text, unit = label(name)
             row = _row(text, value(stats["mean"], unit))
             lines.append(f"{row}   {_range(stats, unit)}".rstrip() if multi else row)
-    held = report.get("calibration", {}).get("delta")
+    return lines + _reference_lines(report, style)
+
+
+def _reference_lines(report: dict[str, Any], style: _Style) -> list[str]:
+    """How the profile works as a reference: its held-out Delta range and any contrast."""
+    lines: list[str] = []
+    held = (report.get("calibration") or {}).get("delta")
     if held:
         lines += [
             "",
@@ -416,7 +422,7 @@ def _likeness(report: dict[str, Any], contrast: dict[str, Any], style: _Style) -
 
 
 def _delta_baseline(reference: dict[str, Any]) -> str:
-    held = reference.get("calibration", {}).get("delta")
+    held = (reference.get("calibration") or {}).get("delta")
     if not held:
         return "Text by the reference's own writer usually scores around 0.8."
     return (
@@ -465,7 +471,7 @@ def _comparison_view(
     delta = scored["delta_mean"]
     if delta is None:
         return ["", style.warn("No metrics could be compared with the reference.")]
-    held = reference.get("calibration", {}).get("delta", {})
+    held = (reference.get("calibration") or {}).get("delta", {})
     count = report["chunk_count"]
     ceiling = mean_ceiling(held, count)
     chunk_ceiling = mean_ceiling(held, 1)
@@ -519,6 +525,27 @@ def _comparison_view(
     return lines
 
 
+def format_reference_summary(
+    report: dict[str, Any], *, color: bool = False, full: bool = False
+) -> str:
+    """The short view ``build`` prints: size, held-out range, contrast and warnings; ``full``
+    adds every metric (``format_summary`` shows the key ones)."""
+    if full:
+        return format_summary(report, color=color, full=True)
+    style = _Style(color, truecolor=False)
+    lines = [style.bold("STYLE PROFILE") + style.dim(f"   {_size(report)}")]
+    lines += _reference_lines(report, style)
+    lines += ["", style.dim("Pass --all, or run `styleprofile show` on it, to see the metrics.")]
+    if report["warnings"]:
+        lines += ["", *(style.warn(f"Note: {warning}") for warning in report["warnings"])]
+    return "\n".join(lines)
+
+
+def _size(report: dict[str, Any]) -> str:
+    chunk_word = "chunk" if report["chunk_count"] == 1 else "chunks"
+    return f"{report['chunk_count']} {chunk_word}, {report['word_count']:,} words"
+
+
 def format_summary(
     report: dict[str, Any],
     reference: dict[str, Any] | None = None,
@@ -529,8 +556,7 @@ def format_summary(
     """Terminal view of a report; ``full`` shows every metric instead of the key ones."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
     style = _Style(color, truecolor=color and truecolor)
-    chunk_word = "chunk" if report["chunk_count"] == 1 else "chunks"
-    size = f"{report['chunk_count']} {chunk_word}, {report['word_count']:,} words"
+    size = _size(report)
     if reference is not None and "reference" in report:
         ref_name = Path(report["reference"]["path"] or "reference").name
         lines = [

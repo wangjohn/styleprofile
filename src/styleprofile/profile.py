@@ -56,7 +56,13 @@ from styleprofile.weighting import (
 # 4: percentage floors use their true denominators (paragraphs, apostrophes), and list
 # continuations extend their item instead of counting as paragraphs.
 # 5: the contrast AUC has a document-bootstrap 95% interval and a length-only baseline.
+# Reports also carry ``kind`` ("reference" or "score"), and score reports a ``baseline`` copy
+# of what rendering needs from their reference. Both are additive, so they did not bump the
+# version: a version-5 reader ignores them, and ``report_kind`` infers the kind of reports
+# written before them.
 VERSION = 5
+REFERENCE = "reference"
+SCORE = "score"
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 # Directory walks skip dot-directories (.git, .venv) and these vendored ones.
@@ -67,7 +73,15 @@ SHORT_CHUNK_WORDS = 150
 
 
 class StyleProfileError(ValueError):
-    """Style profile inputs or a reference profile are unusable."""
+    """Style profile inputs or a reference profile are unusable.
+
+    ``code`` names the kind of problem so a front end can add its own advice (such as the
+    command-line flag that fixes it); the messages themselves never mention flags.
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -90,7 +104,14 @@ def _read_text(path: Path) -> str:
     return _decode(path.read_bytes(), path)
 
 
-def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
+def _text_fields(text_field: str | Sequence[str] | None) -> tuple[str, ...]:
+    if isinstance(text_field, str):
+        return (text_field,)
+    return tuple(text_field) if text_field else TEXT_FIELDS
+
+
+def _jsonl_chunks(path: Path, text_field: str | Sequence[str] | None) -> list[Chunk]:
+    fields = _text_fields(text_field)
     chunks: list[Chunk] = []
     for line_number, line in enumerate(_read_text(path).split("\n"), start=1):
         if not line.strip():
@@ -101,12 +122,11 @@ def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
             raise StyleProfileError(f"{path}:{line_number}: invalid JSON: {error}") from error
         if not isinstance(record, dict):
             raise StyleProfileError(f"{path}:{line_number}: expected a JSON object")
-        fields = (text_field,) if text_field else TEXT_FIELDS
         field = next((name for name in fields if isinstance(record.get(name), str)), None)
         if field is None:
             raise StyleProfileError(
-                f"{path}:{line_number}: no string field among {', '.join(fields)}; "
-                "pass --text-field"
+                f"{path}:{line_number}: no string field among {', '.join(fields)}",
+                code="text_field",
             )
         record_id = record.get("id")
         # An id of 0 is kept; a missing, null or empty id falls back to the line.
@@ -115,8 +135,13 @@ def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
     return chunks
 
 
-def load_chunks(inputs: Sequence[str], text_field: str | None = None) -> list[Chunk]:
-    """Read JSONL records, Markdown/text files, directories of them, or ``-`` for stdin."""
+def load_chunks(
+    inputs: Sequence[str], text_field: str | Sequence[str] | None = None
+) -> list[Chunk]:
+    """Read JSONL records, Markdown/text files, directories of them, or ``-`` for stdin.
+
+    ``text_field`` names the JSONL field that holds the text, or several to try in order;
+    by default the first of ``TEXT_FIELDS`` that a record has."""
     chunks: list[Chunk] = []
     for value in inputs:
         if value == "-":
@@ -351,13 +376,39 @@ def _mean_of(values: Sequence[float | None]) -> float | None:
     return statistics.fmean(present) if present else None
 
 
-def load_reference(path: Path) -> dict[str, Any]:
+def report_kind(report: dict[str, Any]) -> str:
+    """``"reference"`` or ``"score"``. Reports written before ``kind`` existed are inferred:
+    a report scored against a reference carries a ``reference`` section."""
+    kind = report.get("kind")
+    if kind in (REFERENCE, SCORE):
+        return kind
+    return SCORE if isinstance(report.get("reference"), dict) else REFERENCE
+
+
+def load_report(path: Path) -> dict[str, Any]:
+    """Read any styleprofile report, reference or score."""
+    if path.is_dir():
+        raise StyleProfileError(f"{path} is a directory, not a profile", code="directory")
+    if not path.exists():
+        raise StyleProfileError(f"{path} not found", code="not_found")
     try:
-        reference = json.loads(_read_text(path))
-    except json.JSONDecodeError as error:
-        raise StyleProfileError(f"{path} is not a style profile: {error}") from error
-    if not isinstance(reference, dict) or "summary" not in reference:
-        raise StyleProfileError(f"{path} is not a style profile (no summary)")
+        report = json.loads(_read_text(path))
+    except (json.JSONDecodeError, StyleProfileError):
+        report = None
+    if not isinstance(report, dict) or "summary" not in report:
+        raise StyleProfileError(f"{path} is not a style profile", code="not_a_profile")
+    return report
+
+
+def load_reference(path: Path) -> dict[str, Any]:
+    """Read a reference profile, refusing a score report (a sample scored against one)."""
+    reference = load_report(path)
+    if report_kind(reference) == SCORE:
+        raise StyleProfileError(
+            f"{path} is a score report (a sample scored against a reference), not a "
+            "reference profile; build a reference from the writer's own texts",
+            code="score_as_reference",
+        )
     return reference
 
 
@@ -427,8 +478,9 @@ def _learn_contrast(
 ) -> dict[str, Any]:
     if held is None:
         raise StyleProfileError(
-            "--contrast needs a reference drawn from at least two documents with enough "
-            "chunks to measure the reference's own variation on held-out writing"
+            "a contrast set needs a reference drawn from at least two documents with enough "
+            "chunks to measure the reference's own variation on held-out writing",
+            code="contrast_needs_documents",
         )
     measured = _measure(contrast, parser, min_words)
     if measured.empty or measured.below:
@@ -464,7 +516,7 @@ def _learn_contrast(
         report["warnings"].append(
             f"the contrast set differs strongly in length (length alone separates it with "
             f"AUC {length['auc']:.2f}), so {label}-likeness may partly reflect length; match "
-            "lengths or window the drafts with --window-words"
+            "lengths or split both sets into windows of the same size"
         )
     return {
         "label": label,
@@ -472,6 +524,229 @@ def _learn_contrast(
         "sources": len(set(contrast_sources)),
         **learned,
     }
+
+
+def _base_report(
+    measured: _Measured,
+    *,
+    kind: str,
+    parser: Parser | None,
+    top_k: int,
+    min_words: int,
+    settings: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Counter[str]]]:
+    """The part of every report that describes its own chunks, plus the pooled counts."""
+    chunk_metrics = measured.metrics
+    totals: dict[str, Counter[str]] = {}
+    for distributions in measured.distributions:
+        for name, counts in distributions.items():
+            totals.setdefault(name, Counter()).update(counts)
+
+    warnings: list[str] = []
+    if measured.empty:
+        warnings.append(
+            f"skipped {measured.empty} chunk(s) with no prose (only code, tables or markup)"
+        )
+    if measured.below:
+        warnings.append(
+            f"skipped {measured.below} chunk(s) with fewer than {min_words} prose words"
+        )
+    short = sum((metrics["size"]["words"] or 0) < SHORT_CHUNK_WORDS for metrics in chunk_metrics)
+    if short:
+        warnings.append(
+            f"{short} chunk(s) have fewer than {SHORT_CHUNK_WORDS} words; their rates are noisy"
+        )
+    report: dict[str, Any] = {
+        "version": VERSION,
+        "kind": kind,
+        "settings": {
+            **(settings or {}),
+            "top_k": top_k,
+            "syntax": (
+                {
+                    "model": parser.model,
+                    "model_version": parser.model_version,
+                    "spacy_version": parser.spacy_version,
+                }
+                if parser
+                else None
+            ),
+        },
+        "chunk_count": len(measured.chunks),
+        "word_count": sum(int(metrics["size"]["words"] or 0) for metrics in chunk_metrics),
+        "summary": summarize(chunk_metrics),
+        "distributions": {name: _distribution(counts, top_k) for name, counts in totals.items()},
+        "chunks": [
+            {"id": chunk.id, "source": chunk.source, "metrics": metrics}
+            for chunk, metrics in zip(measured.chunks, chunk_metrics, strict=True)
+        ],
+        "warnings": warnings,
+    }
+    return report, totals
+
+
+def build_reference(
+    chunks: Sequence[Chunk],
+    *,
+    parser: Parser | None,
+    top_k: int = 300,
+    min_words: int = 1,
+    settings: dict[str, Any] | None = None,
+    contrast: Sequence[Chunk] | None = None,
+    contrast_label: str = "LLM",
+) -> dict[str, Any]:
+    """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
+    reliability when the chunks span two or more documents and, given ``contrast`` chunks
+    (for example LLM drafts), the weights that score likeness to them."""
+    measured = _measure(chunks, parser, min_words)
+    report, _ = _base_report(
+        measured,
+        kind=REFERENCE,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        settings=settings,
+    )
+    held = _calibrate(report, measured.metrics)
+    if contrast is not None:
+        report["contrast"] = _learn_contrast(
+            report, held, contrast, contrast_label, parser, min_words
+        )
+    return report
+
+
+def _baseline(reference: dict[str, Any]) -> dict[str, Any]:
+    """What rendering a score needs from its reference, so a saved score can be shown without
+    the reference file: each metric's mean and spread, the held-out Delta range, and the
+    contrast set's name and likeness range."""
+    contrast = reference.get("contrast")
+    return {
+        "chunk_count": reference.get("chunk_count"),
+        "summary": {
+            group: {
+                name: {"mean": stats.get("mean"), "sd": stats.get("sd")}
+                for name, stats in metrics.items()
+            }
+            for group, metrics in reference["summary"].items()
+        },
+        "calibration": reference.get("calibration"),
+        "contrast": (
+            {"label": contrast["label"], "calibration": contrast["calibration"]}
+            if contrast
+            else None
+        ),
+    }
+
+
+def score(
+    chunks: Sequence[Chunk],
+    reference: dict[str, Any],
+    *,
+    parser: Parser | None,
+    top_k: int = 300,
+    min_words: int = 1,
+    settings: dict[str, Any] | None = None,
+    reference_path: Path | None = None,
+) -> dict[str, Any]:
+    """Profile sample chunks and score each against ``reference``: z-scores, Delta, pattern
+    divergence and, when the reference learned a contrast, likeness to the contrast set."""
+    measured = _measure(chunks, parser, min_words)
+    report, totals = _base_report(
+        measured,
+        kind=SCORE,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        settings=settings,
+    )
+    warnings: list[str] = report["warnings"]
+    rows: list[dict[str, Any]] = report["chunks"]
+    prepared = _prepare(reference)
+    for row, metrics, distributions in zip(
+        rows, measured.metrics, measured.distributions, strict=True
+    ):
+        row["reference"] = _score(metrics, distributions, reference, prepared)
+
+    scored = [row["reference"] for row in rows]
+    groups = sorted({group for scores in scored for group in scores["delta_by_group"]})
+    reference_settings = reference.get("settings", {})
+    if reference.get("version") != VERSION:
+        warnings.append(
+            f"the reference was built by report version {reference.get('version')} "
+            f"(this is {VERSION}); rebuild it so Delta is comparable"
+        )
+    if not reference.get("reliability"):
+        warnings.append(
+            "the reference has no held-out reliability (it needs chunks from at least two "
+            "documents and a current report version), so Delta caps each metric at 3 "
+            "instead of weighting it by reliability"
+        )
+    if prepared.effects:
+        present = {
+            (group, name)
+            for row in rows
+            for group, names in row["reference"]["z"].items()
+            for name in names
+        }
+        total_weight = sum(effect * effect for effect in prepared.effects.values())
+        missing = sum(
+            effect * effect for key, effect in prepared.effects.items() if key not in present
+        )
+        if total_weight and missing / total_weight > 0.1:
+            warnings.append(
+                f"this run lacks metrics that carry {100 * missing / total_weight:.0f}% of "
+                "the likeness weight (for example syntax); likeness uses the rest"
+            )
+    if reference.get("chunk_count", 0) < 2:
+        warnings.append("the reference has one chunk, so it has no spread; split it into windows")
+    if reference_settings.get("window_words") != report["settings"].get("window_words"):
+        warnings.append(
+            "window sizes differ from the reference "
+            f"({report['settings'].get('window_words') or 'off'} vs "
+            f"{reference_settings.get('window_words') or 'off'}); "
+            "z-scores assume equal-sized chunks"
+        )
+    own_syntax = report["settings"]["syntax"]
+    reference_syntax = reference_settings.get("syntax")
+    if own_syntax and not reference_syntax:
+        warnings.append("the reference has no syntax metrics, so syntax is not scored")
+    elif reference_syntax and not own_syntax:
+        warnings.append(
+            "the reference has syntax metrics but this run does not, so Delta leaves out "
+            "syntax and sentence openers; its value is not comparable with syntax runs"
+        )
+    elif own_syntax and reference_syntax:
+        keys = ("model", "model_version")
+        if any(own_syntax.get(key) != reference_syntax.get(key) for key in keys):
+            warnings.append(
+                "the reference was parsed with a different spaCy model "
+                f"({reference_syntax.get('model')} {reference_syntax.get('model_version')}); "
+                "syntax metrics may not be comparable"
+            )
+    report["reference"] = {
+        "path": str(reference_path) if reference_path else None,
+        "chunk_count": reference.get("chunk_count"),
+        "delta_mean": _mean_of([scores["delta"] for scores in scored]),
+        "likeness_mean": _mean_of([scores.get("likeness") for scores in scored]),
+        "delta_by_group_mean": {
+            group: _mean_of([scores["delta_by_group"].get(group) for scores in scored])
+            for group in groups
+        },
+        "divergence_mean": {
+            name: _mean_of([scores["divergence"].get(name) for scores in scored])
+            for name in reference.get("distributions", {})
+        },
+        "pooled_divergence": {
+            name: jensen_shannon(
+                _collapse(_distribution(counts), reference["distributions"][name]),
+                reference["distributions"][name],
+            )
+            for name, counts in totals.items()
+            if name in reference.get("distributions", {})
+        },
+        "baseline": _baseline(reference),
+    }
+    return report
 
 
 def build_profile(
@@ -486,153 +761,38 @@ def build_profile(
     contrast: Sequence[Chunk] | None = None,
     contrast_label: str = "LLM",
 ) -> dict[str, Any]:
-    """Profile chunks; score them against ``reference``, or, when building a reference,
-    learn likeness weights from ``contrast`` chunks (for example LLM drafts)."""
-    if contrast is not None and reference is not None:
-        raise StyleProfileError(
-            "--contrast builds a reference profile; score samples against that reference "
-            "in a separate run"
-        )
-    measured = _measure(chunks, parser, min_words)
-    chunks, chunk_metrics, chunk_distributions = (
-        measured.chunks,
-        measured.metrics,
-        measured.distributions,
-    )
-    empty, below = measured.empty, measured.below
-    totals: dict[str, Counter[str]] = {}
-    for distributions in chunk_distributions:
-        for name, counts in distributions.items():
-            totals.setdefault(name, Counter()).update(counts)
-
-    warnings: list[str] = []
-    if empty:
-        warnings.append(f"skipped {empty} chunk(s) with no prose (only code, tables or markup)")
-    if below:
-        warnings.append(f"skipped {below} chunk(s) with fewer than {min_words} prose words")
-    short = sum((metrics["size"]["words"] or 0) < SHORT_CHUNK_WORDS for metrics in chunk_metrics)
-    if short:
-        warnings.append(
-            f"{short} chunk(s) have fewer than {SHORT_CHUNK_WORDS} words; their rates are noisy"
-        )
-
-    prepared = _prepare(reference) if reference is not None else None
-    rows: list[dict[str, Any]] = []
-    for chunk, metrics, distributions in zip(
-        chunks, chunk_metrics, chunk_distributions, strict=True
-    ):
-        row: dict[str, Any] = {"id": chunk.id, "source": chunk.source, "metrics": metrics}
-        if reference is not None and prepared is not None:
-            row["reference"] = _score(metrics, distributions, reference, prepared)
-        rows.append(row)
-
-    report: dict[str, Any] = {
-        "version": VERSION,
-        "settings": {
-            **(settings or {}),
-            "top_k": top_k,
-            "syntax": (
-                {
-                    "model": parser.model,
-                    "model_version": parser.model_version,
-                    "spacy_version": parser.spacy_version,
-                }
-                if parser
-                else None
-            ),
-        },
-        "chunk_count": len(chunks),
-        "word_count": sum(int(metrics["size"]["words"] or 0) for metrics in chunk_metrics),
-        "summary": summarize(chunk_metrics),
-        "distributions": {name: _distribution(counts, top_k) for name, counts in totals.items()},
-        "chunks": rows,
-        "warnings": warnings,
-    }
+    """Compatibility wrapper: ``score`` against ``reference`` when one is given, otherwise
+    ``build_reference``."""
     if reference is None:
-        held = _calibrate(report, chunk_metrics)
-        if contrast is not None:
-            report["contrast"] = _learn_contrast(
-                report, held, contrast, contrast_label, parser, min_words
-            )
-    if reference is not None:
-        scored = [row["reference"] for row in rows]
-        groups = sorted({group for score in scored for group in score["delta_by_group"]})
-        reference_settings = reference.get("settings", {})
-        if reference.get("version") != VERSION:
-            warnings.append(
-                f"the reference was built by report version {reference.get('version')} "
-                f"(this is {VERSION}); rebuild it so Delta is comparable"
-            )
-        if not reference.get("reliability"):
-            warnings.append(
-                "the reference has no held-out reliability (it needs chunks from at least two "
-                "documents and a current report version), so Delta caps each metric at 3 "
-                "instead of weighting it by reliability"
-            )
-        if prepared is not None and prepared.effects:
-            present = {
-                (group, name)
-                for row in rows
-                for group, names in row["reference"]["z"].items()
-                for name in names
-            }
-            total_weight = sum(effect * effect for effect in prepared.effects.values())
-            missing = sum(
-                effect * effect for key, effect in prepared.effects.items() if key not in present
-            )
-            if total_weight and missing / total_weight > 0.1:
-                warnings.append(
-                    f"this run lacks metrics that carry {100 * missing / total_weight:.0f}% of "
-                    "the likeness weight (for example syntax); likeness uses the rest"
-                )
-        if reference.get("chunk_count", 0) < 2:
-            warnings.append("the reference has one chunk, so it has no spread; use --window-words")
-        if reference_settings.get("window_words") != report["settings"].get("window_words"):
-            warnings.append(
-                "window sizes differ from the reference "
-                f"({report['settings'].get('window_words')} vs "
-                f"{reference_settings.get('window_words')}); z-scores assume equal-sized chunks"
-            )
-        own_syntax = report["settings"]["syntax"]
-        reference_syntax = reference_settings.get("syntax")
-        if own_syntax and not reference_syntax:
-            warnings.append("the reference has no syntax metrics, so syntax is not scored")
-        elif reference_syntax and not own_syntax:
-            warnings.append(
-                "the reference has syntax metrics but this run does not, so Delta leaves out "
-                "syntax and sentence openers; its value is not comparable with syntax runs"
-            )
-        elif own_syntax and reference_syntax:
-            keys = ("model", "model_version")
-            if any(own_syntax.get(key) != reference_syntax.get(key) for key in keys):
-                warnings.append(
-                    "the reference was parsed with a different spaCy model "
-                    f"({reference_syntax.get('model')} {reference_syntax.get('model_version')}); "
-                    "syntax metrics may not be comparable"
-                )
-        report["reference"] = {
-            "path": str(reference_path) if reference_path else None,
-            "chunk_count": reference.get("chunk_count"),
-            "delta_mean": _mean_of([score["delta"] for score in scored]),
-            "likeness_mean": _mean_of([score.get("likeness") for score in scored]),
-            "delta_by_group_mean": {
-                group: _mean_of([score["delta_by_group"].get(group) for score in scored])
-                for group in groups
-            },
-            "divergence_mean": {
-                name: _mean_of([score["divergence"].get(name) for score in scored])
-                for name in reference.get("distributions", {})
-            },
-            "pooled_divergence": {
-                name: jensen_shannon(
-                    _collapse(_distribution(counts), reference["distributions"][name]),
-                    reference["distributions"][name],
-                )
-                for name, counts in totals.items()
-                if name in reference.get("distributions", {})
-            },
-        }
-    return report
+        return build_reference(
+            chunks,
+            parser=parser,
+            top_k=top_k,
+            min_words=min_words,
+            settings=settings,
+            contrast=contrast,
+            contrast_label=contrast_label,
+        )
+    if contrast is not None:
+        raise StyleProfileError(
+            "a contrast set builds a reference profile; score samples against that reference "
+            "separately",
+            code="contrast_with_reference",
+        )
+    return score(
+        chunks,
+        reference,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        settings=settings,
+        reference_path=reference_path,
+    )
+
+
+def dumps_report(report: dict[str, Any]) -> str:
+    """A report as the JSON text ``write_report`` saves, with floats rounded."""
+    return json.dumps(_round(report), ensure_ascii=False, indent=2) + "\n"
 
 
 def _round(value: Any) -> Any:
@@ -647,7 +807,7 @@ def _round(value: Any) -> Any:
 
 def write_report(report: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(_round(report), ensure_ascii=False, indent=2) + "\n"
+    content = dumps_report(report)
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:

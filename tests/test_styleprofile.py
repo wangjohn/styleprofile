@@ -10,7 +10,9 @@ from styleprofile import (
     Chunk,
     StyleProfileError,
     build_profile,
+    build_reference,
     load_chunks,
+    load_reference,
     surface_metrics,
     window,
 )
@@ -201,7 +203,7 @@ def test_profile_scores_chunks_against_a_reference() -> None:
     assert any("fewer than 150 words" in warning for warning in scored["warnings"])
 
 
-def test_style_profile_cli_writes_report(
+def test_legacy_flat_form_still_works_with_a_deprecation_note(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = tmp_path / "essay.md"
@@ -211,16 +213,34 @@ def test_style_profile_cli_writes_report(
     command = [str(source), "--no-syntax", "--window-words", "100"]
 
     assert main([*command, "--output", str(reference)]) == 0
+    built = capsys.readouterr()
+    assert "deprecated" in built.err
+    assert f"use: styleprofile build {source} -o {reference} --no-syntax --window-words 100" in (
+        built.err
+    )
     assert main([*command, "--reference", str(reference), "--output", str(output)]) == 0
 
     report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["kind"] == "score"
     assert report["chunk_count"] == 3
     assert report["settings"]["window_words"] == 100
     assert report["settings"]["syntax"] is None
-    output_text = capsys.readouterr().out
-    assert "STYLE COMPARISON" in output_text
-    assert "Overall: close" in output_text
-    assert "No metric differs by 1 sd or more on average." in output_text
+    scored = capsys.readouterr()
+    assert f"use: styleprofile score {source} {reference} -o {output}" in scored.err
+    assert "STYLE COMPARISON" in scored.out
+    assert "Overall: close" in scored.out
+    assert "No metric differs by 1 sd or more on average." in scored.out
+
+    # A reference built by the flat form keeps its old default of no windowing.
+    assert main([str(source), "--no-syntax", "--output", str(reference)]) == 0
+    assert "--no-window" in capsys.readouterr().err
+    assert json.loads(reference.read_text(encoding="utf-8"))["chunk_count"] == 1
+
+    # The flat form's parser accepted abbreviations of --output, and so does its detection.
+    assert main([str(source), "--no-syntax", f"--out={reference}"]) == 0
+    assert "deprecated" in capsys.readouterr().err
+    assert main([str(source), "--no-syntax", "--outp", str(reference)]) == 0
+    assert "deprecated" in capsys.readouterr().err
 
 
 def test_syntax_metrics_when_spacy_is_installed() -> None:
@@ -467,7 +487,7 @@ def test_style_profile_cli_rejects_non_positive_top_k(
 ) -> None:
     source = tmp_path / "essay.md"
     source.write_text(AUTHOR, encoding="utf-8")
-    command = [str(source), "--no-syntax", "--top-k", "0", "--output", str(tmp_path / "out.json")]
+    command = ["build", str(source), "--no-syntax", "--top-k", "0", "-o", str(tmp_path / "o.json")]
 
     assert main(command) == 1
     assert "--top-k must be positive" in capsys.readouterr().err
@@ -682,12 +702,12 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
     sample = tmp_path / "sample.md"
     sample.write_text(GENERIC, encoding="utf-8")
 
-    build = [str(author_dir), "--contrast", str(llm_dir), "--output", str(reference)]
-    assert main(["--no-syntax", *build]) == 0
+    build = ["build", str(author_dir), "--contrast", str(llm_dir), "-o", str(reference)]
+    assert main([*build, "--no-syntax"]) == 0
     assert "Contrast: LLM drafts" in capsys.readouterr().out
 
-    score = [str(sample), "--reference", str(reference), "--output", str(tmp_path / "o.json")]
-    assert main(["--no-syntax", *score]) == 0
+    score = ["score", str(sample), str(reference), "-o", str(tmp_path / "o.json")]
+    assert main([*score, "--no-syntax"]) == 0
     output = capsys.readouterr().out
     assert "LLM-likeness: " in output
     assert "The reference's own writing scores" in output
@@ -916,18 +936,18 @@ def test_output_cannot_overwrite_the_reference(tmp_path: Path, capsys: Any) -> N
     source = tmp_path / "a.md"
     source.write_text(AUTHOR, encoding="utf-8")
     reference = tmp_path / "ref.json"
-    assert main([str(source), "--no-syntax", "--output", str(reference)]) == 0
+    assert main(["build", str(source), "--no-syntax", "-o", str(reference)]) == 0
     saved = reference.read_text(encoding="utf-8")
     capsys.readouterr()
 
     same = str(tmp_path / "." / "ref.json")
-    assert main([str(source), "--no-syntax", "--reference", str(reference), "--output", same]) == 1
-    assert "--output is the --reference file" in capsys.readouterr().err
+    assert main(["score", str(source), str(reference), "--no-syntax", "-o", same]) == 1
+    assert "--output is the reference file" in capsys.readouterr().err
     assert reference.read_text(encoding="utf-8") == saved
 
 
 def test_stdin_can_be_read_only_once(tmp_path: Path, capsys: Any) -> None:
-    assert main(["-", "-", "--no-syntax", "--output", str(tmp_path / "out.json")]) == 1
+    assert main(["build", "-", "-", "--no-syntax", "-o", str(tmp_path / "out.json")]) == 1
     assert "can be given only once" in capsys.readouterr().err
 
 
@@ -961,7 +981,7 @@ def test_unreadable_encodings_are_reported_and_a_bom_is_accepted(
     records.write_bytes(b'{"text": "caf\xe9"}\n')
     with pytest.raises(StyleProfileError, match="is not UTF-8 text"):
         load_chunks([str(records)])
-    assert main([str(binary), "--no-syntax", "--output", str(tmp_path / "o.json")]) == 1
+    assert main(["build", str(binary), "--no-syntax", "-o", str(tmp_path / "o.json")]) == 1
     assert "is not UTF-8 text" in capsys.readouterr().err
 
     marked = tmp_path / "bom.jsonl"
@@ -1082,3 +1102,568 @@ def test_registry_definitions_are_complete() -> None:
     assert rows[0] == ("Size", "Words", "", METRIC_BY_NAME["words"].about)
     assert ("Punctuation", "Em dashes", "/1k") in [row[:3] for row in rows]
     assert len(describe(syntax=False)) == sum(not metric.syntax for metric in METRICS)
+
+
+# Command line: build once, score many times.
+
+
+def _write_docs(folder: Path, chunks: list[Chunk]) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    for chunk in chunks:
+        (folder / f"{chunk.id}.md").write_text(chunk.text, encoding="utf-8")
+    return folder
+
+
+def _built(tmp_path: Path, *flags: str) -> Path:
+    """A no-syntax reference built from four short documents with 100-word windows."""
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    reference = tmp_path / "writer.json"
+    command = ["build", str(posts), "-o", str(reference), "--no-syntax", "--window-words", "100"]
+    assert main([*command, *flags]) == 0
+    return reference
+
+
+def _sample(tmp_path: Path, text: str = GENERIC) -> Path:
+    sample = tmp_path / "draft.md"
+    sample.write_text(text, encoding="utf-8")
+    return sample
+
+
+def test_build_and_score_split_the_workflow(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    sample = _sample(tmp_path)
+    capsys.readouterr()
+    before = sorted(tmp_path.iterdir())
+
+    assert main(["score", str(sample), str(reference)]) == 0
+    scored = capsys.readouterr()
+    assert "STYLE COMPARISON" in scored.out
+    assert "wrote" not in scored.out and not scored.err
+    assert sorted(tmp_path.iterdir()) == before, "score writes no file without -o"
+
+    output = tmp_path / "out" / "draft.json"
+    # Options may sit between the sample and the reference.
+    assert main(["score", str(sample), "-o", str(output), str(reference)]) == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["kind"] == "score"
+    # Inherited from the reference: 100-word windows, min words and no syntax.
+    assert report["settings"]["window_words"] == 100
+    assert report["settings"]["min_words"] == 1
+    assert report["settings"]["syntax"] is None
+    assert not any("window sizes differ" in warning for warning in report["warnings"])
+    assert f"wrote {output}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("flags", "note", "warning", "window_words", "min_words"),
+    [
+        ([], None, None, 100, 1),
+        (["--window-words", "100"], None, None, 100, 1),
+        (["--window-words", "50"], None, "(50 vs 100)", 50, 1),
+        (["--no-window"], None, "(off vs 100)", None, 1),
+        (["--window-words", "0"], None, "(off vs 100)", None, 1),
+        (["--min-words", "5"], "--min-words 5 overrides the reference's 1", None, 100, 5),
+    ],
+)
+def test_score_overrides_win_and_are_reported_once(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    flags: list[str],
+    note: str | None,
+    warning: str | None,
+    window_words: int | None,
+    min_words: int,
+) -> None:
+    reference = _built(tmp_path)
+    capsys.readouterr()
+    output = tmp_path / "draft.json"
+
+    command = ["score", str(_sample(tmp_path, AUTHOR)), str(reference), "-o", str(output)]
+    assert main([*command, *flags]) == 0
+    captured = capsys.readouterr()
+    report = json.loads(output.read_text(encoding="utf-8"))
+    settings = report["settings"]
+    assert (settings["window_words"], settings["min_words"]) == (window_words, min_words)
+    # Window overrides are warned about once, in the report; the CLI notes only the rest.
+    assert captured.err == (f"note: {note}\n" if note else "")
+    differ = [line for line in report["warnings"] if "window sizes differ" in line]
+    assert differ == (
+        [f"window sizes differ from the reference {warning}; z-scores assume equal-sized chunks"]
+        if warning
+        else []
+    )
+    assert captured.out.count("window sizes differ") == len(differ)
+
+
+def test_json_output_is_the_only_thing_on_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    capsys.readouterr()
+    output = tmp_path / "draft.json"
+    sample = str(_sample(tmp_path))
+
+    command = ["score", sample, str(reference), "--json", "-o", str(output), "--window-words", "50"]
+    assert main(command) == 0
+    captured = capsys.readouterr()
+    printed = json.loads(captured.out)
+    assert printed == json.loads(output.read_text(encoding="utf-8"))
+    assert printed["kind"] == "score" and printed["reference"]["delta_mean"] > 0
+    assert any("window sizes differ" in warning for warning in printed["warnings"])
+    assert captured.err == f"note: wrote {output}\n"
+
+    assert main(["score", sample, str(reference), "--quiet", "--window-words", "50"]) == 0
+    quiet = capsys.readouterr()
+    assert quiet.out.count("\n") == 1 and quiet.out.startswith(f"{sample}: ")
+    assert "Delta" in quiet.out
+    # The caveats stay out of stdout, but -q still says they exist.
+    assert quiet.err.endswith("warnings; run without -q to see them\n")
+
+
+def test_score_reports_cannot_be_used_as_references(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reference = _built(tmp_path)
+    scored = tmp_path / "draft.json"
+    sample = str(_sample(tmp_path))
+    assert main(["score", sample, str(reference), "-o", str(scored)]) == 0
+    capsys.readouterr()
+
+    assert main(["score", sample, str(scored)]) == 1
+    err = capsys.readouterr().err
+    assert "is a score report" in err and "hint: score against the reference profile" in err
+
+    # Errors name the paths as typed, not resolved.
+    monkeypatch.chdir(tmp_path)
+    assert main(["score", sample, "draft.json"]) == 1
+    assert capsys.readouterr().err.startswith("error: draft.json is a score report")
+    Path("empty.json").write_text("{}", encoding="utf-8")
+    assert main(["show", "empty.json"]) == 1
+    assert capsys.readouterr().err.startswith("error: empty.json is not a style profile")
+
+    # Reports written before `kind` existed are recognized by their reference section.
+    legacy = json.loads(scored.read_text(encoding="utf-8"))
+    del legacy["kind"]
+    scored.write_text(json.dumps(legacy), encoding="utf-8")
+    with pytest.raises(StyleProfileError, match="is a score report"):
+        load_reference(scored)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["score", "{sample}"], "score needs a sample and then a reference profile"),
+        (["score", "{reference}", "{sample}"], "the reference profile goes last"),
+        (["score", "{sample}", "-"], "must be a file"),
+        (["score", "{sample}", "missing.json"], "missing.json not found; it goes last"),
+        (["score", "{sample}", "--reference", "{reference}"], "not --reference"),
+        (["score", "{sample}", "{reference}", "-o", "{reference}"], "--output is the reference"),
+        (["score", "-", "-", "{reference}"], "can be given only once"),
+        (["build", "{sample}", "-o", "x.json", "--window-words", "-1"], "0 (no windowing)"),
+        (["build", "{sample}", "--contrast", "{sample}", "-o", "x.json"], "at least two"),
+    ],
+)
+def test_cli_errors_say_how_to_fix_them(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    message: str,
+) -> None:
+    reference = _built(tmp_path)
+    sample = _sample(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+    paths = {"sample": str(sample), "reference": str(reference)}
+
+    assert main([argument.format(**paths) for argument in arguments]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_library_errors_do_not_name_flags() -> None:
+    with pytest.raises(StyleProfileError) as error:
+        build_reference([Chunk("one", "s", AUTHOR)], parser=None, contrast=_llm_docs())
+    assert error.value.code == "contrast_needs_documents" and "--" not in str(error.value)
+
+
+def test_repeatable_contrast_does_not_swallow_inputs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    first = _write_docs(tmp_path / "llm-a", _llm_docs()[:1])
+    second = _write_docs(tmp_path / "llm-b", _llm_docs()[1:])
+    reference = tmp_path / "writer.json"
+
+    command = ["build", "--contrast", str(first), str(posts), "--contrast", str(second)]
+    assert main([*command, "-o", str(reference), "--no-syntax", "--contrast-label", "GPT"]) == 0
+    report = json.loads(reference.read_text(encoding="utf-8"))
+    assert report["kind"] == "reference"
+    assert report["settings"]["inputs"] == [str(posts)]
+    assert report["settings"]["contrast"] == [str(first), str(second)]
+    assert (report["contrast"]["label"], report["contrast"]["sources"]) == ("GPT", 2)
+    assert "Contrast: GPT drafts" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("documents", "repeats", "window", "expected"),
+    [
+        (1, 1, "100", ["from 1 document", "aim for 15 or more", "words; aim for 20,000"]),
+        (4, 1, "0", ["by adding documents or using --window-words 500", "words; aim for"]),
+        (16, 22, "0", []),
+    ],
+)
+def test_build_warns_about_thin_references_and_names_the_next_command(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    documents: int,
+    repeats: int,
+    window: str,
+    expected: list[str],
+) -> None:
+    text = "\n\n".join([AUTHOR] * repeats)
+    _write_docs(tmp_path / "posts", [Chunk(f"d{i}", "s", text) for i in range(documents)])
+    monkeypatch.chdir(tmp_path)
+
+    command = ["build", "posts", "-o", "out/writer.json", "--no-syntax", "--window-words", window]
+    assert main(command) == 0
+    out, err = capsys.readouterr()
+    assert "Thin reference" not in out
+    thin = [line for line in err.splitlines() if line.startswith("Thin reference:")]
+    assert len(thin) == len(expected)
+    assert all(any(phrase in line for line in thin) for phrase in expected)
+    assert "\nwrote out/writer.json\n" in out
+    assert out.rstrip().endswith("styleprofile score <draft> out/writer.json")
+
+
+def test_missing_spacy_falls_back_with_a_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from styleprofile import SyntaxUnavailableError, cli
+
+    def unavailable() -> None:
+        raise SyntaxUnavailableError("no spaCy")
+
+    monkeypatch.setattr(cli, "load_parser", unavailable)
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    reference = tmp_path / "writer.json"
+
+    assert main(["build", str(posts), "-o", str(reference)]) == 0
+    assert "surface metrics only" in capsys.readouterr().err
+    report = json.loads(reference.read_text(encoding="utf-8"))
+    assert report["settings"]["syntax"] is None
+
+    # A reference with syntax: score follows it, and leaves syntax out when spaCy is missing.
+    report["settings"]["syntax"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    reference.write_text(json.dumps(report), encoding="utf-8")
+    sample = str(_sample(tmp_path))
+    assert main(["score", sample, str(reference)]) == 0
+    captured = capsys.readouterr()
+    assert "syntax is left out" in captured.err
+    assert main(["score", sample, str(reference), "--no-syntax"]) == 0
+    captured = capsys.readouterr()
+    assert "syntax is left out" not in captured.err
+    assert "the reference has syntax metrics but this run does not" in captured.out
+
+
+def test_show_renders_saved_reports_without_recomputing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    scored = tmp_path / "draft.json"
+    assert main(["score", str(_sample(tmp_path)), str(reference), "-o", str(scored)]) == 0
+    live = capsys.readouterr().out
+
+    assert main(["show", str(reference)]) == 0
+    assert capsys.readouterr().out.startswith("STYLE PROFILE")
+    assert main(["show", str(scored), "--all"]) == 0
+    shown = capsys.readouterr().out
+    assert shown.startswith("STYLE COMPARISON") and "All metrics" in shown
+    overall = next(line for line in live.splitlines() if line.startswith("Overall"))
+    assert overall in shown
+
+    # A score report from before baselines were saved falls back to its reference file.
+    report = json.loads(scored.read_text(encoding="utf-8"))
+    del report["reference"]["baseline"]
+    scored.write_text(json.dumps(report), encoding="utf-8")
+    assert main(["show", str(scored)]) == 0
+    captured = capsys.readouterr()
+    assert overall in captured.out and "no saved copy of its reference" in captured.err
+    reference.unlink()
+    assert main(["show", str(scored)]) == 1
+    assert "score the sample again" in capsys.readouterr().err
+
+
+def test_show_renders_a_score_against_an_uncalibrated_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One document in several windows: a spread, but no held-out calibration.
+    essay = tmp_path / "essay.md"
+    essay.write_text("\n\n".join([AUTHOR, GENERIC] * 3), encoding="utf-8")
+    reference = tmp_path / "writer.json"
+    command = ["build", str(essay), "-o", str(reference), "--no-syntax", "--window-words", "100"]
+    assert main(command) == 0
+    scored = tmp_path / "draft.json"
+    assert main(["score", str(_sample(tmp_path)), str(reference), "-o", str(scored)]) == 0
+    live = capsys.readouterr().out
+    assert "calibration" not in json.loads(reference.read_text(encoding="utf-8"))
+
+    assert main(["show", str(scored)]) == 0
+    shown = capsys.readouterr().out
+    overall = next(line for line in live.splitlines() if line.startswith("Overall"))
+    assert overall in shown
+
+
+@pytest.mark.parametrize(
+    ("flags", "syntax"), [([], None), (["--no-syntax"], False), (["--syntax"], True)]
+)
+def test_metrics_lists_the_registry_by_area(
+    capsys: pytest.CaptureFixture[str], flags: list[str], syntax: bool | None
+) -> None:
+    from styleprofile.metrics import describe
+
+    assert main(["metrics", *flags]) == 0
+    out = capsys.readouterr().out
+    rows = describe(syntax=syntax is not False)
+    if syntax:
+        rows = [row for row in rows if row not in describe(syntax=False)]
+    assert out.startswith(f"{len(rows)} metrics.")
+    assert all(row.about in out for row in rows)
+    assert ("\nSyntax\n" in out) is (syntax is not False)
+    assert ("\nPunctuation\n" in out) is (syntax is not True)
+
+
+@pytest.mark.parametrize("command", ["build", "score", "show", "metrics"])
+def test_each_command_has_short_help_with_an_example(
+    capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        main([command, "--help"])
+    assert exit_.value.code == 0
+    out = capsys.readouterr().out
+    assert f"example:\n  styleprofile {command}" in out
+    assert len(out.splitlines()) < 40
+
+
+def test_version_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> None:
+    from styleprofile import __version__
+    from styleprofile.profile import VERSION
+
+    with pytest.raises(SystemExit) as exit_:
+        main(["--version"])
+    assert exit_.value.code == 0
+    assert (
+        capsys.readouterr().out.strip() == f"styleprofile {__version__} (report schema {VERSION})"
+    )
+    with pytest.raises(SystemExit) as exit_:
+        main(["scor", "draft.md"])
+    assert exit_.value.code == 2
+    assert "invalid choice: 'scor'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("environment", "tty", "expected"),
+    [
+        ({}, False, False),
+        ({}, True, True),
+        ({"NO_COLOR": "1"}, True, False),
+        ({"FORCE_COLOR": "1"}, False, True),
+        ({"FORCE_COLOR": "0"}, True, True),
+        ({"FORCE_COLOR": "0"}, False, False),
+        ({"FORCE_COLOR": "1", "NO_COLOR": "1"}, False, False),
+    ],
+)
+def test_color_honors_no_color_and_force_color(
+    monkeypatch: pytest.MonkeyPatch, environment: dict[str, str], tty: bool, expected: bool
+) -> None:
+    import sys
+
+    from styleprofile import cli
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    for name, setting in environment.items():
+        monkeypatch.setenv(name, setting)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
+    assert cli._color() is expected
+
+
+def test_build_profile_wraps_build_reference_and_score() -> None:
+    from styleprofile import report_kind, score
+
+    reference = build_reference(_author_docs(), parser=None)
+    assert reference == build_profile(_author_docs(), parser=None)
+    assert report_kind(reference) == "reference"
+    sample = [Chunk("g", "s", GENERIC)]
+    scored = score(sample, reference, parser=None)
+    assert scored == build_profile(sample, parser=None, reference=reference)
+    assert report_kind(scored) == "score"
+    baseline = scored["reference"]["baseline"]
+    assert baseline["summary"]["voice"]["contractions_per_1k"].keys() == {"mean", "sd"}
+
+
+def test_output_never_overwrites_an_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reference = _built(tmp_path)
+    posts = tmp_path / "posts"
+    inside = next(posts.iterdir())
+    sample = _sample(tmp_path)
+    before = sample.read_bytes(), inside.read_bytes()
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+
+    cases = [
+        (["score", "draft.md", str(reference), "-o", "draft.md"], "input draft.md"),
+        (["score", "posts", str(reference), "-o", str(inside)], f"input {inside}"),
+        (["build", "draft.md", "-o", "./draft.md", "--no-syntax"], "input draft.md"),
+        (["build", "posts", "-o", str(inside), "--no-syntax"], f"input {inside}"),
+        (["build", "posts", "--contrast", "draft.md", "-o", "draft.md"], "input draft.md"),
+    ]
+    for command, named in cases:
+        assert main(command) == 1
+        assert f"--output would overwrite {named}; choose another path" in capsys.readouterr().err
+    assert (sample.read_bytes(), inside.read_bytes()) == before
+
+
+def test_score_tries_the_reference_text_field_then_the_defaults(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posts = tmp_path / "posts.jsonl"
+    posts.write_text(
+        "".join(json.dumps({"id": c.id, "post": c.text}) + "\n" for c in _author_docs()),
+        encoding="utf-8",
+    )
+    reference = tmp_path / "writer.json"
+    command = ["build", str(posts), "--text-field", "post", "-o", str(reference), "--no-syntax"]
+    assert main(command) == 0
+    drafts = tmp_path / "drafts.jsonl"
+    drafts.write_text(json.dumps({"text": GENERIC}) + "\n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert main(["score", str(drafts), str(reference), "-q"]) == 0
+    assert capsys.readouterr().out.startswith(f"{drafts}: ")
+    # An explicit --text-field is the only field read.
+    assert main(["score", str(drafts), str(reference), "--text-field", "post"]) == 1
+    assert "no string field among post" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["show", "nope.json"], "error: nope.json not found\n"),
+        (["show", "draft.md"], "error: draft.md is not a style profile\n"),
+        (["show", "posts/"], "error: posts/ is a directory, not a profile\n"),
+        (["score", "draft.md", "other.md"], "error: other.md is not a style profile; the "),
+        (["score", "draft.md", "posts/"], "error: posts/ is a directory, not a profile; the "),
+        (["score", "draft.md", "writer.json", "--min-words", "-1"], "error: --min-words must"),
+        (["build", "posts", "-o", "x.json", "--min-words", "-1"], "error: --min-words must"),
+    ],
+)
+def test_error_messages_name_the_path_and_the_problem(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    message: str,
+) -> None:
+    _built(tmp_path)
+    _sample(tmp_path)
+    (tmp_path / "other.md").write_text(GENERIC, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+
+    assert main(arguments) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(message)
+    assert "Errno" not in err and "Expecting value" not in err and str(tmp_path) not in err
+
+
+def test_a_missing_command_before_a_path_suggests_build_or_score(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sample(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["draft.md", "writer.json"]) == 2
+    err = capsys.readouterr().err
+    assert "draft.md is not a command; did you mean `styleprofile build draft.md" in err
+    assert "`styleprofile score draft.md writer.json`?" in err
+
+
+def test_legacy_score_says_it_now_windows_like_the_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = _built(tmp_path)
+    output = tmp_path / "report.json"
+    capsys.readouterr()
+    sample = str(_sample(tmp_path))
+    assert (
+        main([sample, "--no-syntax", "--reference", str(reference), "--output", str(output)]) == 0
+    )
+    assert "the samples are split into windows the same size as the reference's" in (
+        capsys.readouterr().err
+    )
+    assert json.loads(output.read_text(encoding="utf-8"))["settings"]["window_words"] == 100
+
+
+def test_metrics_without_syntax_does_not_mention_spacy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["metrics", "--no-syntax"]) == 0
+    assert "spaCy" not in capsys.readouterr().out.splitlines()[0]
+
+
+def test_quiet_names_stdin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import sys
+
+    reference = _built(tmp_path)
+    capsys.readouterr()
+    stdin = io.TextIOWrapper(io.BytesIO(GENERIC.encode("utf-8")))
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert main(["score", "-", str(reference), "-q"]) == 0
+    assert capsys.readouterr().out.startswith("stdin: ")
+
+
+def test_build_prints_a_short_summary_unless_asked_for_all(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    drafts = _write_docs(tmp_path / "llm", _llm_docs())
+    reference = tmp_path / "writer.json"
+    command = ["build", str(posts), "--contrast", str(drafts), "-o", str(reference), "--no-syntax"]
+
+    assert main(command) == 0
+    short = capsys.readouterr().out
+    assert short.startswith("STYLE PROFILE")
+    assert "As a reference" in short and "Contrast: LLM drafts" in short
+    assert "usual range" not in short, "no metric table by default"
+    assert f"wrote {reference}" in short
+
+    assert main([*command, "--all"]) == 0
+    full = capsys.readouterr().out
+    assert "usual range" in full and "Contrast: LLM drafts" in full
+    assert main(["show", str(reference)]) == 0
+    assert "usual range" in capsys.readouterr().out
+
+
+def test_repeated_inputs_are_read_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    posts = _write_docs(tmp_path / "posts", _author_docs())
+    one = next(posts.iterdir())
+    reference = tmp_path / "writer.json"
+    once = tmp_path / "once.json"
+    assert main(["build", str(posts), "-o", str(once), "--no-syntax"]) == 0
+    capsys.readouterr()
+
+    command = ["build", str(posts), str(one), str(posts), "-o", str(reference), "--no-syntax"]
+    assert main(command) == 0
+    err = capsys.readouterr().err
+    assert f"note: {one} was already given; using it once" in err
+    assert f"note: {posts} was already given; using it once" in err
+    built, expected = (json.loads(p.read_text(encoding="utf-8")) for p in (reference, once))
+    assert built["chunk_count"] == expected["chunk_count"]
+    assert built["summary"] == expected["summary"]
