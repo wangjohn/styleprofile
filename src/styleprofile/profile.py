@@ -9,12 +9,14 @@ weighted into Delta and into the optional contrast-likeness score is in ``weight
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import secrets
+import stat
 import statistics
 import sys
-import tempfile
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -859,6 +861,23 @@ def score(
     return report
 
 
+def _create_beside(path: Path) -> tuple[int, Path]:
+    """Create a new, uniquely named hidden file next to ``path``, open for writing.
+
+    Unlike ``tempfile.mkstemp``, which makes the file owner-only, this asks for 0o666 and
+    lets the OS apply the umask, so no process-wide umask has to be read or changed.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    for _ in range(100):
+        temporary = path.parent / f".{path.name}.{secrets.token_hex(4)}"
+        try:
+            return os.open(temporary, flags, 0o666), temporary
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"could not create a temporary file beside {path}")
+
+
 def dumps_report(report: dict[str, Any]) -> str:
     """A report as the JSON text ``write_report`` saves, with floats rounded."""
     return json.dumps(_round(report), ensure_ascii=False, indent=2) + "\n"
@@ -875,13 +894,20 @@ def _round(value: Any) -> Any:
 
 
 def write_report(report: dict[str, Any], path: Path) -> None:
+    """Save a report atomically: write a new file beside ``path``, then rename it over.
+
+    The file gets the permissions ``open(path, "w")`` would give it: those of the file it
+    replaces, or read and write as the umask allows.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     content = dumps_report(report)
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    descriptor, temporary = _create_beside(path)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(content)
+        with contextlib.suppress(FileNotFoundError):
+            os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
         os.replace(temporary, path)
     except BaseException:
-        Path(temporary).unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         raise
