@@ -80,11 +80,12 @@ The verdict words place each number against the writer's own range:
 | like the LLM drafts | at or beyond the drafts' typical score |
 
 "By area" breaks Delta down the same way. Areas vary by different amounts on the writer's
-own text, so each area's number is its Delta as a multiple of that area's usual held-out
-range: up to 1x is close, up to 1.5x somewhat different, up to 2x clearly different. Areas
-are listed most different first; `--all` adds the raw Delta for each area. "Biggest
-differences" lists the metrics that moved most, with one ▲ or ▼ per standard deviation. See [docs/method.md](docs/method.md) for
-the metrics, the weighting math, the reliability checks and the resolution floors.
+own text, so each area's number is its Delta ÷ the top of that area's usual held-out range:
+close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above.
+Areas are listed most different first; `--all` adds the raw Delta for each area. "Biggest
+differences" lists the metrics that moved most, with one ▲ or ▼ per standard deviation. See
+[docs/method.md](docs/method.md) for the metrics, the weighting math, the reliability checks
+and the resolution floors.
 
 ## Getting useful results
 

@@ -433,25 +433,23 @@ class _Area:
 
     group: str
     delta: float
+    # Delta divided by the top of the area's usual held-out range (the bound of "close",
+    # see ``mean_ceiling``), rounded as shown; None without calibration.
+    relative: float | None
     level: int
-    # The reference's median held-out Delta for the area, and the top of its usual range
-    # (the bound of "close", see ``mean_ceiling``); both None without calibration.
+    # The reference's median held-out Delta for the area and the top of its usual range.
     typical: float | None
     ceiling: float | None
-
-    @property
-    def relative(self) -> float | None:
-        """Delta as a multiple of the usual range: "close" up to 1, then 1.5 and 2."""
-        return self.delta / self.ceiling if self.ceiling else None
 
 
 def _areas(report: dict[str, Any], reference: dict[str, Any]) -> list[_Area]:
     """Each scored area, most different first: by verdict, then by Delta relative to the
-    area's usual held-out range.
+    top of the area's usual held-out range.
 
     Areas vary by different amounts on the writer's own text, so raw area Deltas do not
     compare: 1.45 can be usual for sentence shape while 1.34 is unusual for voice. The
-    relative value is what the verdict reads, so the order, the numbers and the words agree.
+    relative value is what the verdict reads, and the verdict is taken from it as rounded
+    for display, so the order, the numbers and the words agree.
     """
     held = (reference.get("calibration") or {}).get("delta", {}).get("by_group", {})
     areas = []
@@ -460,24 +458,34 @@ def _areas(report: dict[str, Any], reference: dict[str, Any]) -> list[_Area]:
             continue
         stats = held.get(group, {})
         ceiling = mean_ceiling(stats, report["chunk_count"])
-        areas.append(
-            _Area(group, amount, delta_level(amount, ceiling), stats.get("median"), ceiling)
-        )
+        if ceiling:
+            relative = round(amount / ceiling, 2)
+            level = delta_level(relative, 1.0)
+        else:
+            relative, level = None, delta_level(amount)
+        areas.append(_Area(group, amount, relative, level, stats.get("median"), ceiling))
     return sorted(areas, key=lambda area: (-area.level, -(area.relative or area.delta)))
 
 
 def _area_lines(areas: list[_Area], style: _Style) -> list[str]:
-    """The "By area" block: each area's Delta as a multiple of its usual held-out range, or
+    """The "By area" block: each area's Delta over the top of its usual held-out range, or
     the raw Delta when the reference has no calibration for it."""
     calibrated = any(area.relative is not None for area in areas)
     lines = [
         style.bold("By area")
         + style.dim(
-            "   Delta as a multiple of the reference's usual range in each area; close up to 1x"
+            "   Delta ÷ the top of the reference's usual range in each area"
             if calibrated
             else "   Delta in each area"
         )
     ]
+    if calibrated:
+        lines.append(
+            style.dim(
+                "  close up to 1x, somewhat different to 1.5x, clearly different to 2x, "
+                "very different above"
+            )
+        )
     for area in areas:
         relative = area.relative
         amount = area.delta if relative is None else relative
@@ -492,12 +500,17 @@ def _area_lines(areas: list[_Area], style: _Style) -> list[str]:
 
 
 def _area_deltas(areas: list[_Area], style: _Style) -> list[str]:
-    """The raw area Deltas behind "By area", with the held-out values they are read against."""
+    """The raw area Deltas behind "By area", with the held-out values they are read against.
+
+    Without calibration "By area" already shows the raw Deltas, so this adds nothing.
+    """
+    if not any(area.ceiling is not None for area in areas):
+        return []
     lines = [
         "",
         style.bold("Delta by area")
         + style.dim("   (the reference's held-out median, and the top of its usual range)"),
-        style.dim(_row("", "this text", "typical", "usual up to")),
+        style.dim(_row("", "this text", "median", "range top")),
     ]
     for area in areas:
         lines.append(

@@ -9,7 +9,6 @@ weighted into Delta and into the optional contrast-likeness score is in ``weight
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
@@ -864,17 +863,36 @@ def score(
 def _create_beside(path: Path) -> tuple[int, Path]:
     """Create a new, uniquely named hidden file next to ``path``, open for writing.
 
-    Unlike ``tempfile.mkstemp``, which makes the file owner-only, this asks for 0o666 and
-    lets the OS apply the umask, so no process-wide umask has to be read or changed.
+    Its mode is final before any bytes are written: that of the file it will replace
+    (permission bits only, never setuid, setgid or sticky), or else 0o666 less the umask.
+    Unlike ``tempfile.mkstemp``, which makes the file owner-only, the umask is applied by
+    the OS, so no process-wide umask has to be read or changed.
     """
+    try:
+        existing: int | None = stat.S_IMODE(path.stat().st_mode) & 0o777
+    except FileNotFoundError:
+        existing = None
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     for _ in range(100):
         temporary = path.parent / f".{path.name}.{secrets.token_hex(4)}"
         try:
-            return os.open(temporary, flags, 0o666), temporary
+            # Created no wider than the file it replaces, then set to exactly its mode,
+            # since the umask may have narrowed it.
+            descriptor = os.open(temporary, flags, 0o666 if existing is None else existing)
         except FileExistsError:
             continue
+        if existing is not None:
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(descriptor, existing)
+                else:
+                    os.chmod(temporary, existing)
+            except BaseException:
+                os.close(descriptor)
+                temporary.unlink(missing_ok=True)
+                raise
+        return descriptor, temporary
     raise FileExistsError(f"could not create a temporary file beside {path}")
 
 
@@ -896,8 +914,9 @@ def _round(value: Any) -> Any:
 def write_report(report: dict[str, Any], path: Path) -> None:
     """Save a report atomically: write a new file beside ``path``, then rename it over.
 
-    The file gets the permissions ``open(path, "w")`` would give it: those of the file it
-    replaces, or read and write as the umask allows.
+    The file keeps the permission bits of the file it replaces, or gets read and write as
+    the umask allows. If ``path`` is a symlink, the link itself is replaced by a regular
+    file with its target's permissions; the target is left unchanged.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     content = dumps_report(report)
@@ -905,8 +924,6 @@ def write_report(report: dict[str, Any], path: Path) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(content)
-        with contextlib.suppress(FileNotFoundError):
-            os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)

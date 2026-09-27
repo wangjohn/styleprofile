@@ -73,8 +73,9 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[dict[str, Any
 
 
 def _area_block(text: str) -> list[str]:
+    """The rows of "By area", without its one or two header lines."""
     block = text.split("By area", 1)[1].split("\n\n", 1)[0]
-    return block.splitlines()[1:]
+    return [line for line in block.splitlines()[1:] if not line.startswith("  close up to")]
 
 
 def test_areas_sort_by_verdict_and_show_distance_relative_to_their_range() -> None:
@@ -97,7 +98,29 @@ def test_areas_fall_back_to_raw_delta_without_calibration() -> None:
     assert "Delta in each area" in text
     rows = _area_block(text)
     assert "Delta 1.45" in rows[0] and "Delta 0.07" in rows[-1]
-    assert "Delta by area" not in text
+    assert "close up to 1x" not in text
+    # The raw table would only repeat these rows with dashes.
+    assert "Delta by area" not in format_summary(*_comparison(calibrated=False), full=True)
+
+
+def test_area_verdict_follows_the_rounded_multiple() -> None:
+    report, reference = _comparison()
+    # 0.953 / 0.95 is 1.003: shown as 1.00x, so it must read close.
+    report["reference"]["delta_by_group_mean"] = {"voice": 0.953}
+    (row,) = _area_block(format_summary(report, reference))
+    assert "1.00x" in row and row.endswith("close")
+    report["reference"]["delta_by_group_mean"] = {"voice": 0.96}
+    (row,) = _area_block(format_summary(report, reference))
+    assert "1.01x" in row and row.endswith("somewhat different")
+
+
+def test_by_area_header_says_what_the_multiple_is() -> None:
+    text = format_summary(*_comparison())
+    assert "Delta ÷ the top of the reference's usual range" in text
+    assert (
+        "close up to 1x, somewhat different to 1.5x, clearly different to 2x, "
+        "very different above" in text
+    )
 
 
 def test_all_keeps_the_raw_area_deltas() -> None:
@@ -107,6 +130,7 @@ def test_all_keeps_the_raw_area_deltas() -> None:
     raw = full.split("Delta by area", 1)[1].split("\n\n", 1)[0]
     assert re.search(r"Sentence shape\s+1\.45\s+0\.73\s+2\.24", raw)
     assert re.search(r"Voice and stance\s+1\.34\s+0\.80\s+0\.95", raw)
+    assert re.search(r"this text\s+median\s+range top", raw)
 
 
 def test_shading_is_only_described_when_colored() -> None:
@@ -174,3 +198,77 @@ def test_overwriting_a_report_keeps_its_mode(tmp_path: Path) -> None:
     write_report({"a": 1.0}, path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o604
     assert '"a": 1.0' in path.read_text()
+
+
+def _spy_on_open_mode(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record each file's mode at the moment ``write_report`` opens it for writing."""
+    modes: list[int] = []
+    real = os.fdopen
+
+    def spy(descriptor: int, *args: Any, **kwargs: Any) -> Any:
+        modes.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+        return real(descriptor, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fdopen", spy)
+    return modes
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_mode_is_final_before_any_bytes_are_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    modes = _spy_on_open_mode(monkeypatch)
+    private = tmp_path / "private.json"
+    private.write_text("{}")
+    private.chmod(0o600)
+    previous = os.umask(0o022)
+    try:
+        write_report({"a": 1.0}, private)
+        write_report({"a": 1.0}, tmp_path / "new.json")
+    finally:
+        os.umask(previous)
+    assert modes == [0o600, 0o644]
+    assert stat.S_IMODE(private.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_special_mode_bits_are_not_copied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    modes = _spy_on_open_mode(monkeypatch)
+    path = tmp_path / "report.json"
+    path.write_text("{}")
+    path.chmod(0o4644)
+    if not stat.S_IMODE(path.stat().st_mode) & stat.S_ISUID:
+        pytest.skip("this filesystem does not keep setuid on a user's file")
+    write_report({"a": 1.0}, path)
+    assert modes == [0o644]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_a_failed_write_leaves_no_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "report.json"
+    path.write_text("old")
+
+    def fail(descriptor: int, *args: Any, **kwargs: Any) -> Any:
+        os.close(descriptor)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "fdopen", fail)
+    with pytest.raises(OSError, match="disk full"):
+        write_report({"a": 1.0}, path)
+    assert [item.name for item in tmp_path.iterdir()] == ["report.json"]
+    assert path.read_text() == "old"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and file modes")
+def test_a_symlinked_report_is_replaced_by_a_regular_file(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("old")
+    target.chmod(0o640)
+    link = tmp_path / "report.json"
+    link.symlink_to(target)
+    write_report({"a": 1.0}, link)
+    assert not link.is_symlink()
+    assert stat.S_IMODE(link.stat().st_mode) == 0o640
+    assert target.read_text() == "old"
