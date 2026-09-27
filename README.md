@@ -33,7 +33,10 @@ Inputs can be Markdown or text files, JSONL (`--text-field`, default
 texts into ~500-word windows (`--window-words N`, or `--no-window`), and `score` uses whatever
 the reference used, so the two always match. `--contrast` can be repeated.
 
-The terminal shows a short summary; pass `--all` to print every metric. More commands:
+`build` prints a short summary: how the reference scores its own held-out writing, what
+separates it from the contrast drafts, and any warnings; pass `--all` to see every metric.
+`score` prints the verdict and the biggest differences, and `--all` prints every metric there
+too. More commands:
 
 - `styleprofile score draft.md writer.json -o draft.json` also saves the full JSON report;
   `--json` prints it on stdout instead of the summary, and `--quiet` prints one verdict line.
@@ -80,8 +83,8 @@ the metrics, the weighting math, the reliability checks and the resolution floor
 
 - **One genre per profile.** Blog posts, fiction and email have different habits; mixing
   them widens every spread and blurs every score.
-- **Enough text.** Aim for 15 or more documents and 20,000 or more words in the reference.
-  `build` warns when a reference has fewer than 2 documents, 15 chunks or 20,000 words.
+- **Enough text.** Aim for 15 or more chunks (windows) from several documents, and 20,000
+  or more words, in the reference. `build` warns when a reference is thinner than that.
 - **Contrast drafts from the writer's own briefs.** Have LLMs write from the same briefs or
   outlines the writer worked from, and use several models; the weights only know the drafts
   they were learned from.
