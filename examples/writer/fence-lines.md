@@ -1,0 +1,17 @@
+# Fence Lines
+
+I spent thirty-one years walking other people's fence lines, and I can tell you that almost nobody knows where theirs is. They think they do. They point at a row of maples, or a stone wall gone to moss, or a strand of barbed wire grown halfway into an ash tree, and they say, "That's the line." Sometimes it is. More often it is where somebody's grandfather got tired of carrying rocks.
+
+The deed will say otherwise, if you can read it. Old deeds in this county run from a stake and stones to a beech tree marked with three hacks, then north some number of rods to "land now or formerly of Aldrich." The beech is gone. The stake rotted before Coolidge. Aldrich sold out in 1911 and his heirs are in Ohio. So you go looking for the stones.
+
+Stones are honest, mostly. A man setting a corner would dig a hole, drop in a flat rock, and pile three or four smaller ones around it so the next fellow would know it hadn't just rolled there. You learn to see them. You kick through leaves for an hour and there it is: a little cairn, sunk in the duff, a bit of lichen on the top stone like a postage stamp. I have found corners that nobody had touched since the Civil War. I have also found corners that a bulldozer moved forty feet in 1974, which is a different kind of history.
+
+People get strange about lines. I once had a client (a pleasant woman, a retired schoolteacher) who wanted me to prove that her neighbor's woodshed sat eleven inches over onto her side. It did. I showed her the pins. She thanked me, went home, and baked the neighbor a pie. She never said a word to him about the shed. I asked her about it years later, at the post office, and she said she had only wanted to know. I have thought about that a good deal since.
+
+Other people want the line so they can fight over it. They want a paper that says they are right. I understand the impulse; I don't admire it. A boundary is a promise two families made to each other a long time ago, and most of the time it was made in good faith by people who couldn't measure very well. You can hold them to the letter of it if you like. You'll win, probably. You'll also have a neighbor who doesn't wave.
+
+The best fence I ever saw was a double wall on a hill farm up past the reservoir. Two walls, side by side, with a lane between them about as wide as a cow. Nobody could tell me why. My guess is that the two farmers each built their own wall on their own side, because neither trusted the other to do it, and then both walls stood there for a hundred and fifty years, doing the same job twice. There's a lesson in that, though I've never been sure what it is.
+
+I don't survey anymore. My knees won't take the hillsides and the instruments are all satellites now anyway; a young fellow with a pole and a tablet can do in an afternoon what took me a week. I don't begrudge him. But I notice he doesn't look at the ground much. He doesn't have to. The machine tells him where the corner ought to be, and he drives an iron pin there, and that's the end of it.
+
+I still walk my own line every spring. It's not long, a little under half a mile. I check the wall, set back a few stones the frost heaved out, and stop at the northeast corner, where there's a drill hole in a boulder that my father showed me when I was nine. It's still there. I put my finger in it, the way he did. Then I go home. It isn't surveying, exactly. I don't know what else to call it.
