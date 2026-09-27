@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
+from styleprofile.metrics import grouped
 from styleprofile.surface import Metrics
 
 DEFAULT_MODEL = "en_core_web_sm"
@@ -69,6 +70,7 @@ def _pct(part: int, whole: int) -> float | None:
 
 
 def syntax_metrics(doc: Any) -> Metrics:
+    """Parser-based metrics for one parsed chunk, named and grouped by the registry."""
     words = [token for token in doc if token.is_alpha]
     per_1k = 1000 / len(words) if words else None
 
@@ -88,38 +90,31 @@ def syntax_metrics(doc: Any) -> Metrics:
     def opener_pct(*tags: str) -> float | None:
         return _pct(sum(token.pos_ in tags for token in openers), len(openers))
 
-    return {
-        "syntax": {
-            "parse_depth_mean": (
-                statistics.fmean(_depth(sentence.root) for sentence in sentences)
-                if sentences
-                else None
-            ),
-            "clauses_per_sentence": clauses / len(sentences) if sentences else None,
-            "passive_sentences_pct": _pct(passive, len(sentences)),
-            "noun_verb_ratio": (
-                (pos["NOUN"] + pos["PROPN"]) / pos["VERB"] if pos["VERB"] else None
-            ),
-            "adjectives_per_1k": rate(pos["ADJ"]),
-            "adverbs_per_1k": rate(pos["ADV"]),
-            "modals_per_1k": rate(sum(token.tag_ == "MD" for token in words)),
-            "nominalizations_per_1k": rate(
-                sum(
-                    token.pos_ == "NOUN" and bool(_NOMINALIZATION.search(token.lower_))
-                    for token in words
-                )
-            ),
-        },
-        "sentence_openers": {
-            "opens_pronoun_pct": opener_pct("PRON"),
-            "opens_determiner_pct": opener_pct("DET"),
-            "opens_adverb_or_preposition_pct": opener_pct("ADV", "ADP"),
-            "opens_subordinator_pct": opener_pct("SCONJ"),
-            "opens_conjunction_pct": opener_pct("CCONJ"),
-            "opens_noun_pct": opener_pct("NOUN", "PROPN"),
-            "opens_verb_pct": opener_pct("VERB", "AUX"),
-        },
+    values: dict[str, float | None] = {
+        "parse_depth_mean": (
+            statistics.fmean(_depth(sentence.root) for sentence in sentences) if sentences else None
+        ),
+        "clauses_per_sentence": clauses / len(sentences) if sentences else None,
+        "passive_sentences_pct": _pct(passive, len(sentences)),
+        "noun_verb_ratio": (pos["NOUN"] + pos["PROPN"]) / pos["VERB"] if pos["VERB"] else None,
+        "adjectives_per_1k": rate(pos["ADJ"]),
+        "adverbs_per_1k": rate(pos["ADV"]),
+        "modals_per_1k": rate(sum(token.tag_ == "MD" for token in words)),
+        "nominalizations_per_1k": rate(
+            sum(
+                token.pos_ == "NOUN" and bool(_NOMINALIZATION.search(token.lower_))
+                for token in words
+            )
+        ),
+        "opens_pronoun_pct": opener_pct("PRON"),
+        "opens_determiner_pct": opener_pct("DET"),
+        "opens_adverb_or_preposition_pct": opener_pct("ADV", "ADP"),
+        "opens_subordinator_pct": opener_pct("SCONJ"),
+        "opens_conjunction_pct": opener_pct("CCONJ"),
+        "opens_noun_pct": opener_pct("NOUN", "PROPN"),
+        "opens_verb_pct": opener_pct("VERB", "AUX"),
     }
+    return grouped(values, syntax=True)
 
 
 def pos_trigrams(doc: Any) -> Counter[str]:

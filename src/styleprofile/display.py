@@ -12,143 +12,18 @@ import os
 from pathlib import Path
 from typing import Any
 
-from styleprofile.profile import UNSCORED_GROUPS
-from styleprofile.weighting import LENGTH_AUC_WARNING
-
-WORDS = "words"
-PCT = "%"
-PER_1K = "/1k"
-PLAIN = ""
-
-GROUP_TITLES: dict[str, str] = {
-    "size": "Size",
-    "sentence_shape": "Sentence shape",
-    "rhythm": "Rhythm",
-    "vocabulary": "Vocabulary",
-    "punctuation": "Punctuation",
-    "voice": "Voice and stance",
-    "markdown": "Formatting",
-    "syntax": "Syntax",
-    "sentence_openers": "How sentences open",
-    "function_words": "Function words",
-}
-
-LABELS: dict[str, tuple[str, str]] = {
-    "words": ("Words", PLAIN),
-    "sentences": ("Sentences", PLAIN),
-    "paragraphs": ("Paragraphs", PLAIN),
-    "apostrophes": ("Apostrophes", PLAIN),
-    "sentence_words_mean": ("Average sentence length", WORDS),
-    "sentence_words_median": ("Median sentence length", WORDS),
-    "sentence_words_sd": ("Sentence length spread", WORDS),
-    "short_sentences_pct": ("Short sentences (8 words or fewer)", PCT),
-    "long_sentences_pct": ("Long sentences (30+ words)", PCT),
-    "paragraph_sentences_mean": ("Sentences per paragraph", PLAIN),
-    "paragraph_words_mean": ("Words per paragraph", WORDS),
-    "one_sentence_paragraphs_pct": ("One-sentence paragraphs", PCT),
-    "sentence_length_cv": ("Sentence length variation (0 = uniform)", PLAIN),
-    "sentence_length_change_mean": ("Length change from one sentence to the next", WORDS),
-    "word_chars_mean": ("Average word length (letters)", PLAIN),
-    "long_words_pct": ("Long words (7+ letters)", PCT),
-    "mattr_100": ("Vocabulary variety (MATTR, 0-1)", PLAIN),
-    "mtld": ("Lexical diversity (MTLD)", PLAIN),
-    "hapax_share_100": ("Words used only once, per 100", PCT),
-    "commas_per_1k": ("Commas", PER_1K),
-    "semicolons_per_1k": ("Semicolons", PER_1K),
-    "colons_per_1k": ("Colons", PER_1K),
-    "em_dashes_per_1k": ("Em dashes", PER_1K),
-    "parentheses_per_1k": ("Parentheses", PER_1K),
-    "questions_per_1k": ("Question marks", PER_1K),
-    "exclamations_per_1k": ("Exclamation marks", PER_1K),
-    "ellipses_per_1k": ("Ellipses", PER_1K),
-    "quotations_per_1k": ("Quotations", PER_1K),
-    "curly_apostrophe_pct": ("Curly apostrophes (vs straight)", PCT),
-    "contractions_per_1k": ("Contractions", PER_1K),
-    "first_singular_per_1k": ("I / me / my", PER_1K),
-    "first_plural_per_1k": ("We / us / our", PER_1K),
-    "second_person_per_1k": ("You / your", PER_1K),
-    "negations_per_1k": ("Negations", PER_1K),
-    "hedges_per_1k": ("Hedges (maybe, I think)", PER_1K),
-    "boosters_per_1k": ("Intensifiers (really, clearly)", PER_1K),
-    "and_but_so_openers_pct": ("Sentences starting And / But / So", PCT),
-    "transition_openers_pct": ("Sentences starting However / Moreover", PCT),
-    "llm_markers_per_1k": ("LLM marker words (delve, crucial)", PER_1K),
-    "not_just_but_per_1k": ('"Not just X, but Y"', PER_1K),
-    "headings_per_1k": ("Headings", PER_1K),
-    "list_items_per_1k": ("List items", PER_1K),
-    "links_per_1k": ("Links", PER_1K),
-    "bold_per_1k": ("Bold phrases", PER_1K),
-    "code_spans_per_1k": ("Inline code", PER_1K),
-    "parse_depth_mean": ("Parse tree depth (clause nesting)", PLAIN),
-    "clauses_per_sentence": ("Subordinate clauses per sentence", PLAIN),
-    "passive_sentences_pct": ("Passive sentences", PCT),
-    "noun_verb_ratio": ("Nouns per verb", PLAIN),
-    "adjectives_per_1k": ("Adjectives", PER_1K),
-    "adverbs_per_1k": ("Adverbs", PER_1K),
-    "modals_per_1k": ("Modal verbs (can, should)", PER_1K),
-    "nominalizations_per_1k": ("Nominalizations (-tion, -ment)", PER_1K),
-    "opens_pronoun_pct": ("Pronoun (I, It, You)", PCT),
-    "opens_determiner_pct": ("Determiner (The, A, This)", PCT),
-    "opens_adverb_or_preposition_pct": ("Adverb or preposition (Still, In)", PCT),
-    "opens_subordinator_pct": ("Subordinator (If, When, Because)", PCT),
-    "opens_conjunction_pct": ("Conjunction (And, But)", PCT),
-    "opens_noun_pct": ("Noun", PCT),
-    "opens_verb_pct": ("Verb", PCT),
-}
-
-DISTRIBUTION_LABELS: dict[str, str] = {
-    "masked_bigram": "Function-word transitions",
-    "pos_trigram": "Grammar patterns (POS trigrams)",
-    "char_trigram": "Character trigrams",
-}
-
-# The default view: a short, stable set that covers each level without the long tail.
-KEY_METRICS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
-    (
-        "Sentences",
-        (
-            ("sentence_shape", "sentence_words_mean"),
-            ("sentence_shape", "short_sentences_pct"),
-            ("sentence_shape", "long_sentences_pct"),
-            ("rhythm", "sentence_length_cv"),
-            ("sentence_shape", "paragraph_words_mean"),
-            ("sentence_shape", "one_sentence_paragraphs_pct"),
-        ),
-    ),
-    (
-        "Vocabulary",
-        (("vocabulary", "long_words_pct"), ("vocabulary", "mattr_100")),
-    ),
-    (
-        "Punctuation",
-        (
-            ("punctuation", "commas_per_1k"),
-            ("punctuation", "em_dashes_per_1k"),
-            ("punctuation", "parentheses_per_1k"),
-            ("punctuation", "colons_per_1k"),
-        ),
-    ),
-    (
-        "Voice",
-        (
-            ("voice", "contractions_per_1k"),
-            ("voice", "first_singular_per_1k"),
-            ("voice", "second_person_per_1k"),
-            ("voice", "hedges_per_1k"),
-            ("voice", "transition_openers_pct"),
-            ("voice", "llm_markers_per_1k"),
-        ),
-    ),
-    (
-        "Syntax",
-        (
-            ("syntax", "clauses_per_sentence"),
-            ("syntax", "passive_sentences_pct"),
-            ("syntax", "nominalizations_per_1k"),
-            ("sentence_openers", "opens_pronoun_pct"),
-        ),
-    ),
+from styleprofile.metrics import (
+    DISTRIBUTION_LABELS,
+    KEY_VIEW,
+    PCT,
+    PER_1K,
+    PLAIN,
+    UNSCORED_GROUPS,
+    WORDS,
+    label,
 )
+from styleprofile.metrics import title as group_title
+from styleprofile.weighting import LENGTH_AUC_WARNING
 
 LABEL_WIDTH = 42
 VALUE_WIDTH = 12
@@ -227,16 +102,6 @@ class _Style:
         return self._wrap("33", text)
 
 
-def _title(group: str) -> str:
-    return GROUP_TITLES.get(group, group.replace("_", " ").capitalize())
-
-
-def label(name: str) -> tuple[str, str]:
-    if name.startswith("fw_") and name.endswith("_per_1k"):
-        return f'"{name[3:-7]}"', PER_1K
-    return LABELS.get(name, (name.replace("_", " ").capitalize(), PLAIN))
-
-
 def value(number: float | None, unit: str) -> str:
     if number is None:
         return "-"
@@ -285,7 +150,7 @@ def _row(text: str, *cells: str) -> str:
 
 def _key_rows(report: dict[str, Any]) -> list[tuple[str, list[tuple[str, str]]]]:
     sections = []
-    for title, metrics in KEY_METRICS:
+    for title, metrics in KEY_VIEW:
         present = [
             (group, name) for group, name in metrics if name in report["summary"].get(group, {})
         ]
@@ -299,7 +164,7 @@ def _profile_view(report: dict[str, Any], style: _Style, full: bool) -> list[str
     header = _row("", "typical") + ("   usual range" if multi else "")
     sections = (
         [
-            (_title(group), [(group, name) for name in metrics])
+            (group_title(group), [(group, name) for name in metrics])
             for group, metrics in report["summary"].items()
             if group not in UNSCORED_GROUPS
         ]
@@ -415,7 +280,7 @@ def _comparison_rows(report: dict[str, Any], reference: dict[str, Any], style: _
     for group, metrics in report["summary"].items():
         if group in UNSCORED_GROUPS:
             continue
-        lines += ["", style.bold(_title(group))]
+        lines += ["", style.bold(group_title(group))]
         for name, stats in metrics.items():
             text, unit = label(name)
             ref = reference["summary"].get(group, {}).get(name, {})
@@ -611,7 +476,7 @@ def _comparison_view(
         if amount is not None:
             area_level = delta_level(amount, area_ceilings.get(group))
             lines.append(
-                f"  {_title(group):24}{amount:5.2f}  "
+                f"  {group_title(group):24}{amount:5.2f}  "
                 + _bar(amount, style, area_level)
                 + "  "
                 + style.distance(DISTANCE_WORDS[area_level], area_level)

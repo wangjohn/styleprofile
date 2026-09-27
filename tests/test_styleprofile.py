@@ -988,3 +988,69 @@ def test_stdin_is_decoded_like_files(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"caf\xe9")))
     with pytest.raises(StyleProfileError, match="stdin is not UTF-8 text"):
         load_chunks(["-"])
+
+
+def _metric_keys(metrics: Metrics) -> list[tuple[str, str]]:
+    return [(group, name) for group, values in metrics.items() for name in values]
+
+
+def test_computed_metrics_match_the_registry() -> None:
+    from styleprofile.metrics import METRICS, grouped
+
+    surface = [(metric.group, metric.name) for metric in METRICS if not metric.syntax]
+    assert _metric_keys(surface_metrics(AUTHOR + "\n\n" + MARKDOWN)) == surface
+    assert _metric_keys(surface_metrics("")) == surface
+
+    # A computed metric without a definition, or a definition without a computation, fails.
+    values = {name: 1.0 for _, name in surface}
+    with pytest.raises(ValueError, match="new_metric"):
+        grouped({**values, "new_metric": 1.0}, syntax=False)
+    del values["commas_per_1k"]
+    with pytest.raises(ValueError, match="commas_per_1k"):
+        grouped(values, syntax=False)
+
+    pytest.importorskip("spacy")
+    from styleprofile import SyntaxUnavailableError, load_parser
+
+    try:
+        parser = load_parser()
+    except SyntaxUnavailableError:
+        pytest.skip("spaCy English model is not installed")
+    (parsed, _), (empty, _) = parser.parse([AUTHOR, ""])
+    syntax = [(metric.group, metric.name) for metric in METRICS if metric.syntax]
+    assert _metric_keys(parsed) == syntax
+    assert _metric_keys(empty) == syntax
+
+
+def test_registry_definitions_are_complete() -> None:
+    from styleprofile.metrics import (
+        FUNCTION_WORDS,
+        GROUPS,
+        KEY_VIEW,
+        METRIC_BY_NAME,
+        METRICS,
+        Count,
+        Unit,
+        describe,
+    )
+
+    assert len(METRIC_BY_NAME) == len(METRICS), "metric names must be unique"
+    order = [group.name for group in GROUPS]
+    groups = [metric.group for metric in METRICS]
+    assert groups == sorted(groups, key=order.index), "metrics follow the group order"
+    assert list(dict.fromkeys(groups)) == order, "every group has metrics"
+    for metric in METRICS:
+        assert metric.label and metric.about and isinstance(metric.unit, Unit), metric
+        if metric.name.endswith("_per_1k"):
+            assert (metric.unit, metric.share_of) == (Unit.PER_1K, Count.WORDS), metric
+        if metric.name.endswith("_pct"):
+            assert metric.unit == Unit.PCT and metric.share_of is not None, metric
+    assert all(f"fw_{word}_per_1k" in METRIC_BY_NAME for word in FUNCTION_WORDS)
+    for _, keys in KEY_VIEW:
+        assert all(METRIC_BY_NAME[name].group == group for group, name in keys)
+
+    rows = describe()
+    assert len(rows) == len(METRICS)
+    assert rows[0] == ("Size", "Words", "", METRIC_BY_NAME["words"].about)
+    assert ("Punctuation", "Em dashes", "/1k") in [row[:3] for row in rows]
+    assert len(describe(syntax=False)) == sum(not metric.syntax for metric in METRICS)
