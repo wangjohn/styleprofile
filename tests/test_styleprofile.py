@@ -971,3 +971,14 @@ def test_jsonl_ids_of_zero_are_kept(tmp_path: Path) -> None:
     records.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
     ids = [chunk.id for chunk in load_chunks([str(records)])]
     assert ids == ["0", "ids.jsonl:2", "ids.jsonl:3"]
+
+
+def test_stdin_is_decoded_like_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import sys
+
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"\xef\xbb\xbfHi.\r\nBye.")))
+    assert load_chunks(["-"])[0].text == "Hi.\nBye."
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"caf\xe9")))
+    with pytest.raises(StyleProfileError, match="stdin is not UTF-8 text"):
+        load_chunks(["-"])

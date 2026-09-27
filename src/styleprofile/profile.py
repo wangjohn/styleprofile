@@ -77,11 +77,17 @@ class Chunk:
     text: str
 
 
-def _read_text(path: Path) -> str:
+def _decode(data: bytes, name: str | Path) -> str:
     try:
-        return path.read_text(encoding="utf-8-sig")
+        text = data.decode("utf-8-sig")
     except UnicodeDecodeError as error:
-        raise StyleProfileError(f"{path} is not UTF-8 text ({error.reason})") from error
+        raise StyleProfileError(f"{name} is not UTF-8 text ({error.reason})") from error
+    # Universal newlines, as text-mode reading gives.
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read_text(path: Path) -> str:
+    return _decode(path.read_bytes(), path)
 
 
 def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
@@ -114,7 +120,7 @@ def load_chunks(inputs: Sequence[str], text_field: str | None = None) -> list[Ch
     chunks: list[Chunk] = []
     for value in inputs:
         if value == "-":
-            chunks.append(Chunk("stdin", "stdin", sys.stdin.read()))
+            chunks.append(Chunk("stdin", "stdin", _decode(sys.stdin.buffer.read(), "stdin")))
             continue
         path = Path(value).expanduser().resolve()
         if path.is_dir():
