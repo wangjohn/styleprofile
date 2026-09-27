@@ -15,6 +15,26 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 
+from styleprofile.metrics import (
+    AND_BUT_SO_OPENER,
+    BOOSTER,
+    CONTRACTION_SUFFIX,
+    FIRST_PLURAL,
+    FIRST_SINGULAR,
+    FUNCTION_WORDS,
+    HEDGE,
+    LLM_MARKER,
+    LONG_SENTENCE_WORDS,
+    LONG_WORD_CHARS,
+    NEGATIONS,
+    NOT_JUST_BUT,
+    S_CONTRACTIONS,
+    SECOND,
+    SHORT_SENTENCE_WORDS,
+    TRANSITION_OPENER,
+    grouped,
+)
+
 Metrics = dict[str, dict[str, float | None]]
 
 WORD = re.compile(r"[\w]+(?:['\N{RIGHT SINGLE QUOTATION MARK}-][\w]+)*", re.UNICODE)
@@ -61,63 +81,8 @@ _ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|vs|mr|mrs|ms|dr|st|jr|sr|fig|approx)
 _NUMBER_ABBREVIATION = re.compile(r"\b(?:No|Nos|[Vv]ol|pp|[Cc]h)\.$")
 _EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
 _ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
-_HEDGE = re.compile(
-    r"\b(?:i think|i suspect|i guess|i'm not sure|maybe|perhaps|probably|likely|seems?|"
-    r"arguably|somewhat|roughly|generally|usually|tends? to|kind of|sort of|"
-    r"in my experience)\b",
-    re.I,
-)
-_BOOSTER = re.compile(
-    r"\b(?:clearly|definitely|obviously|certainly|really|very|extremely|incredibly|"
-    r"absolutely|totally|always|never|undoubtedly)\b",
-    re.I,
-)
-# Words and constructions that are markedly more frequent in LLM prose than in human blogs.
-# Several are ordinary words, so read this as a drift signal, not a detector.
-_LLM_MARKER = re.compile(
-    r"\b(?:delve[sd]?|delving|crucial|pivotal|tapestry|testament|realm|landscape|"
-    r"multifaceted|holistic|paramount|seamless(?:ly)?|robust|leverag(?:e|es|ed|ing)|"
-    r"foster(?:s|ed|ing)?|underscor(?:e|es|ed|ing)|intricate|vibrant|streamlin(?:e|es|ed|ing)|"
-    r"navigat(?:e|es|ing) the|moreover|furthermore|additionally|"
-    r"it(?:'s| is) worth noting|in today's|in conclusion|ever-evolving|game-changer)\b",
-    re.I,
-)
-_NOT_JUST_BUT = re.compile(r"\bnot (?:just|only|merely|simply)\b[^.?!]{0,80}?\bbut\b", re.I)
-_TRANSITION_OPENER = re.compile(
-    r"^(?:however|moreover|furthermore|additionally|overall|ultimately|importantly|notably|"
-    r"in fact|that said|in short|in conclusion|as a result|consequently|thus|therefore)\b",
-    re.I,
-)
-_AND_BUT_SO_OPENER = re.compile(r"^(?:and|but|so)\b", re.I)
-
-_CONTRACTION_SUFFIX = re.compile(r"(?:n't|'re|'ve|'ll|'d|'m)$")
-# "'s" is usually a possessive, so only these pronoun and adverb forms count as contractions.
-_S_CONTRACTIONS = frozenset(
-    {"it's", "that's", "there's", "here's", "what's", "who's", "he's", "she's", "let's",
-     "where's", "how's", "when's", "why's"}
-)  # fmt: skip
-_NEGATIONS = frozenset({"not", "no", "never", "nothing", "nobody", "none", "neither", "nor"})
-_FIRST_SINGULAR = frozenset({"i", "i'm", "i've", "i'd", "i'll", "me", "my", "mine", "myself"})
-_FIRST_PLURAL = frozenset({"we", "we're", "we've", "we'd", "we'll", "us", "our", "ours"})
-_SECOND = frozenset({"you", "you're", "you've", "you'd", "you'll", "your", "yours", "yourself"})
-
-FUNCTION_WORDS: tuple[str, ...] = (
-    "the", "a", "an", "and", "but", "or", "so", "because", "if", "when", "while", "that",
-    "which", "who", "this", "these", "those", "it", "its", "of", "to", "in", "on", "for",
-    "with", "at", "by", "from", "as", "into", "about", "than", "then", "there", "here",
-    "just", "really", "very", "much", "more", "most", "also", "even", "still", "only",
-    "actually", "though", "although", "however", "instead", "rather", "where", "how", "what",
-    "why", "not", "no", "all", "some", "any", "every", "both", "each", "other", "is", "are",
-    "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "can", "could",
-    "will", "would", "should", "might", "may", "i", "you", "we", "they", "he", "she", "my",
-    "your", "our", "their",
-)  # fmt: skip
 _FUNCTION_SET = frozenset(FUNCTION_WORDS)
 MASK = "\N{MIDDLE DOT}"
-
-SHORT_SENTENCE_WORDS = 8
-LONG_SENTENCE_WORDS = 30
-LONG_WORD_CHARS = 7
 
 
 @dataclass(frozen=True)
@@ -407,7 +372,8 @@ def hapax_share(tokens: Sequence[str], block: int = 100) -> float | None:
 
 
 def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
-    """All parser-free metrics for one chunk, grouped by stylistic level.
+    """All parser-free metrics for one chunk, grouped by stylistic level, as the registry in
+    ``styleprofile.metrics`` defines them.
 
     Pass ``parsed`` when the chunk's ``prose()`` is already at hand, to avoid re-parsing.
     """
@@ -432,100 +398,77 @@ def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
     def rate(count: int) -> float | None:
         return count * per_1k if per_1k is not None else None
 
-    return {
-        "size": {
-            "words": float(word_count),
-            "sentences": float(len(lengths)),
-            "paragraphs": float(len(parsed.paragraphs)),
-            "apostrophes": float(apostrophes),
-        },
-        "sentence_shape": {
-            "sentence_words_mean": mean_length,
-            "sentence_words_median": float(statistics.median(lengths)) if lengths else None,
-            "sentence_words_sd": length_sd,
-            "short_sentences_pct": _pct(
-                sum(n <= SHORT_SENTENCE_WORDS for n in lengths), len(lengths)
-            ),
-            "long_sentences_pct": _pct(
-                sum(n >= LONG_SENTENCE_WORDS for n in lengths), len(lengths)
-            ),
-            "paragraph_sentences_mean": _mean(paragraph_sentence_counts),
-            "paragraph_words_mean": _mean([len(words(p)) for p in parsed.paragraphs]),
-            "one_sentence_paragraphs_pct": _pct(
-                sum(count == 1 for count in paragraph_sentence_counts),
-                len(paragraph_sentence_counts),
-            ),
-        },
-        "rhythm": {
-            "sentence_length_cv": (
-                length_sd / mean_length if mean_length and length_sd is not None else None
-            ),
-            "sentence_length_change_mean": _mean(
-                [abs(left - right) for left, right in pairwise(lengths)]
-            ),
-        },
-        "vocabulary": {
-            "word_chars_mean": _mean([len(token) for token in tokens]),
-            "long_words_pct": _pct(
-                sum(len(token) >= LONG_WORD_CHARS for token in tokens), word_count
-            ),
-            "mattr_100": mattr(tokens),
-            "mtld": mtld(tokens),
-            "hapax_share_100": hapax_share(tokens),
-        },
-        "punctuation": {
-            "commas_per_1k": rate(text.count(",")),
-            "semicolons_per_1k": rate(text.count(";")),
-            "colons_per_1k": rate(text.count(":")),
-            "em_dashes_per_1k": rate(len(_EM_DASH.findall(text))),
-            "parentheses_per_1k": rate(text.count("(")),
-            "questions_per_1k": rate(text.count("?")),
-            "exclamations_per_1k": rate(text.count("!")),
-            "ellipses_per_1k": rate(len(_ELLIPSIS.findall(text))),
-            "quotations_per_1k": rate(
-                text.count("\N{LEFT DOUBLE QUOTATION MARK}") + straight_double // 2
-            ),
-            "curly_apostrophe_pct": _pct(
-                text.count("\N{RIGHT SINGLE QUOTATION MARK}"), apostrophes
-            ),
-        },
-        "voice": {
-            "contractions_per_1k": rate(
-                sum(
-                    token in _S_CONTRACTIONS or bool(_CONTRACTION_SUFFIX.search(token))
-                    for token in tokens
-                )
-            ),
-            "first_singular_per_1k": rate(sum(token in _FIRST_SINGULAR for token in tokens)),
-            "first_plural_per_1k": rate(sum(token in _FIRST_PLURAL for token in tokens)),
-            "second_person_per_1k": rate(sum(token in _SECOND for token in tokens)),
-            "negations_per_1k": rate(
-                sum(token in _NEGATIONS or token.endswith("n't") for token in tokens)
-            ),
-            "hedges_per_1k": rate(len(_HEDGE.findall(plain))),
-            "boosters_per_1k": rate(len(_BOOSTER.findall(plain))),
-            "and_but_so_openers_pct": _pct(
-                sum(bool(_AND_BUT_SO_OPENER.match(s)) for s in sentence_texts),
-                len(sentence_texts),
-            ),
-            "transition_openers_pct": _pct(
-                sum(bool(_TRANSITION_OPENER.match(s)) for s in sentence_texts),
-                len(sentence_texts),
-            ),
-            "llm_markers_per_1k": rate(len(_LLM_MARKER.findall(plain))),
-            "not_just_but_per_1k": rate(len(_NOT_JUST_BUT.findall(plain))),
-        },
-        "markdown": {
-            "headings_per_1k": rate(parsed.headings),
-            "list_items_per_1k": rate(parsed.list_items),
-            "links_per_1k": rate(parsed.links),
-            "bold_per_1k": rate(parsed.bold),
-            "code_spans_per_1k": rate(parsed.code_spans),
-        },
-        "function_words": {
-            f"fw_{word}_per_1k": rate(function_counts[word]) for word in FUNCTION_WORDS
-        },
+    values: dict[str, float | None] = {
+        "words": float(word_count),
+        "sentences": float(len(lengths)),
+        "paragraphs": float(len(parsed.paragraphs)),
+        "apostrophes": float(apostrophes),
+        "sentence_words_mean": mean_length,
+        "sentence_words_median": float(statistics.median(lengths)) if lengths else None,
+        "sentence_words_sd": length_sd,
+        "short_sentences_pct": _pct(sum(n <= SHORT_SENTENCE_WORDS for n in lengths), len(lengths)),
+        "long_sentences_pct": _pct(sum(n >= LONG_SENTENCE_WORDS for n in lengths), len(lengths)),
+        "paragraph_sentences_mean": _mean(paragraph_sentence_counts),
+        "paragraph_words_mean": _mean([len(words(p)) for p in parsed.paragraphs]),
+        "one_sentence_paragraphs_pct": _pct(
+            sum(count == 1 for count in paragraph_sentence_counts),
+            len(paragraph_sentence_counts),
+        ),
+        "sentence_length_cv": (
+            length_sd / mean_length if mean_length and length_sd is not None else None
+        ),
+        "sentence_length_change_mean": _mean(
+            [abs(left - right) for left, right in pairwise(lengths)]
+        ),
+        "word_chars_mean": _mean([len(token) for token in tokens]),
+        "long_words_pct": _pct(sum(len(token) >= LONG_WORD_CHARS for token in tokens), word_count),
+        "mattr_100": mattr(tokens),
+        "mtld": mtld(tokens),
+        "hapax_share_100": hapax_share(tokens),
+        "commas_per_1k": rate(text.count(",")),
+        "semicolons_per_1k": rate(text.count(";")),
+        "colons_per_1k": rate(text.count(":")),
+        "em_dashes_per_1k": rate(len(_EM_DASH.findall(text))),
+        "parentheses_per_1k": rate(text.count("(")),
+        "questions_per_1k": rate(text.count("?")),
+        "exclamations_per_1k": rate(text.count("!")),
+        "ellipses_per_1k": rate(len(_ELLIPSIS.findall(text))),
+        "quotations_per_1k": rate(
+            text.count("\N{LEFT DOUBLE QUOTATION MARK}") + straight_double // 2
+        ),
+        "curly_apostrophe_pct": _pct(text.count("\N{RIGHT SINGLE QUOTATION MARK}"), apostrophes),
+        "contractions_per_1k": rate(
+            sum(
+                token in S_CONTRACTIONS or bool(CONTRACTION_SUFFIX.search(token))
+                for token in tokens
+            )
+        ),
+        "first_singular_per_1k": rate(sum(token in FIRST_SINGULAR for token in tokens)),
+        "first_plural_per_1k": rate(sum(token in FIRST_PLURAL for token in tokens)),
+        "second_person_per_1k": rate(sum(token in SECOND for token in tokens)),
+        "negations_per_1k": rate(
+            sum(token in NEGATIONS or token.endswith("n't") for token in tokens)
+        ),
+        "hedges_per_1k": rate(len(HEDGE.findall(plain))),
+        "boosters_per_1k": rate(len(BOOSTER.findall(plain))),
+        "and_but_so_openers_pct": _pct(
+            sum(bool(AND_BUT_SO_OPENER.match(s)) for s in sentence_texts),
+            len(sentence_texts),
+        ),
+        "transition_openers_pct": _pct(
+            sum(bool(TRANSITION_OPENER.match(s)) for s in sentence_texts),
+            len(sentence_texts),
+        ),
+        "llm_markers_per_1k": rate(len(LLM_MARKER.findall(plain))),
+        "not_just_but_per_1k": rate(len(NOT_JUST_BUT.findall(plain))),
+        "headings_per_1k": rate(parsed.headings),
+        "list_items_per_1k": rate(parsed.list_items),
+        "links_per_1k": rate(parsed.links),
+        "bold_per_1k": rate(parsed.bold),
+        "code_spans_per_1k": rate(parsed.code_spans),
+        **{f"fw_{word}_per_1k": rate(function_counts[word]) for word in FUNCTION_WORDS},
     }
+    return grouped(values, syntax=False)
 
 
 def masked_bigrams(text: str) -> Counter[str]:
@@ -550,7 +493,7 @@ def jensen_shannon(sample: dict[str, float], reference: dict[str, float]) -> flo
     if not sample or not reference:
         return None
     total = 0.0
-    for key in sample.keys() | reference.keys():
+    for key in sorted(sample.keys() | reference.keys()):
         p = sample.get(key, 0.0)
         q = reference.get(key, 0.0)
         m = (p + q) / 2

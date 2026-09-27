@@ -13,9 +13,10 @@ spread. Only deviations in the contrast direction count, so writing fewer em das
 usual does not make text look less like an LLM, and more does make it look more like one.
 
 Every z uses a spread of at least half of one occurrence per chunk for counts
-(``resolution``), or 5% of the mean for other metrics: a spread computed from values that
-almost never vary can be arbitrarily small, and would otherwise turn a single semicolon
-into dozens of standard deviations.
+(``Metric.resolution``, from each metric's unit and denominator in the registry), or 5% of
+the mean for other metrics: a spread computed from values that almost never vary can be
+arbitrarily small, and would otherwise turn a single semicolon into dozens of standard
+deviations.
 """
 
 from __future__ import annotations
@@ -27,11 +28,11 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from styleprofile.metrics import UNSCORED_GROUPS, resolution
 from styleprofile.surface import Metrics
 
 Key = tuple[str, str]
 ZScores = dict[Key, float]
-UNSCORED_GROUPS = frozenset({"size"})
 # A metric without a natural resolution that the reference never varies on has no spread
 # and so no true z-score: a chunk that differs scores this value (the "3+ sd" level) and
 # a matching chunk 0. Metrics without a measured reliability are capped at it in Delta.
@@ -41,30 +42,6 @@ SIGNALS_SHOWN = 5
 BOOTSTRAP_RESAMPLES = 2000
 # Word count alone separating the contrast set this well means likeness may be partly length.
 LENGTH_AUC_WARNING = 0.75
-
-
-# What each percentage is a share of; any other *_pct metric is a share of sentences.
-_SHARE_OF: dict[str, str] = {
-    "long_words_pct": "words",
-    "one_sentence_paragraphs_pct": "paragraphs",
-    "curly_apostrophe_pct": "apostrophes",
-}
-
-
-def resolution(name: str, counts: Mapping[str, float]) -> float:
-    """Half of one occurrence per chunk, in the metric's units: the smallest meaningful spread.
-
-    ``counts`` are the reference's typical words, sentences, paragraphs and apostrophes per
-    chunk. A rate per 1,000 words moves by 1000 / words per occurrence; a percentage by
-    100 / (whatever it is a share of). Other metrics have no count resolution.
-    """
-    if name.endswith("_per_1k"):
-        units = counts.get("words", 0.0)
-        return 500.0 / units if units else 0.0
-    if name.endswith("_pct"):
-        units = counts.get(_SHARE_OF.get(name, "sentences"), 0.0)
-        return 50.0 / units if units else 0.0
-    return 0.0
 
 
 # Metrics without a count resolution (lengths, ratios, diversity) get a spread of at least
