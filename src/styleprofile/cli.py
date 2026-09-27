@@ -78,6 +78,10 @@ def _run(args: argparse.Namespace) -> int:
         raise StyleProfileError("--window-words must be positive")
     if args.top_k < 1:
         raise StyleProfileError("--top-k must be positive")
+    if [*args.inputs, *(args.contrast or [])].count("-") > 1:
+        raise StyleProfileError("- (stdin) can be given only once")
+    if args.reference and _path(args.reference) == _path(args.output):
+        raise StyleProfileError("--output is the --reference file; choose another output path")
     chunks = load_chunks(args.inputs, args.text_field)
     contrast = load_chunks(args.contrast, args.text_field) if args.contrast else None
     if args.window_words:

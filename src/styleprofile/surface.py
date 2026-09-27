@@ -22,8 +22,8 @@ WORD = re.compile(r"[\w]+(?:['\N{RIGHT SINGLE QUOTATION MARK}-][\w]+)*", re.UNIC
 # Front matter: lines that look like YAML or TOML (keys, list items, comments, tables).
 _FRONT_MATTER_LINE = re.compile(r"^(?:[\w-]+[ \t]*[:=]|\s|-\s|#|\[)")
 _FRONT_MATTER_LINES = 100
-# Indented blocks count as code only with code-like signals, so plain text that indents
-# its paragraphs with a tab is still read as prose.
+# Indented blocks count as code only with code-like signals and when they do not read like
+# sentences, so plain text that indents its paragraphs with a tab is still read as prose.
 _CODE_SIGNAL = re.compile(
     r"[{};=<>]|\(\)|^\s*(?:def|class|import|from|return|if|for|while|const|let|var|"
     r"function|fn|pub|func|package|#include|\$)\b"
@@ -33,6 +33,14 @@ _CODE_SIGNAL = re.compile(
 _FENCE_OPEN = re.compile(r"^\s*(?:(`{3,})[^`]*|(~{3,}).*)$")
 _FENCE_CLOSE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
 _INDENTED_CODE = re.compile(r"^(?: {4}|\t)")
+# A prose token is a word with optional punctuation around it ("late;", "(usually"), not an
+# operator or a call such as "compute(a,".
+_PROSE_TOKEN = re.compile(
+    r"^[^\w\s]*[^\W\d_]+(?:['\N{RIGHT SINGLE QUOTATION MARK}-][^\W\d_]+)*[^\w\s]*$"
+)
+_PROSE_TOKEN_SHARE = 0.8
+# A line comment ("# note", "// note"), which reads like prose inside code.
+_LINE_COMMENT = re.compile(r"(?:^|\s)(?:#|//)(?:\s.*)?$")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
@@ -196,6 +204,18 @@ def markdown_blocks(markdown: str) -> list[str]:
     return blocks
 
 
+def _reads_like_prose(lines: Sequence[str]) -> bool:
+    """Mostly plain words and ending in sentence punctuation, as prose does and code rarely.
+
+    Line comments are left out, so code ending in a sentence-like comment stays code.
+    """
+    text = " ".join(_LINE_COMMENT.sub("", line).strip() for line in lines)
+    tokens = text.split()
+    prose_tokens = sum(bool(_PROSE_TOKEN.match(token)) for token in tokens)
+    ends_sentence = text.rstrip(_CLOSERS).endswith((".", "!", "?"))
+    return ends_sentence and prose_tokens >= _PROSE_TOKEN_SHARE * len(tokens)
+
+
 @dataclass(frozen=True)
 class Block:
     """One Markdown block and how it reads in context."""
@@ -212,7 +232,11 @@ def classify(markdown: str) -> list[Block]:
     for raw in markdown_blocks(markdown):
         lines = [line for line in raw.split("\n") if line.strip()]
         indented = all(_INDENTED_CODE.match(line) for line in lines)
-        code_like = indented and any(_CODE_SIGNAL.search(line) for line in lines)
+        code_like = (
+            indented
+            and any(_CODE_SIGNAL.search(line) for line in lines)
+            and not _reads_like_prose(lines)
+        )
         if _fence(lines[0]):
             classified.append(Block(raw, code=True, continues_list=False))
             continue
