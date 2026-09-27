@@ -52,7 +52,7 @@ CI_MARGIN = 2.0
 NOISE = {
     "build_s": 1.5,
     "build_mb": 1.5,
-    "profile_mb": 1.05,  # deterministic but for path lengths in the stored sources
+    "profile_mb": 1.05,  # deterministic: sources are stored relative to their inputs
     "score_s": 1.5,
     "score_mb": 1.5,
 }
@@ -142,8 +142,7 @@ CASES = {
             # build_s meets its target on a laptop (1.3s) but the shared runner is about 2.3x
             # slower. Plan PR 3 brought it from 3.72s to 2.94s there; the baseline can go once
             # it measures under 3.2s / 1.5 = 2.13s (PRs 13 and 14).
-            # profile_mb goes with PR 14, which drops per-chunk rows from the profile.
-            baseline={"build_s": 2.94, "profile_mb": 2.21},
+            baseline={"build_s": 2.94},
             ci=True,
         ),
         Case(
@@ -170,6 +169,10 @@ CASES = {
                 "profile_mb": PROFILE_MB,
                 "score_s": SCORE_S,
             },
+            # Not run in CI, so no baseline. PR 14 cut the build by about 35% on a laptop
+            # (bootstrap and calibration) and the profile from 105 MB to 0.05 MB. PR 13 owns
+            # the rest of the gap to build_s and build_mb: measurement, and the per-chunk
+            # distribution counters behind the 1.9 GB peak.
         ),
     )
 }

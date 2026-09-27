@@ -5,8 +5,8 @@ REWORDING STRESS TEST   5 LLM drafts vs 7 reference documents
   Each draft is scored with LLM-likeness weights learned without it, and each edited draft with the weights that left out its original.
 
                       AUC (95% CI)   median likeness   drafts still flagged
-  original        1.00 (1.00-1.00)             14.23   5 of 5
-  plain           1.00 (1.00-1.00)              6.07   0 of 5
+  original            1.00 (exact)             14.23   5 of 5
+  plain               1.00 (exact)              6.07   0 of 5
   AUC 1.0 separates every draft from the reference, 0.5 is chance. The median is over chunks; flagged drafts read "leans LLM" or "like the LLM drafts".
 
 How much the edits changed
@@ -24,6 +24,8 @@ Signal survival   mean z of the strongest LLM signals; how much of the original 
   Average word length (letters)                       +0.0      +6.6    +6.7 1% stronger
   LLM marker words (delve, crucial)                   +0.0      +5.7    +5.8 2% stronger
   Lexical diversity (MTLD)                            -0.0      +6.3       +5.4 15% gone
+
+"exact": the drafts and the reference's chunks do not overlap at all, so every resample gives the same AUC and there is no interval to show. That is not certainty: with few documents, new drafts may well overlap.
 
 Verdicts on edited text are weaker evidence: editing removes the LLM habits the score relies on, so a draft that reads like the reference may still be a lightly edited LLM draft.
 

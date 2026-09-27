@@ -25,9 +25,11 @@ import math
 import random
 import statistics
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from itertools import accumulate, groupby, islice
+from operator import itemgetter, mul
+from typing import Any, NamedTuple
 
 from styleprofile.core import LIKENESSES
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
@@ -50,8 +52,16 @@ MIN_CEILING = 0.5
 # |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
 # the reference's own held-out likeness is near zero or averaged over very many chunks.
 LIKENESS_MIN_CEILING = MIN_CEILING / 2
-# The contrast AUC's confidence interval resamples whole documents this many times.
-BOOTSTRAP_RESAMPLES = 2000
+# The contrast AUC's confidence interval resamples whole documents, checking at each of
+# these counts whether both ends of the interval have settled: moved less than a fiftieth of
+# its width (at least 0.001, at most 0.005) since the previous checkpoint, at this and the
+# previous checkpoint. It resamples at most the last count.
+BOOTSTRAP_CHECKPOINTS = (250, 500, 1000, 2000)
+BOOTSTRAP_RESAMPLES = BOOTSTRAP_CHECKPOINTS[-1]
+BOOTSTRAP_TOLERANCE = 0.005
+BOOTSTRAP_TOLERANCE_FLOOR = 0.001
+BOOTSTRAP_RELATIVE = 1 / 50
+BOOTSTRAP_SETTLED = 2
 # Word count alone separating the contrast set this well means likeness may be partly length.
 LENGTH_AUC_WARNING = 0.75
 
@@ -131,7 +141,7 @@ def held_out_z(
 def reliability(held: Sequence[ZScores], sources: Sequence[str]) -> dict[Key, float]:
     """Root-mean-square held-out z per metric: about 1 for a well-behaved metric, more for
     one that swings unpredictably in the reference's own writing."""
-    return _rms(_sums(held, sources)[0])
+    return _rms(_sums(held, sources, by_source=False)[0])
 
 
 def delta_weights(rms: Mapping[Key, float]) -> dict[Key, float]:
@@ -193,25 +203,32 @@ Sums = dict[Key, list[float]]
 
 
 def _sums(
-    rows: Sequence[Mapping[Key, float]], sources: Sequence[str]
+    rows: Sequence[Mapping[Key, float]], sources: Sequence[str], *, by_source: bool = True
 ) -> tuple[Sums, dict[str, Sums]]:
-    """[count, sum, sum of squares] per metric, overall and per source."""
+    """[count, sum, sum of squares] per metric, overall and (unless not ``by_source``) per
+    source."""
     total: Sums = defaultdict(lambda: [0.0, 0.0, 0.0])
-    by_source: dict[str, Sums] = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0.0]))
+    parts: dict[str, Sums] = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0.0]))
     for chunk_z, source in zip(rows, sources, strict=True):
+        own = parts[source] if by_source else None
         for key, z in chunk_z.items():
-            for sums in (total[key], by_source[source][key]):
+            squared = z * z
+            sums = total[key]
+            sums[0] += 1
+            sums[1] += z
+            sums[2] += squared
+            if own is not None:
+                sums = own[key]
                 sums[0] += 1
                 sums[1] += z
-                sums[2] += z * z
-    return total, by_source
+                sums[2] += squared
+    return total, parts
 
 
-def _minus(total: Sums, part: Mapping[Key, list[float]]) -> Sums:
-    return {
-        key: [value - part.get(key, [0.0, 0.0, 0.0])[index] for index, value in enumerate(sums)]
-        for key, sums in total.items()
-    }
+def _less(sums: Sequence[float], part: Mapping[Key, list[float]], key: Key) -> list[float]:
+    """``sums`` without one source's ``part`` of metric ``key``."""
+    removed = part.get(key)
+    return list(sums) if removed is None else [a - b for a, b in zip(sums, removed, strict=True)]
 
 
 def _rms(sums: Sums) -> dict[Key, float]:
@@ -227,6 +244,45 @@ def _fold(reference: Sums, contrast: Sums) -> tuple[dict[Key, float], dict[Key, 
         if n >= 1 and key in contrast and contrast[key][0] >= 1
     }
     return effects, rms
+
+
+def _fold_without(
+    reference: Sums,
+    contrast: Sums,
+    full: tuple[dict[Key, float], dict[Key, float]],
+    reference_part: Mapping[Key, list[float]] | None = None,
+    contrast_part: Mapping[Key, list[float]] | None = None,
+) -> tuple[dict[Key, float], dict[Key, float]]:
+    """``_fold`` of the totals less one source's part, given ``full``, the fold of the whole
+    totals. Only the metrics the part has change, so only they are recomputed: with thousands
+    of one-comment sources that is a few metrics each rather than every metric."""
+    reference_part, contrast_part = reference_part or {}, contrast_part or {}
+    effects, rms = dict(full[0]), dict(full[1])
+    for key in {*reference_part, *contrast_part}:
+        if key not in reference:
+            continue
+        # Removing a part only lowers counts, so a metric either keeps its place in the full
+        # fold (and the order likeness sums in) or drops out; none is added.
+        n, total, squares = _less(reference[key], reference_part, key)
+        if n < 1:
+            effects.pop(key, None)
+            rms.pop(key, None)
+            continue
+        rms[key] = math.sqrt(squares / n)
+        count, contrast_total, _ = _less(contrast.get(key, (0.0, 0.0, 0.0)), contrast_part, key)
+        if count >= 1:
+            effects[key] = (contrast_total / count - total / n) / max(rms[key], 1.0)
+        else:
+            effects.pop(key, None)
+    return effects, rms
+
+
+def _by_source(sources: Sequence[str]) -> dict[str, list[int]]:
+    """The positions of each source's rows, in order of first appearance."""
+    positions: dict[str, list[int]] = defaultdict(list)
+    for index, source in enumerate(sources):
+        positions[source].append(index)
+    return positions
 
 
 def auc(positives: Sequence[float], negatives: Sequence[float]) -> float | None:
@@ -253,53 +309,136 @@ def bootstrap_auc(
     resamples: int = BOOTSTRAP_RESAMPLES,
     seed: int = 0,
 ) -> list[float]:
-    """The contrast-over-reference AUC on documents resampled with replacement.
+    """The contrast-over-reference AUC on ``resamples`` document resamples (see
+    ``resampled_aucs``)."""
+    return list(islice(resampled_aucs(reference, contrast, seed), resamples))
+
+
+def resampled_aucs(
+    reference: Sequence[Sequence[float]], contrast: Sequence[Sequence[float]], seed: int = 0
+) -> Iterator[float]:
+    """The contrast-over-reference AUC on documents resampled with replacement, endlessly.
 
     Each argument holds one list of chunk scores per document. Reference and contrast
     documents are resampled separately and a document's chunks always move together, so
     the spread reflects how many documents there are rather than how many windows they were
-    cut into. The chunks are ranked once; each resample then only reweights them, so a
-    resample costs one pass over the chunks.
+    cut into. The chunks are ranked once; each resample then only reweights them by how
+    often their document was drawn, so a resample is a few passes over the chunks in C
+    (``map`` and ``accumulate``) rather than a Python loop. For a seed, the n-th value is
+    the same however many are taken.
     """
+    # Ties rank reference chunks first, so at a contrast chunk the running reference weight
+    # counts every tied reference chunk; half of each tie is taken back below.
     ranked = sorted(
         [(score, 0, document) for document, scores in enumerate(reference) for score in scores]
         + [(score, 1, document) for document, scores in enumerate(contrast) for score in scores]
     )
-    # Tied scores form one group: (reference documents, contrast documents), one entry per chunk.
-    groups: list[tuple[list[int], list[int]]] = []
-    previous: float | None = None
-    for score, is_contrast, document in ranked:
-        if score != previous:
-            groups.append(([], []))
-            previous = score
-        groups[-1][is_contrast].append(document)
-    reference_sizes = [len(scores) for scores in reference]
-    contrast_sizes = [len(scores) for scores in contrast]
+    # Each chunk's document on its side, or a sentinel that is never drawn (weight 0).
+    reference_count, contrast_count = len(reference), len(contrast)
+    reference_documents = [
+        document if not is_contrast else reference_count for _, is_contrast, document in ranked
+    ]
+    contrast_documents = [
+        document if is_contrast else contrast_count for _, is_contrast, document in ranked
+    ]
+    # Groups of tied scores holding both sides: (reference documents, contrast documents).
+    mixed: list[tuple[list[int], list[int]]] = []
+    for _, tied in groupby(ranked, key=itemgetter(0)):
+        sides: tuple[list[int], list[int]] = ([], [])
+        for _, is_contrast, document in tied:
+            sides[is_contrast].append(document)
+        if sides[0] and sides[1]:
+            mixed.append(sides)
+    reference_range, contrast_range = range(reference_count), range(contrast_count)
     rng = random.Random(seed)
-    aucs: list[float] = []
-    for _ in range(resamples):
-        reference_draws = _draws(rng, len(reference))
-        contrast_draws = _draws(rng, len(contrast))
-        below = wins = 0.0
-        for reference_documents, contrast_documents in groups:
-            tied = sum(reference_draws[document] for document in reference_documents)
-            if contrast_documents:
-                wins += sum(contrast_draws[document] for document in contrast_documents) * (
-                    below + tied / 2
-                )
-            below += tied
-        positives = sum(n * size for n, size in zip(contrast_draws, contrast_sizes, strict=True))
-        negatives = sum(n * size for n, size in zip(reference_draws, reference_sizes, strict=True))
-        aucs.append(wins / (positives * negatives))
-    return aucs
+    while True:
+        reference_draws = _draws(rng, reference_range)
+        contrast_draws = _draws(rng, contrast_range)
+        below = list(map(reference_draws.__getitem__, reference_documents))
+        above = list(map(contrast_draws.__getitem__, contrast_documents))
+        wins = float(sum(map(mul, above, accumulate(below))))
+        for reference_tied, contrast_tied in mixed:
+            tied = sum(map(reference_draws.__getitem__, reference_tied))
+            wins -= sum(map(contrast_draws.__getitem__, contrast_tied)) * tied / 2
+        yield wins / (sum(above) * sum(below))
 
 
-def _draws(rng: random.Random, count: int) -> list[int]:
-    """How many times each of ``count`` documents is drawn in one resample."""
-    drawn = [0] * count
-    for _ in range(count):
-        drawn[rng.randrange(count)] += 1
+def _draws(rng: random.Random, documents: range) -> list[int]:
+    """How many times each document is drawn in one resample of ``len(documents)``, plus a
+    final 0 for the sentinel that marks the other side's chunks."""
+    drawn = [0] * (len(documents) + 1)
+    for document in rng.choices(documents, k=len(documents)):
+        drawn[document] += 1
     return drawn
+
+
+class Interval(NamedTuple):
+    """An AUC interval and how it was found: ``method`` is ``"exact"`` when every resample
+    would give the same AUC, so none were drawn, or ``"bootstrap"``."""
+
+    bounds: list[float]
+    resamples: int
+    method: str
+
+
+def settle_tolerance(interval: Sequence[float]) -> float:
+    """How little both ends must move between checkpoints for the interval to count as
+    settled: a fiftieth of its width, between ``BOOTSTRAP_TOLERANCE_FLOOR`` and
+    ``BOOTSTRAP_TOLERANCE``."""
+    width = interval[1] - interval[0]
+    return min(BOOTSTRAP_TOLERANCE, max(width * BOOTSTRAP_RELATIVE, BOOTSTRAP_TOLERANCE_FLOOR))
+
+
+def bootstrap_interval(
+    reference: Sequence[Sequence[float]], contrast: Sequence[Sequence[float]], seed: int = 0
+) -> Interval:
+    """The 95% document-bootstrap interval of the AUC, the resamples it took, and its method.
+
+    With perfect separation (every contrast chunk above every reference chunk, or every one
+    below) every resample has the same AUC, 1 or 0, so the interval is exact and needs none;
+    the same holds when every chunk has one score (0.5). A tie across the sides is not
+    perfect separation: resamples that drop the tied documents can reach 1 or 0, others
+    cannot.
+
+    Otherwise resampling stops at the first of ``BOOTSTRAP_CHECKPOINTS`` where both ends have
+    moved less than ``settle_tolerance`` since the previous checkpoint, and did at the
+    checkpoint before too. Consecutive estimates share most of their draws, so one small
+    move understates the error; asking for two keeps the early stop about as accurate as
+    always drawing the maximum (see docs/method.md).
+    """
+    reference_scores = [score for scores in reference for score in scores]
+    contrast_scores = [score for scores in contrast for score in scores]
+    if min(contrast_scores) > max(reference_scores):
+        return Interval([1.0, 1.0], 0, "exact")
+    if max(contrast_scores) < min(reference_scores):
+        return Interval([0.0, 0.0], 0, "exact")
+    if (
+        min(contrast_scores)
+        == max(contrast_scores)
+        == min(reference_scores)
+        == max(reference_scores)
+    ):
+        # One score throughout: every pair ties, so every resample's AUC is one half.
+        return Interval([0.5, 0.5], 0, "exact")
+    draws = resampled_aucs(reference, contrast, seed)
+    aucs: list[float] = []
+    previous: list[float] | None = None
+    settled = 0
+    interval: list[float] = []
+    for checkpoint in BOOTSTRAP_CHECKPOINTS:
+        aucs.extend(islice(draws, checkpoint - len(aucs)))
+        interval = [quantile(aucs, 0.025), quantile(aucs, 0.975)]
+        tolerance = settle_tolerance(interval)
+        if previous is not None and all(
+            abs(now - before) < tolerance for now, before in zip(interval, previous, strict=True)
+        ):
+            settled += 1
+            if settled == BOOTSTRAP_SETTLED:
+                break
+        else:
+            settled = 0
+        previous = interval
+    return Interval(interval, len(aucs), "bootstrap")
 
 
 def auc_interval(
@@ -307,10 +446,30 @@ def auc_interval(
 ) -> list[float] | None:
     """The 95% document-bootstrap interval of the AUC, or None with fewer than 2 documents
     on either side (resampling one document cannot show document-to-document variation)."""
+    return auc_confidence(reference, contrast)["auc_ci"]
+
+
+def auc_confidence(
+    reference: Sequence[Sequence[float]], contrast: Sequence[Sequence[float]]
+) -> dict[str, Any]:
+    """``auc_ci``, the AUC's 95% document-bootstrap interval, and ``bootstrap``, how it was
+    found: ``method`` is ``"exact"`` when every resample would give the same AUC (perfect
+    separation, or one score throughout) so none were drawn, ``"bootstrap"`` when it was
+    resampled, and None, with no interval, when either side has fewer than 2 documents
+    (resampling one document cannot show document-to-document variation). ``resamples`` is
+    how many were drawn, and ``*_documents`` how many documents each side had."""
+    found: dict[str, Any] = {
+        "method": None,
+        "resamples": 0,
+        "unit": "document",
+        "reference_documents": len(reference),
+        "contrast_documents": len(contrast),
+    }
     if len(reference) < 2 or len(contrast) < 2:
-        return None
-    aucs = bootstrap_auc(reference, contrast)
-    return [quantile(aucs, 0.025), quantile(aucs, 0.975)]
+        return {"auc_ci": None, "bootstrap": found}
+    interval = bootstrap_interval(reference, contrast)
+    found.update(method=interval.method, resamples=interval.resamples)
+    return {"auc_ci": interval.bounds, "bootstrap": found}
 
 
 def length_baseline(
@@ -346,13 +505,23 @@ def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str
     how Delta behaves on the writer's new text rather than on text the weights have seen.
     """
     total, parts = _sums(held, sources)
-    folds = {
-        source: delta_weights(_rms(_minus(total, parts.get(source, {})))) for source in set(sources)
-    }
+    full = delta_weights(_rms(total))
+    scored: list[tuple[float | None, dict[str, float]]] = [(None, {})] * len(held)
+    for source, positions in _by_source(sources).items():
+        # Weights learned without this source: only the metrics it has differ from the full
+        # weights, so only they are recomputed.
+        weights = dict(full)
+        for key in parts[source]:
+            n, _, squares = _less(total[key], parts[source], key)
+            if n >= 1:
+                weights[key] = 1.0 / max(math.sqrt(squares / n), 1.0) ** 2
+            else:
+                weights.pop(key, None)
+        for index in positions:
+            scored[index] = delta(held[index], weights)
     overall: list[float] = []
     areas: dict[str, list[float]] = defaultdict(list)
-    for chunk_z, source in zip(held, sources, strict=True):
-        value, by_group = delta(chunk_z, folds[source])
+    for value, by_group in scored:
         if value is None:
             continue
         overall.append(value)
@@ -410,18 +579,24 @@ def cross_validate(
     contrast_total, contrast_parts = _sums(contrast_z, contrast_sources)
     effects, rms = _fold(reference_total, contrast_total)
 
-    reference_folds = {
-        source: _fold(_minus(reference_total, reference_parts.get(source, {})), contrast_total)
-        for source in set(reference_sources)
-    }
-    reference_scores = [
-        likeness(chunk_z, *reference_folds[source])[0]
-        for chunk_z, source in zip(reference_held, reference_sources, strict=True)
-    ]
+    # Each reference source's fold is used for its own chunks and then dropped, so thousands
+    # of one-comment sources never hold thousands of folds at once.
+    reference_scores = [0.0] * len(reference_held)
+    for source, positions in _by_source(reference_sources).items():
+        fold = _fold_without(
+            reference_total, contrast_total, (effects, rms), reference_part=reference_parts[source]
+        )
+        for index in positions:
+            reference_scores[index] = likeness(reference_held[index], *fold)[0]
     cross_validated = len(set(contrast_sources)) > 1
     contrast_folds = {
         source: (
-            _fold(reference_total, _minus(contrast_total, contrast_parts.get(source, {})))
+            _fold_without(
+                reference_total,
+                contrast_total,
+                (effects, rms),
+                contrast_part=contrast_parts[source],
+            )
             if cross_validated
             else (effects, rms)
         )
@@ -462,8 +637,9 @@ def summarize_contrast(
 ) -> dict[str, Any]:
     """The stored effects and calibration of a cross-validated contrast.
 
-    The AUC gets a document-bootstrap 95% interval, and ``*_words`` (each chunk's prose word
-    count) give the AUC of length alone, the baseline the likeness AUC should beat.
+    The AUC gets a document-bootstrap 95% interval (``auc_confidence``), and ``*_words``
+    (each chunk's prose word count) give the AUC of length alone, the baseline the likeness
+    AUC should beat.
     """
     reference_scores, contrast_scores = learned.reference_scores, learned.contrast_scores
     return {
@@ -479,11 +655,10 @@ def summarize_contrast(
                 "min": min(contrast_scores),
             },
             "auc": auc(contrast_scores, reference_scores),
-            "auc_ci": auc_interval(
+            **auc_confidence(
                 by_document(reference_scores, reference_sources),
                 by_document(contrast_scores, contrast_sources),
             ),
-            "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "unit": "document"},
             "length_baseline": length_baseline(reference_words, contrast_words),
             "cross_validated": learned.cross_validated,
         },

@@ -38,7 +38,15 @@ the reference used, so the two always match. `--contrast` can be repeated.
 `build` prints a short summary: how the reference scores its own held-out writing, what
 separates it from the contrast drafts, and any warnings; pass `--all` to see every metric.
 `score` prints the verdict and the biggest differences, and `--all` prints every metric there
-too. More commands:
+too.
+
+The profile holds summaries only (each metric's mean and spread, the held-out ranges and the
+contrast weights), so it stays small however large the corpus; `build --keep-chunks` also
+saves every window's metrics, for debugging. Profiles and reports save each input by its
+final name only (`posts`, then `posts/2024/a.md` for a file in it), however it was typed, so
+they never reveal where your files live.
+
+More commands:
 
 - `styleprofile score draft.md writer.json -o draft.json` also saves the full JSON report;
   `--json` prints it on stdout instead of the summary, and `--quiet` prints one verdict line.
@@ -133,8 +141,9 @@ every draft with weights learned without that draft. Each edited draft is matche
 original by file name and scored with the weights that left out the original, so no draft
 is judged by weights its own original shaped. It reports:
 
-- the AUC against the reference's held-out chunks, with a 95% document-bootstrap interval,
-  for the original drafts and for each edited set;
+- the AUC against the reference's held-out chunks, with a 95% document-bootstrap interval
+  and how it was found (`bootstrap.method`, as in the profile; see
+  [docs/method.md](docs/method.md)), for the original drafts and for each edited set;
 - the median likeness over chunks (as in the reference's stored range), and how many
   drafts still read "leans LLM" or "like the LLM drafts";
 - **signal survival**: for the ten strongest contrast metrics, the drafts' mean z before
