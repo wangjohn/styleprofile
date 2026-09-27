@@ -18,3 +18,8 @@ corpora/
 data/
 
 .DS_Store
+
+# Benchmark corpora, outputs and results (bench/gen.py, bench/run.py)
+bench/corpora/
+bench/work/
+bench/results.json

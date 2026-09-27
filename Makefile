@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: sync test lint format typecheck check demo
+.PHONY: sync test lint format typecheck check demo bench bench-quick snapshots
 
 sync:
 	$(UV) sync --extra syntax
@@ -28,3 +28,17 @@ demo:
 	$(UV) run styleprofile score examples/draft.md profiles/demo-writer.json \
 		-o profiles/demo-draft.json
 	$(UV) run styleprofile show profiles/demo-draft.json > /dev/null
+
+# Benchmark every case in bench/targets.py on generated corpora (bench/gen.py) and compare with
+# the performance targets. Results go to bench/results.json. Pass options with BENCH, e.g.
+# `make bench BENCH="--case big --repeat 3"`. bench-quick runs only the case CI runs.
+bench:
+	$(UV) run python bench/run.py $(BENCH)
+
+bench-quick:
+	$(UV) run python bench/run.py --quick $(BENCH)
+
+# Regenerate the CLI output snapshots in tests/snapshots/ after an intended output change.
+# It installs the syntax extra first, so the syntax snapshots are refreshed too.
+snapshots:
+	UPDATE_SNAPSHOTS=1 $(UV) run --extra syntax pytest tests/test_snapshots.py

@@ -1,0 +1,20 @@
+$ styleprofile build examples/writer --contrast examples/llm-drafts -o '<tmp>/writer.json' --no-syntax
+[exit 0]
+--- stdout
+STYLE PROFILE   7 chunks, 4,496 words
+
+As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
+
+Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (95% CI 1.00–1.00, resampling whole documents)
+  LLM-likeness on held-out text: reference 0.20 typically (95% under 0.82), LLM drafts 14.23
+  Length alone: AUC 0.73 (reference 640 words per chunk, LLM drafts 624): some length difference
+  Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, Headings ▲
+
+Pass --all, or run `styleprofile show` on it, to see the metrics.
+
+wrote <tmp>/writer.json
+Next, score a draft against it:
+  styleprofile score <draft> <tmp>/writer.json
+--- stderr
+Thin reference: it has 7 chunks; aim for 15 or more by adding documents or using a smaller --window-words.
+Thin reference: it has 4,496 words; aim for 20,000 or more of the writer's text, in one genre.

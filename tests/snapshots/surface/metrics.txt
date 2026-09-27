@@ -1,0 +1,177 @@
+$ styleprofile metrics
+[exit 0]
+--- stdout
+153 metrics. Syntax and sentence-opening metrics need spaCy.
+
+Size
+  Words                                               Prose words, after code, tables and markup are removed.
+  Sentences                                           Sentences in the prose.
+  Paragraphs                                          Prose paragraphs; list items are not paragraphs.
+  Apostrophes                                         Straight and curly apostrophes.
+
+Sentence shape
+  Average sentence length                      words  Mean words per sentence.
+  Median sentence length                       words  Median words per sentence.
+  Sentence length spread                       words  Standard deviation of words per sentence.
+  Short sentences (8 words or fewer)           %      Share of sentences of 8 words or fewer.
+  Long sentences (30+ words)                   %      Share of sentences of 30 words or more.
+  Sentences per paragraph                             Mean sentences per paragraph.
+  Words per paragraph                          words  Mean words per paragraph.
+  One-sentence paragraphs                      %      Share of paragraphs that are a single sentence.
+
+Rhythm
+  Sentence length variation (0 = uniform)             Sentence length spread over its mean (coefficient of variation).
+  Length change from one sentence to the next  words  Mean absolute difference in length between consecutive sentences.
+
+Vocabulary
+  Average word length (letters)                       Mean characters per word.
+  Long words (7+ letters)                      %      Share of words of 7 characters or more.
+  Vocabulary variety (MATTR, 0-1)                     Moving-average type/token ratio over 100-word windows.
+  Lexical diversity (MTLD)                            Measure of textual lexical diversity; higher repeats words less.
+  Words used only once, per 100                %      Share of word types used once, averaged over 100-word blocks.
+
+Punctuation
+  Commas                                       /1k    Commas.
+  Semicolons                                   /1k    Semicolons.
+  Colons                                       /1k    Colons.
+  Em dashes                                    /1k    Em dashes, including -- and spaced hyphens between words.
+  Parentheses                                  /1k    Opening parentheses.
+  Question marks                               /1k    Question marks.
+  Exclamation marks                            /1k    Exclamation marks.
+  Ellipses                                     /1k    Ellipses (... or the single glyph).
+  Quotations                                   /1k    Quotations: opening curly double quotes, or pairs of straight ones.
+  Curly apostrophes (vs straight)              %      Share of apostrophes that are curly.
+
+Voice and stance
+  Contractions                                 /1k    Contractions such as don't, we're and it's (not possessives).
+  I / me / my                                  /1k    First-person singular.
+  We / us / our                                /1k    First-person plural.
+  You / your                                   /1k    Second person.
+  Negations                                    /1k    Negations: not, no, never, -n't.
+  Hedges (maybe, I think)                      /1k    Hedges such as maybe, probably and I think.
+  Intensifiers (really, clearly)               /1k    Intensifiers such as really, clearly and always.
+  Sentences starting And / But / So            %      Share of sentences that open with And, But or So.
+  Sentences starting However / Moreover        %      Share of sentences that open with a transition such as However or Moreover.
+  LLM marker words (delve, crucial)            /1k    Words and phrases markedly more common in LLM prose (a drift signal, not a detector).
+  "Not just X, but Y"                          /1k    The "not just X, but Y" construction.
+
+Formatting
+  Headings                                     /1k    Markdown headings.
+  List items                                   /1k    Markdown list items.
+  Links                                        /1k    Markdown links.
+  Bold phrases                                 /1k    Bold phrases.
+  Inline code                                  /1k    Inline code spans.
+
+Syntax
+  Parse tree depth (clause nesting)                   Mean dependency-tree height per sentence.
+  Subordinate clauses per sentence                    Adverbial, relative, complement and other subordinate clauses per sentence.
+  Passive sentences                            %      Share of (3+ word) sentences with a passive construction.
+  Nouns per verb                                      Nouns and proper nouns per verb.
+  Adjectives                                   /1k    Adjectives.
+  Adverbs                                      /1k    Adverbs.
+  Modal verbs (can, should)                    /1k    Modal verbs such as can, should and might.
+  Nominalizations (-tion, -ment)               /1k    Nouns ending in -tion, -ment, -ness, -ity and similar.
+
+How sentences open
+  Pronoun (I, It, You)                         %      Share of (3+ word) sentences that open with a pronoun.
+  Determiner (The, A, This)                    %      Share of (3+ word) sentences that open with a determiner.
+  Adverb or preposition (Still, In)            %      Share of (3+ word) sentences that open with an adverb or preposition.
+  Subordinator (If, When, Because)             %      Share of (3+ word) sentences that open with a subordinating conjunction.
+  Conjunction (And, But)                       %      Share of (3+ word) sentences that open with a coordinating conjunction.
+  Noun                                         %      Share of (3+ word) sentences that open with a noun.
+  Verb                                         %      Share of (3+ word) sentences that open with a verb.
+
+Function words
+  "the"                                        /1k    The word "the".
+  "a"                                          /1k    The word "a".
+  "an"                                         /1k    The word "an".
+  "and"                                        /1k    The word "and".
+  "but"                                        /1k    The word "but".
+  "or"                                         /1k    The word "or".
+  "so"                                         /1k    The word "so".
+  "because"                                    /1k    The word "because".
+  "if"                                         /1k    The word "if".
+  "when"                                       /1k    The word "when".
+  "while"                                      /1k    The word "while".
+  "that"                                       /1k    The word "that".
+  "which"                                      /1k    The word "which".
+  "who"                                        /1k    The word "who".
+  "this"                                       /1k    The word "this".
+  "these"                                      /1k    The word "these".
+  "those"                                      /1k    The word "those".
+  "it"                                         /1k    The word "it".
+  "its"                                        /1k    The word "its".
+  "of"                                         /1k    The word "of".
+  "to"                                         /1k    The word "to".
+  "in"                                         /1k    The word "in".
+  "on"                                         /1k    The word "on".
+  "for"                                        /1k    The word "for".
+  "with"                                       /1k    The word "with".
+  "at"                                         /1k    The word "at".
+  "by"                                         /1k    The word "by".
+  "from"                                       /1k    The word "from".
+  "as"                                         /1k    The word "as".
+  "into"                                       /1k    The word "into".
+  "about"                                      /1k    The word "about".
+  "than"                                       /1k    The word "than".
+  "then"                                       /1k    The word "then".
+  "there"                                      /1k    The word "there".
+  "here"                                       /1k    The word "here".
+  "just"                                       /1k    The word "just".
+  "really"                                     /1k    The word "really".
+  "very"                                       /1k    The word "very".
+  "much"                                       /1k    The word "much".
+  "more"                                       /1k    The word "more".
+  "most"                                       /1k    The word "most".
+  "also"                                       /1k    The word "also".
+  "even"                                       /1k    The word "even".
+  "still"                                      /1k    The word "still".
+  "only"                                       /1k    The word "only".
+  "actually"                                   /1k    The word "actually".
+  "though"                                     /1k    The word "though".
+  "although"                                   /1k    The word "although".
+  "however"                                    /1k    The word "however".
+  "instead"                                    /1k    The word "instead".
+  "rather"                                     /1k    The word "rather".
+  "where"                                      /1k    The word "where".
+  "how"                                        /1k    The word "how".
+  "what"                                       /1k    The word "what".
+  "why"                                        /1k    The word "why".
+  "not"                                        /1k    The word "not".
+  "no"                                         /1k    The word "no".
+  "all"                                        /1k    The word "all".
+  "some"                                       /1k    The word "some".
+  "any"                                        /1k    The word "any".
+  "every"                                      /1k    The word "every".
+  "both"                                       /1k    The word "both".
+  "each"                                       /1k    The word "each".
+  "other"                                      /1k    The word "other".
+  "is"                                         /1k    The word "is".
+  "are"                                        /1k    The word "are".
+  "was"                                        /1k    The word "was".
+  "were"                                       /1k    The word "were".
+  "be"                                         /1k    The word "be".
+  "been"                                       /1k    The word "been".
+  "have"                                       /1k    The word "have".
+  "has"                                        /1k    The word "has".
+  "had"                                        /1k    The word "had".
+  "do"                                         /1k    The word "do".
+  "does"                                       /1k    The word "does".
+  "did"                                        /1k    The word "did".
+  "can"                                        /1k    The word "can".
+  "could"                                      /1k    The word "could".
+  "will"                                       /1k    The word "will".
+  "would"                                      /1k    The word "would".
+  "should"                                     /1k    The word "should".
+  "might"                                      /1k    The word "might".
+  "may"                                        /1k    The word "may".
+  "i"                                          /1k    The word "i".
+  "you"                                        /1k    The word "you".
+  "we"                                         /1k    The word "we".
+  "they"                                       /1k    The word "they".
+  "he"                                         /1k    The word "he".
+  "she"                                        /1k    The word "she".
+  "my"                                         /1k    The word "my".
+  "your"                                       /1k    The word "your".
+  "our"                                        /1k    The word "our".
+  "their"                                      /1k    The word "their".

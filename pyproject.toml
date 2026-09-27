@@ -45,6 +45,6 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "bench"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
