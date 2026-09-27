@@ -399,9 +399,9 @@ def _run_build(args: argparse.Namespace) -> int:
     profile = api.build(
         args.inputs, settings, contrast=args.contrast, contrast_label=args.contrast_label
     )
+    _notes(profile.notes)
     # Files found inside a folder are known only once it has been read.
     _refuse_overwrite(args.output, typed, profile.sources)
-    _notes(profile.notes)
     profile.save(args.output)
     report = profile.report
     print(profile.to_text(color=_color(), full=args.all))
@@ -476,11 +476,10 @@ def _run_score(args: argparse.Namespace) -> int:
         text_field=args.text_field,
         syntax=False if args.no_syntax else None,
     )
-    if args.output:
-        _refuse_overwrite(args.output, samples, result.sources)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     if args.output:
+        _refuse_overwrite(args.output, samples, result.sources)
         result.save(args.output)
     if args.json:
         sys.stdout.write(dumps_report(result.report))
@@ -566,10 +565,9 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         contrast_label=args.contrast_label,
         retrain=args.retrain,
     )
-    if args.output:
-        _refuse_overwrite(args.output, typed, result.sources)
     _notes(result.notes)
     if args.output:
+        _refuse_overwrite(args.output, typed, result.sources)
         result.save(args.output)
     if args.json:
         sys.stdout.write(dumps_report(result.report))
@@ -653,6 +651,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _dispatch(sys.argv[1:] if argv is None else list(argv))
     except (StyleProfileError, SyntaxUnavailableError, OSError) as error:
+        _notes(getattr(error, "notes", ()))
         code = getattr(error, "code", None)
         print(f"error: {_flagged(str(error), code)}", file=sys.stderr)
         hint = HINTS.get(code or "")

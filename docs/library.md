@@ -39,8 +39,9 @@ A plain `str` is always a path, never text, so a typo in a folder name fails ins
 being profiled as a two-word text. A `str` that can't be a path (it spans lines, say)
 fails with a message pointing to `Text`.
 
-Every input is cut into windows, `Chunk`s included; pass `Settings(window_words=0)` for
-chunks you've already cut.
+Every input is cut into windows, `Chunk`s included. Re-windowing chunks you already cut
+is harmless (they keep their documents); pass `Settings(window_words=0)` to use them as
+they are.
 
 ## Settings
 
@@ -76,7 +77,8 @@ The library never prints.
 - **`warnings`**: strings saved in the report, about the text itself, such as short chunks
   or mismatched settings.
 - **Errors**: problems raise `StyleProfileError`, whose `code` names the kind of problem.
-  Messages never mention command-line flags.
+  Messages never mention command-line flags. The notes collected before the error are in
+  its `notes`.
 
 A `progress` callback, if given, is called with a `Progress` at the start of each phase.
 

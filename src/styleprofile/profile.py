@@ -81,12 +81,15 @@ class StyleProfileError(ValueError):
     """Style profile inputs or a reference profile are unusable.
 
     ``code`` names the kind of problem so a front end can add its own advice (such as the
-    command-line flag that fixes it); the messages themselves never mention flags.
+    command-line flag that fixes it); the messages themselves never mention flags. ``notes``
+    holds what the run noted before it failed (see ``Note``), for the front end to show
+    before the error.
     """
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         self.code = code
+        self.notes: list[Note] = []
 
 
 @dataclass(frozen=True)
@@ -291,7 +294,8 @@ def summarize(chunk_metrics: Sequence[Metrics]) -> dict[str, dict[str, dict[str,
     return summary
 
 
-_WINDOW_SUFFIX = re.compile(r"#w\d+$")
+# Windowing already-windowed chunks stacks suffixes (``post#w1#w2``); all of them go.
+_WINDOW_SUFFIX = re.compile(r"(?:#w\d+)+$")
 
 
 def document_of(source: str, chunk_id: str) -> str:
@@ -304,7 +308,7 @@ def document_of(source: str, chunk_id: str) -> str:
 
 
 def base_id(chunk_id: str) -> str:
-    """A chunk's id without the ``#wN`` suffix that windowing adds."""
+    """A chunk's id without the ``#wN`` suffixes that windowing adds."""
     return _WINDOW_SUFFIX.sub("", chunk_id)
 
 

@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -261,70 +262,71 @@ class Profile(_Result):
         drafts are often in another format than the writer's corpus.
         """
         notes: list[Note] = []
-        inherited = self.settings
-        if syntax is None:
-            syntax = AUTO if inherited.syntax else False
-        settings = Settings(
-            window_words=inherited.window_words if window_words is None else window_words,
-            min_words=inherited.min_words if min_words is None else min_words,
-            text_field=text_field or inherited.text_field,
-            syntax=syntax,
-            top_k=inherited.top_k,
-            input_format=input_format,
-        )
-        if settings.min_words != inherited.min_words:
-            notes.append(
-                Note(
-                    f"min_words {settings.min_words} overrides the reference's "
-                    f"{inherited.min_words}",
-                    "min_words",
+        with _notes_on_error(notes):
+            inherited = self.settings
+            if syntax is None:
+                syntax = AUTO if inherited.syntax else False
+            settings = Settings(
+                window_words=inherited.window_words if window_words is None else window_words,
+                min_words=inherited.min_words if min_words is None else min_words,
+                text_field=text_field or inherited.text_field,
+                syntax=syntax,
+                top_k=inherited.top_k,
+                input_format=input_format,
+            )
+            if settings.min_words != inherited.min_words:
+                notes.append(
+                    Note(
+                        f"min_words {settings.min_words} overrides the reference's "
+                        f"{inherited.min_words}",
+                        "min_words",
+                    )
                 )
+            # An explicit text field is the only one read; the reference's is tried first.
+            fields: str | tuple[str, ...] | None = text_field
+            if not text_field and inherited.text_field:
+                fields = (
+                    inherited.text_field,
+                    *(name for name in TEXT_FIELDS if name != inherited.text_field),
+                )
+            step = _progress(progress)
+            items = _items(inputs)
+            _stdin_once(items)
+            parser = _parser(
+                settings.syntax,
+                notes,
+                (
+                    "the reference has syntax metrics but spaCy is not installed, so syntax is "
+                    f"left out of this score; {SYNTAX_INSTALL} to include it"
+                )
+                if inherited.syntax
+                else (
+                    "spaCy is not installed, so this score has surface metrics only; "
+                    f"{SYNTAX_INSTALL} to include syntax"
+                ),
+                step,
             )
-        # An explicit text field is the only one read; the reference's is tried first.
-        fields: str | tuple[str, ...] | None = text_field
-        if not text_field and inherited.text_field:
-            fields = (
-                inherited.text_field,
-                *(name for name in TEXT_FIELDS if name != inherited.text_field),
+            step(READ)
+            chunks = _read(items, fields, set(), notes, "<text>")
+            step(SCORE)
+            report = score(
+                _windowed(chunks, settings.window_words),
+                self._report,
+                parser=parser,
+                top_k=settings.top_k,
+                min_words=settings.min_words,
+                reference_path=self._path,
+                settings={
+                    "inputs": _described(inputs, items),
+                    "text_field": settings.text_field,
+                    "window_words": settings.window_words or None,
+                    "min_words": settings.min_words,
+                },
             )
-        step = _progress(progress)
-        items = _items(inputs)
-        _stdin_once(items)
-        parser = _parser(
-            settings.syntax,
-            notes,
-            (
-                "the reference has syntax metrics but spaCy is not installed, so syntax is "
-                f"left out of this score; {SYNTAX_INSTALL} to include it"
+            step(DONE)
+            return ScoreResult(
+                report, self._report, notes=notes, sources=[chunk.source for chunk in chunks]
             )
-            if inherited.syntax
-            else (
-                "spaCy is not installed, so this score has surface metrics only; "
-                f"{SYNTAX_INSTALL} to include syntax"
-            ),
-            step,
-        )
-        step(READ)
-        chunks = _read(items, fields, set(), notes, "<text>")
-        step(SCORE)
-        report = score(
-            _windowed(chunks, settings.window_words),
-            self._report,
-            parser=parser,
-            top_k=settings.top_k,
-            min_words=settings.min_words,
-            reference_path=self._path,
-            settings={
-                "inputs": _described(inputs, items),
-                "text_field": settings.text_field,
-                "window_words": settings.window_words or None,
-                "min_words": settings.min_words,
-            },
-        )
-        step(DONE)
-        return ScoreResult(
-            report, self._report, notes=notes, sources=[chunk.source for chunk in chunks]
-        )
 
     def __repr__(self) -> str:
         where = f" from {self._path}" if self._path else ""
@@ -421,54 +423,55 @@ def build(
     twice, in ``inputs`` or ``contrast``, is read once, with a note.
     """
     notes: list[Note] = []
-    step = _progress(progress)
-    step(READ)
-    items = _items(inputs)
-    contrast_items = _items(contrast) if contrast is not None else None
-    _stdin_once([*items, *(contrast_items or [])])
-    seen: set[str] = set()
-    chunks = _read(items, settings.text_field, seen, notes, "<text>")
-    contrast_chunks = (
-        _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
-        if contrast_items is not None
-        else None
-    )
-    parser = _parser(
-        settings.syntax,
-        notes,
-        "spaCy is not installed, so this profile has surface metrics only; for syntax "
-        f"metrics, {SYNTAX_INSTALL} and build again",
-        step,
-    )
-    step(BUILD)
-    report = build_reference(
-        _windowed(chunks, settings.window_words),
-        parser=parser,
-        top_k=settings.top_k,
-        min_words=settings.min_words,
-        contrast=(
-            _windowed(contrast_chunks, settings.window_words)
-            if contrast_chunks is not None
+    with _notes_on_error(notes):
+        step = _progress(progress)
+        step(READ)
+        items = _items(inputs)
+        contrast_items = _items(contrast) if contrast is not None else None
+        _stdin_once([*items, *(contrast_items or [])])
+        seen: set[str] = set()
+        chunks = _read(items, settings.text_field, seen, notes, "<text>")
+        contrast_chunks = (
+            _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
+            if contrast_items is not None
             else None
-        ),
-        contrast_label=contrast_label,
-        settings={
-            "inputs": _described(inputs, items),
-            "text_field": settings.text_field,
-            "window_words": settings.window_words or None,
-            "min_words": settings.min_words,
-            "contrast": (
-                _described(contrast, contrast_items)
-                if contrast is not None and contrast_items is not None
+        )
+        parser = _parser(
+            settings.syntax,
+            notes,
+            "spaCy is not installed, so this profile has surface metrics only; for syntax "
+            f"metrics, {SYNTAX_INSTALL} and build again",
+            step,
+        )
+        step(BUILD)
+        report = build_reference(
+            _windowed(chunks, settings.window_words),
+            parser=parser,
+            top_k=settings.top_k,
+            min_words=settings.min_words,
+            contrast=(
+                _windowed(contrast_chunks, settings.window_words)
+                if contrast_chunks is not None
                 else None
             ),
-        },
-    )
-    step(DONE)
-    sources = [chunk.source for chunk in [*chunks, *(contrast_chunks or [])]]
-    # Keep the profile exactly as it is saved (floats rounded), so scoring it before or
-    # after a save and load gives the same numbers.
-    return Profile(json.loads(dumps_report(report)), notes=notes, sources=sources)
+            contrast_label=contrast_label,
+            settings={
+                "inputs": _described(inputs, items),
+                "text_field": settings.text_field,
+                "window_words": settings.window_words or None,
+                "min_words": settings.min_words,
+                "contrast": (
+                    _described(contrast, contrast_items)
+                    if contrast is not None and contrast_items is not None
+                    else None
+                ),
+            },
+        )
+        step(DONE)
+        sources = [chunk.source for chunk in [*chunks, *(contrast_chunks or [])]]
+        # Keep the profile exactly as it is saved (floats rounded), so scoring it before or
+        # after a save and load gives the same numbers.
+        return Profile(json.loads(dumps_report(report)), notes=notes, sources=sources)
 
 
 def evaluate(
@@ -487,62 +490,78 @@ def evaluate(
     learned without their original. ``settings.top_k`` does not apply here.
     """
     notes: list[Note] = []
-    step = _progress(progress)
-    step(READ)
-    items, contrast_items = _items(inputs), _items(contrast)
-    edited_items = {label: _items(value) for label, value in edited.items()}
-    _stdin_once([*items, *contrast_items, *(item for v in edited_items.values() for item in v)])
-    seen: set[str] = set()
-    reference_chunks = _read(items, settings.text_field, seen, notes, "<text>")
-    contrast_chunks = _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
-    edited_chunks: dict[str, list[Chunk]] = {}
-    for label, value in edited_items.items():
-        edited_chunks[label] = _read(value, settings.text_field, set(), notes, f"<{label}>")
-        overlap = {chunk.source for chunk in edited_chunks[label]} & seen
-        if overlap:
-            where = _described(edited[label], value)
-            where = where if isinstance(where, str) else ", ".join(where)
-            count = len(overlap)
-            notes.append(
-                Note(
-                    f"{label}: {count:,} file{'' if count == 1 else 's'} in {where} are also "
-                    "given as the writer's texts or the original drafts, so that set is not "
-                    "an edit of them",
-                    "edited_overlap",
+    with _notes_on_error(notes):
+        step = _progress(progress)
+        step(READ)
+        items, contrast_items = _items(inputs), _items(contrast)
+        edited_items = {label: _items(value) for label, value in edited.items()}
+        _stdin_once([*items, *contrast_items, *(item for v in edited_items.values() for item in v)])
+        seen: set[str] = set()
+        reference_chunks = _read(items, settings.text_field, seen, notes, "<text>")
+        contrast_chunks = _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
+        edited_chunks: dict[str, list[Chunk]] = {}
+        for label, value in edited_items.items():
+            edited_chunks[label] = _read(value, settings.text_field, set(), notes, f"<{label}>")
+            overlap = {chunk.source for chunk in edited_chunks[label]} & seen
+            if overlap:
+                where = _described(edited[label], value)
+                where = where if isinstance(where, str) else ", ".join(where)
+                count = len(overlap)
+                notes.append(
+                    Note(
+                        f"{label}: {count:,} file{'' if count == 1 else 's'} in {where} are also "
+                        "given as the writer's texts or the original drafts, so that set is not "
+                        "an edit of them",
+                        "edited_overlap",
+                    )
                 )
-            )
-    parser = _parser(
-        settings.syntax,
-        notes,
-        "spaCy is not installed, so this uses surface metrics only; for syntax metrics, "
-        f"{SYNTAX_INSTALL} and run again",
-        step,
-    )
-    step(EVALUATE)
-    report = evaluate_rewording(
-        _windowed(reference_chunks, settings.window_words),
-        _windowed(contrast_chunks, settings.window_words),
-        {
-            label: _windowed(chunks, settings.window_words)
-            for label, chunks in edited_chunks.items()
-        },
-        parser=parser,
-        min_words=settings.min_words,
-        contrast_label=contrast_label,
-        retrain=retrain,
-        settings={
-            "inputs": _described(inputs, items),
-            "contrast": _described(contrast, contrast_items),
-            "edited": {
-                label: _described(edited[label], value) for label, value in edited_items.items()
+        parser = _parser(
+            settings.syntax,
+            notes,
+            "spaCy is not installed, so this uses surface metrics only; for syntax metrics, "
+            f"{SYNTAX_INSTALL} and run again",
+            step,
+        )
+        step(EVALUATE)
+        report = evaluate_rewording(
+            _windowed(reference_chunks, settings.window_words),
+            _windowed(contrast_chunks, settings.window_words),
+            {
+                label: _windowed(chunks, settings.window_words)
+                for label, chunks in edited_chunks.items()
             },
-            "text_field": settings.text_field,
-            "window_words": settings.window_words or None,
-        },
-    )
-    step(DONE)
-    loaded = [*reference_chunks, *contrast_chunks, *(c for v in edited_chunks.values() for c in v)]
-    return Evaluation(report, notes=notes, sources=[chunk.source for chunk in loaded])
+            parser=parser,
+            min_words=settings.min_words,
+            contrast_label=contrast_label,
+            retrain=retrain,
+            settings={
+                "inputs": _described(inputs, items),
+                "contrast": _described(contrast, contrast_items),
+                "edited": {
+                    label: _described(edited[label], value) for label, value in edited_items.items()
+                },
+                "text_field": settings.text_field,
+                "window_words": settings.window_words or None,
+            },
+        )
+        step(DONE)
+        loaded = [
+            *reference_chunks,
+            *contrast_chunks,
+            *(c for v in edited_chunks.values() for c in v),
+        ]
+        return Evaluation(report, notes=notes, sources=[chunk.source for chunk in loaded])
+
+
+@contextmanager
+def _notes_on_error(notes: list[Note]) -> Iterator[None]:
+    """Attach the notes a run collected to a ``StyleProfileError`` it raises, so a front end
+    can still show them (a skipped file often explains the error)."""
+    try:
+        yield
+    except StyleProfileError as error:
+        error.notes[:0] = notes
+        raise
 
 
 def _resolved(path: str | os.PathLike[str]) -> Path:

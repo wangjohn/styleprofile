@@ -14,7 +14,7 @@ import styleprofile as sp
 from styleprofile import api
 from styleprofile.cli import main
 from styleprofile.display import format_evaluation
-from styleprofile.profile import dumps_report
+from styleprofile.profile import base_id, document_of, dumps_report
 
 ROOT = Path(__file__).resolve().parent.parent
 WRITER, CONTRAST, DRAFT = "examples/writer", "examples/llm-drafts", "examples/draft.md"
@@ -253,3 +253,33 @@ def test_verdicts_match_the_command_line_headline(
     )
     assert result.contrast_label == "LLM"
     assert repr(result) == f"<ScoreResult: {result.verdict} (Delta {result.delta:.2f})>"
+
+
+def test_notes_reach_the_caller_when_a_run_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    post = tmp_path / "post.md"
+    post.write_text(POSTS[0], encoding="utf-8")
+    repeated = sp.Note(f"{post} was already given; using it once", "repeated_input")
+    # One document cannot learn a contrast; the note about the repeat comes with the error.
+    with pytest.raises(sp.StyleProfileError) as error:
+        sp.build([post, post], sp.Settings(syntax=False), contrast=sp.Text(POSTS[1]))
+    assert error.value.code == "contrast_needs_documents"
+    assert error.value.notes == [repeated]
+
+    draft = tmp_path / "draft.md"
+    draft.write_text(POSTS[1], encoding="utf-8")
+    command = ["build", str(post), str(post), "--contrast", str(draft), "--no-syntax"]
+    assert main([*command, "-o", str(tmp_path / "x.json")]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"note: {repeated.message}\nerror: ")
+
+
+def test_rewindowing_chunks_keeps_their_documents() -> None:
+    chunks = [sp.Chunk("post", "post.md", "\n\n".join(POSTS * 40))]
+    twice = sp.window(sp.window(chunks, 100), 100)
+    assert twice[0].id == "post#w1#w1"
+    assert {base_id(chunk.id) for chunk in twice} == {"post"}
+    assert {document_of(chunk.source, chunk.id) for chunk in twice} == {
+        document_of("post.md", "post")
+    }
