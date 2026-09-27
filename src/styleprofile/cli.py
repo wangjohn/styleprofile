@@ -4,6 +4,7 @@
     styleprofile score draft.md writer.json
     styleprofile show writer.json
     styleprofile metrics
+    styleprofile evaluate posts/ --contrast llm-drafts/ --edited light=edits/
 
 The flat form of earlier releases (``styleprofile INPUT... --output X [--reference R]``)
 still runs for one release, with a deprecation note naming the equivalent new command.
@@ -24,14 +25,17 @@ from typing import Any, TextIO
 from styleprofile import __version__
 from styleprofile.display import (
     describe_delta,
+    format_evaluation,
     format_reference_summary,
     format_summary,
     likeness_level,
     likeness_words,
     mean_ceiling,
 )
+from styleprofile.evaluate import evaluate_rewording
 from styleprofile.metrics import describe
 from styleprofile.profile import (
+    EVALUATION,
     REFERENCE,
     TEXT_FIELDS,
     VERSION,
@@ -51,7 +55,7 @@ from styleprofile.profile import (
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
 
 PROG = "styleprofile"
-COMMANDS = ("build", "score", "show", "metrics")
+COMMANDS = ("build", "score", "show", "metrics", "evaluate")
 DEFAULT_WINDOW_WORDS = 500
 DEFAULT_TOP_K = 300
 # A reference below these is usable but thin; `build` says so and how to fix it.
@@ -63,6 +67,8 @@ HINTS = {
     "text_field": "pass --text-field with the JSONL field that holds the text",
     "contrast_needs_documents": "add more of the writer's documents, or build without --contrast",
     "score_as_reference": "score against the reference profile made by `styleprofile build`",
+    "unmatched_edits": "give each edited file its original's name and relative path",
+    "duplicate_names": "give each draft a distinct file name or JSONL id",
 }
 SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
 
@@ -237,11 +243,14 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     show = commands.add_parser(
         "show",
         **_help_parser(
-            "Show a saved reference profile or score report without recomputing it.",
+            "Show a saved reference profile, score report or evaluation report without "
+            "recomputing it.",
             f"{PROG} show writer.json --all",
         ),
     )
-    show.add_argument("report", metavar="REPORT.json", help="a report written by build or score")
+    show.add_argument(
+        "report", metavar="REPORT.json", help="a report written by build, score or evaluate"
+    )
     show.add_argument("--all", action="store_true", help="show every metric, not just key ones")
 
     metrics = commands.add_parser(
@@ -257,7 +266,68 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         default=None,
         help="only the spaCy syntax metrics (--syntax) or only the others (--no-syntax)",
     )
+    evaluate = commands.add_parser(
+        "evaluate",
+        **_help_parser(
+            "Stress-test LLM-likeness against edited drafts. Builds a reference with the "
+            "original drafts as contrast, then scores edited copies of those drafts (matched "
+            "to their originals by file name) with the weights learned without their original.",
+            f"{PROG} evaluate posts/ --contrast llm-drafts/ "
+            "--edited light=edits/light humanize=edits/humanize",
+            usage=f"{PROG} evaluate [options] INPUT [INPUT ...] --contrast PATH "
+            "--edited LABEL=DIR [LABEL=DIR ...]",
+        ),
+    )
+    evaluate.add_argument(
+        "inputs",
+        nargs="+",
+        metavar="INPUT",
+        help="the writer's Markdown, text or JSONL files, directories of them, or - for stdin",
+    )
+    evaluate.add_argument(
+        "--contrast",
+        action="append",
+        required=True,
+        metavar="PATH",
+        help="the original, unedited drafts; repeat for more paths",
+    )
+    evaluate.add_argument(
+        "--edited",
+        type=_edited,
+        action="extend",
+        nargs="+",
+        required=True,
+        metavar="LABEL=DIR",
+        help="folders of edited drafts with the originals' file names, e.g. light=edits/light",
+    )
+    evaluate.add_argument(
+        "--retrain",
+        action="store_true",
+        help="also report the AUC with the edited drafts added to the contrast set",
+    )
+    evaluate.add_argument(
+        "--contrast-label",
+        default="LLM",
+        metavar="NAME",
+        help="name of the contrast set in reports (default: LLM)",
+    )
+    evaluate.add_argument(
+        "-o", "--output", metavar="REPORT.json", help="also save the full report as JSON"
+    )
+    evaluate.add_argument(
+        "--json", action="store_true", help="print the report as JSON on stdout, and nothing else"
+    )
+    _add_input_flags(evaluate, inherited=False)
     return parser, dict(commands.choices)
+
+
+def _edited(value: str) -> tuple[str, str]:
+    label, separator, folder = value.partition("=")
+    if not separator or not label or not folder:
+        raise argparse.ArgumentTypeError(
+            f"expected LABEL=DIR, got {value!r}; put the writer's INPUTs before --edited"
+        )
+    return label, folder
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -536,6 +606,9 @@ def _run_show(args: argparse.Namespace) -> int:
             raise StyleProfileError(f"{args.report} {problems[error.code]}") from error
         raise
     color = _color()
+    if report_kind(report) == EVALUATION:
+        print(format_evaluation(report, color=color))
+        return 0
     if report_kind(report) == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
         return 0
@@ -578,11 +651,75 @@ def _run_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_evaluate(args: argparse.Namespace) -> int:
+    window_words = _window_words(args.window_words)
+    min_words = _min_words(args.min_words)
+    labels = [label for label, _ in args.edited]
+    if len(set(labels)) != len(labels):
+        raise StyleProfileError("each --edited LABEL must be distinct")
+    folders = [folder for _, folder in args.edited]
+    if "-" in folders:
+        raise StyleProfileError("--edited takes folders of files, not - (stdin)")
+    typed = [*args.inputs, *args.contrast]
+    _stdin_once(typed)
+    seen: set[str] = set()
+    reference = _read(args.inputs, args.text_field, seen)
+    contrast = _read(args.contrast, args.text_field, seen)
+    edited = {label: load_chunks([folder], args.text_field) for label, folder in args.edited}
+    for label, folder in args.edited:
+        overlap = {chunk.source for chunk in edited[label]} & seen
+        if overlap:
+            _note(
+                f"{label}: {_plural(len(overlap), 'file')} in {folder} are also given as the "
+                "writer's texts or the original drafts, so that set is not an edit of them"
+            )
+    if args.output:
+        loaded = [*reference, *contrast, *(chunk for chunks in edited.values() for chunk in chunks)]
+        _refuse_overwrite(args.output, [*typed, *folders], loaded)
+    parser: Parser | None = None
+    if not args.no_syntax:
+        try:
+            parser = load_parser()
+        except SyntaxUnavailableError:
+            _note(
+                f"spaCy is not installed, so this uses surface metrics only; for syntax "
+                f"metrics, {SYNTAX_INSTALL} and run again"
+            )
+    result = evaluate_rewording(
+        _windowed(reference, window_words),
+        _windowed(contrast, window_words),
+        {label: _windowed(chunks, window_words) for label, chunks in edited.items()},
+        parser=parser,
+        min_words=min_words,
+        contrast_label=args.contrast_label,
+        retrain=args.retrain,
+        settings={
+            "inputs": args.inputs,
+            "contrast": args.contrast,
+            "edited": dict(args.edited),
+            "text_field": args.text_field,
+            "window_words": window_words,
+        },
+    )
+    if args.output:
+        write_report(result, _path(args.output))
+    if args.json:
+        sys.stdout.write(dumps_report(result))
+        if args.output:
+            _note(f"wrote {args.output}")
+    else:
+        print(format_evaluation(result, color=_color()))
+        if args.output:
+            print(f"\nwrote {args.output}")
+    return 0
+
+
 RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "build": _run_build,
     "score": _run_score,
     "show": _run_show,
     "metrics": _run_metrics,
+    "evaluate": _run_evaluate,
 }
 
 

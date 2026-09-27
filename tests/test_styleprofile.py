@@ -716,7 +716,7 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
 def test_weighting_without_calibration_and_level_thresholds() -> None:
     from styleprofile.display import delta_level, likeness_level
     from styleprofile.profile import document_of
-    from styleprofile.weighting import _auc
+    from styleprofile.weighting import auc
 
     # Two single-chunk documents: no held-out spread, so no calibration and no crash.
     report = build_profile(
@@ -738,9 +738,9 @@ def test_weighting_without_calibration_and_level_thresholds() -> None:
     weak = {"reference": {"p95": 0.9}, "contrast": {"median": 0.7}}
     assert likeness_level(5.0, weak) == 1
 
-    assert _auc([3.0, 4.0], [1.0, 2.0]) == 1.0
-    assert _auc([1.0], [1.0]) == 0.5
-    assert _auc([2.0, 0.0], [1.0]) == 0.5
+    assert auc([3.0, 4.0], [1.0, 2.0]) == 1.0
+    assert auc([1.0], [1.0]) == 0.5
+    assert auc([2.0, 0.0], [1.0]) == 0.5
 
 
 def test_near_zero_held_out_range_does_not_inflate_verdicts() -> None:
@@ -845,7 +845,7 @@ def test_contrast_auc_has_a_document_bootstrap_interval() -> None:
 
 
 def test_bootstrap_resamples_whole_documents() -> None:
-    from styleprofile.weighting import _auc, bootstrap_auc
+    from styleprofile.weighting import auc, bootstrap_auc
 
     # One contrast document contributes 100 high chunks, the other a single low one. By
     # chunk, the AUC would stay near 0.99; by document, drawing the low one twice gives 0.
@@ -857,7 +857,7 @@ def test_bootstrap_resamples_whole_documents() -> None:
         for ref_draws in ([0, 0], [0, 1], [1, 1]):
             positives = [s for d in draws for s in contrast[d]]
             negatives = [s for d in ref_draws for s in reference[d]]
-            possible.add(round(_auc(positives, negatives) or 0.0, 9))
+            possible.add(round(auc(positives, negatives) or 0.0, 9))
     assert {round(auc, 9) for auc in aucs} <= possible
     assert 0.0 in aucs and 1.0 in aucs
     assert bootstrap_auc(reference, contrast, resamples=50) == aucs[:50]
@@ -867,7 +867,7 @@ def test_bootstrap_resamples_whole_documents() -> None:
     drafts = [[0.5, 0.8], [0.4]]
     flat = [s for scores in uneven for s in scores]
     flat_drafts = [s for scores in drafts for s in scores]
-    assert _auc(flat_drafts, flat) in bootstrap_auc(uneven, drafts, resamples=200)
+    assert auc(flat_drafts, flat) in bootstrap_auc(uneven, drafts, resamples=200)
 
 
 def test_length_baseline_detects_length_differences() -> None:

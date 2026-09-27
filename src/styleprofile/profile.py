@@ -36,18 +36,20 @@ from styleprofile.syntax import Parser
 from styleprofile.weighting import (
     LENGTH_AUC_WARNING,
     UNSCORED_GROUPS,
+    CrossValidated,
     Key,
     ZScores,
     calibrate_delta,
+    cross_validate,
     delta,
     delta_weights,
     flatten,
     floors,
     held_out_z,
-    learn_contrast,
     likeness,
     nest,
     reliability,
+    summarize_contrast,
     z_score,
 )
 
@@ -63,6 +65,8 @@ from styleprofile.weighting import (
 VERSION = 5
 REFERENCE = "reference"
 SCORE = "score"
+# Written by ``styleprofile evaluate`` (see the evaluate module); shown, never scored against.
+EVALUATION = "evaluation"
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 # Directory walks skip dot-directories (.git, .venv) and these vendored ones.
@@ -281,7 +285,12 @@ def document_of(source: str, chunk_id: str) -> str:
     Windows ``post#w3`` share their document; files with the same name in different
     folders, and JSONL records with the same id in different files, stay separate.
     """
-    return f"{source}\x1f{_WINDOW_SUFFIX.sub('', chunk_id)}"
+    return f"{source}\x1f{base_id(chunk_id)}"
+
+
+def base_id(chunk_id: str) -> str:
+    """A chunk's id without the ``#wN`` suffix that windowing adds."""
+    return _WINDOW_SUFFIX.sub("", chunk_id)
 
 
 def _z_against(metrics: Metrics, summary: dict[str, Any], floor: dict[Key, float]) -> ZScores:
@@ -377,16 +386,17 @@ def _mean_of(values: Sequence[float | None]) -> float | None:
 
 
 def report_kind(report: dict[str, Any]) -> str:
-    """``"reference"`` or ``"score"``. Reports written before ``kind`` existed are inferred:
-    a report scored against a reference carries a ``reference`` section."""
+    """``"reference"``, ``"score"`` or ``"evaluation"``. Reports written before ``kind``
+    existed are inferred: a report scored against a reference carries a ``reference``
+    section."""
     kind = report.get("kind")
-    if kind in (REFERENCE, SCORE):
+    if kind in (REFERENCE, SCORE, EVALUATION):
         return kind
     return SCORE if isinstance(report.get("reference"), dict) else REFERENCE
 
 
 def load_report(path: Path) -> dict[str, Any]:
-    """Read any styleprofile report, reference or score."""
+    """Read any styleprofile report: reference, score or evaluation."""
     if path.is_dir():
         raise StyleProfileError(f"{path} is a directory, not a profile", code="directory")
     if not path.exists():
@@ -395,7 +405,8 @@ def load_report(path: Path) -> dict[str, Any]:
         report = json.loads(_read_text(path))
     except (json.JSONDecodeError, StyleProfileError):
         report = None
-    if not isinstance(report, dict) or "summary" not in report:
+    evaluation = isinstance(report, dict) and report.get("kind") == EVALUATION
+    if not isinstance(report, dict) or ("summary" not in report and not evaluation):
         raise StyleProfileError(f"{path} is not a style profile", code="not_a_profile")
     return report
 
@@ -403,6 +414,12 @@ def load_report(path: Path) -> dict[str, Any]:
 def load_reference(path: Path) -> dict[str, Any]:
     """Read a reference profile, refusing a score report (a sample scored against one)."""
     reference = load_report(path)
+    if report_kind(reference) == EVALUATION:
+        raise StyleProfileError(
+            f"{path} is an evaluation report, not a reference profile; build a reference "
+            "from the writer's own texts",
+            code="score_as_reference",
+        )
     if report_kind(reference) == SCORE:
         raise StyleProfileError(
             f"{path} is a score report (a sample scored against a reference), not a "
@@ -421,8 +438,12 @@ class _Measured:
     below: int
 
 
-def _measure(chunks: Sequence[Chunk], parser: Parser | None, min_words: int) -> _Measured:
-    """Parse each chunk once, drop chunks without enough prose, and compute every metric."""
+def _measure(
+    chunks: Sequence[Chunk], parser: Parser | None, min_words: int, *, allow_empty: bool = False
+) -> _Measured:
+    """Parse each chunk once, drop chunks without enough prose, and compute every metric.
+
+    With no chunk left this is an error, unless ``allow_empty``."""
     parsed_all = [prose(chunk.text) for chunk in chunks]
     sizes = [len(words(parsed.text)) for parsed in parsed_all]
     empty = sum(not size for size in sizes)
@@ -433,6 +454,8 @@ def _measure(chunks: Sequence[Chunk], parser: Parser | None, min_words: int) -> 
         if size and size >= min_words
     ]
     texts = [parsed.text for _, parsed in kept]
+    if not kept and allow_empty:
+        return _Measured([], [], [], empty, below)
     if not kept:
         raise StyleProfileError(
             f"no chunks with at least {max(min_words, 1)} prose word(s) to profile "
@@ -468,6 +491,23 @@ def _calibrate(report: dict[str, Any], chunk_metrics: Sequence[Metrics]) -> list
     return held
 
 
+@dataclass(frozen=True)
+class ContrastFit:
+    """What a contrast reference's likeness weights were learned from.
+
+    ``learned`` holds every held-out fold, so more text derived from a contrast document
+    (an edited copy, say) can be scored with the fold that left that document out, and
+    judged against the same reference scores and calibration the report stores.
+    """
+
+    reference_held: list[ZScores]
+    reference_documents: list[str]
+    contrast_chunks: list[Chunk]
+    contrast_z: list[ZScores]
+    contrast_documents: list[str]
+    learned: CrossValidated
+
+
 def _learn_contrast(
     report: dict[str, Any],
     held: list[ZScores] | None,
@@ -475,7 +515,7 @@ def _learn_contrast(
     label: str,
     parser: Parser | None,
     min_words: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ContrastFit]:
     if held is None:
         raise StyleProfileError(
             "a contrast set needs a reference drawn from at least two documents with enough "
@@ -491,10 +531,18 @@ def _learn_contrast(
     floor = floors(report["summary"])
     contrast_z = [_z_against(metrics, report["summary"], floor) for metrics in measured.metrics]
     contrast_sources = [document_of(chunk.source, chunk.id) for chunk in measured.chunks]
-    learned = learn_contrast(
-        held,
-        [document_of(row["source"], row["id"]) for row in report["chunks"]],
-        contrast_z,
+    reference_sources = [document_of(row["source"], row["id"]) for row in report["chunks"]]
+    fit = ContrastFit(
+        reference_held=held,
+        reference_documents=reference_sources,
+        contrast_chunks=measured.chunks,
+        contrast_z=contrast_z,
+        contrast_documents=contrast_sources,
+        learned=cross_validate(held, reference_sources, contrast_z, contrast_sources),
+    )
+    learned = summarize_contrast(
+        fit.learned,
+        reference_sources,
         contrast_sources,
         [row["metrics"]["size"]["words"] for row in report["chunks"]],
         # Measured chunks all have prose, so words is never None.
@@ -523,7 +571,7 @@ def _learn_contrast(
         "chunk_count": len(measured.chunks),
         "sources": len(set(contrast_sources)),
         **learned,
-    }
+    }, fit
 
 
 def _base_report(
@@ -598,6 +646,64 @@ def build_reference(
     """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
     reliability when the chunks span two or more documents and, given ``contrast`` chunks
     (for example LLM drafts), the weights that score likeness to them."""
+    return _build_reference(
+        chunks,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        settings=settings,
+        contrast=contrast,
+        contrast_label=contrast_label,
+    )[0]
+
+
+def build_contrast_reference(
+    chunks: Sequence[Chunk],
+    contrast: Sequence[Chunk],
+    *,
+    parser: Parser | None,
+    top_k: int = 300,
+    min_words: int = 1,
+    settings: dict[str, Any] | None = None,
+    contrast_label: str = "LLM",
+) -> tuple[dict[str, Any], ContrastFit]:
+    """``build_reference(chunks, contrast=contrast)``, plus what its weights were learned
+    from, for scoring more text with the same folds."""
+    report, fit = _build_reference(
+        chunks,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        settings=settings,
+        contrast=contrast,
+        contrast_label=contrast_label,
+    )
+    assert fit is not None  # a contrast always produces a fit or raises
+    return report, fit
+
+
+def z_against_reference(
+    report: dict[str, Any], chunks: Sequence[Chunk], parser: Parser | None, min_words: int
+) -> tuple[list[Chunk], list[ZScores]]:
+    """Measure chunks and take their z-scores against a reference report, as the contrast
+    drafts are; returns the chunks kept (enough prose), possibly none, and their z-scores."""
+    measured = _measure(chunks, parser, min_words, allow_empty=True)
+    floor = floors(report["summary"])
+    return measured.chunks, [
+        _z_against(metrics, report["summary"], floor) for metrics in measured.metrics
+    ]
+
+
+def _build_reference(
+    chunks: Sequence[Chunk],
+    *,
+    parser: Parser | None,
+    top_k: int,
+    min_words: int,
+    settings: dict[str, Any] | None,
+    contrast: Sequence[Chunk] | None,
+    contrast_label: str,
+) -> tuple[dict[str, Any], ContrastFit | None]:
     measured = _measure(chunks, parser, min_words)
     report, _ = _base_report(
         measured,
@@ -608,11 +714,12 @@ def build_reference(
         settings=settings,
     )
     held = _calibrate(report, measured.metrics)
+    fit: ContrastFit | None = None
     if contrast is not None:
-        report["contrast"] = _learn_contrast(
+        report["contrast"], fit = _learn_contrast(
             report, held, contrast, contrast_label, parser, min_words
         )
-    return report
+    return report, fit
 
 
 def _baseline(reference: dict[str, Any]) -> dict[str, Any]:

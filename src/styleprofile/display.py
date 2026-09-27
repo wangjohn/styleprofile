@@ -7,8 +7,8 @@ report was scored against a reference.
 
 from __future__ import annotations
 
-import math
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,12 @@ from styleprofile.metrics import (
     label,
 )
 from styleprofile.metrics import title as group_title
-from styleprofile.weighting import LENGTH_AUC_WARNING
+from styleprofile.weighting import (
+    LENGTH_AUC_WARNING,
+    likeness_level,
+    likeness_words,
+    mean_ceiling,
+)
 
 LABEL_WIDTH = 42
 VALUE_WIDTH = 12
@@ -32,16 +37,6 @@ NOTABLE_Z = 1.0
 CHUNKS_SHOWN = 3
 BAR_WIDTH = 20
 BAR_SCALE = 3.0
-# The narrowest "close" band a calibrated Delta verdict uses, in mean |z|: half a standard
-# deviation per metric, half the uncalibrated close threshold of 1.0. Without it an area the
-# writer never varies in (Markdown in plain essays) has a held-out range near zero, and any
-# trace of it would read as very different.
-MIN_CEILING = 0.5
-# The same guard for the likeness score. Likeness averages only the part of each z that
-# points toward the contrast set, and for noise that one-sided part is on average half of
-# |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
-# the reference's own held-out likeness is near zero or averaged over very many chunks.
-LIKENESS_MIN_CEILING = MIN_CEILING / 2
 
 
 # How far from the reference, as one orange ramp (pale -> deep). "Close" stays uncolored so
@@ -347,44 +342,6 @@ def _differences(report: dict[str, Any], reference: dict[str, Any], style: _Styl
     return lines
 
 
-def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
-    """The usual upper bound for an average over ``count`` chunks.
-
-    A single chunk is unusual above the held-out 95th percentile; an average over n chunks
-    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median. The
-    bound is never below ``floor``, so a near-zero held-out range cannot make a negligible
-    deviation look large.
-    """
-    if stats.get("p95") is None:
-        return None
-    median = stats.get("median", stats["p95"])
-    return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
-
-
-def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
-    """0-3 from the reference's own held-out range up to the contrast set's typical score."""
-    ceiling = (
-        mean_ceiling(calibration["reference"], count, LIKENESS_MIN_CEILING) or LIKENESS_MIN_CEILING
-    )
-    target = calibration["contrast"]["median"]
-    if score <= ceiling:
-        return 0
-    if target <= ceiling:
-        # The contrast drafts score no higher than the reference: the score cannot tell
-        # them apart, so it never claims more than a few traits.
-        return 1
-    return 1 if score < (ceiling + target) / 2 else 2 if score < target else 3
-
-
-def likeness_words(level: int, label: str) -> str:
-    return (
-        "like the reference",
-        f"a few {label} traits",
-        f"leans {label}",
-        f"like the {label} drafts",
-    )[level]
-
-
 def _likeness(report: dict[str, Any], contrast: dict[str, Any], style: _Style) -> list[str]:
     scored = report["reference"]
     score = scored.get("likeness_mean")
@@ -572,3 +529,136 @@ def format_summary(
     if report["warnings"]:
         lines += ["", *(style.warn(f"Note: {warning}") for warning in report["warnings"])]
     return "\n".join(lines)
+
+
+def _auc_cell(result: dict[str, Any]) -> str:
+    auc = result.get("auc")
+    if auc is None:
+        return "-"
+    interval = result.get("auc_ci")
+    return f"{auc:.2f} ({interval[0]:.2f}-{interval[1]:.2f})" if interval else f"{auc:.2f}"
+
+
+def _survival(entry: dict[str, Any], style: _Style) -> str:
+    z, remaining = entry.get("z"), entry.get("remaining")
+    if z is None:
+        return "-"
+    if remaining is None:
+        return f"{z:+.1f}"
+    removed = 1 - remaining
+    # Color by how much of the signal is left: a surviving tell is the thing to look at.
+    level = 0 if remaining < 0.25 else 1 if remaining < 0.5 else 2 if remaining < 0.75 else 3
+    # An edit can also push a signal further from the reference than the original was.
+    change = f"{100 * removed:.0f}% gone" if removed >= 0 else f"{-100 * removed:.0f}% stronger"
+    return f"{z:+.1f} " + style.distance(change, level)
+
+
+def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
+    """Terminal view of an evaluation report (``styleprofile evaluate``)."""
+    truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
+    style = _Style(color, truecolor=color and truecolor)
+    name = result["label"]
+    sets = result["sets"]
+    lines = [
+        style.bold("REWORDING STRESS TEST")
+        + style.dim(
+            f"   {result['contrast']['drafts']} {name} drafts vs "
+            f"{result['reference']['documents']} reference documents"
+        ),
+        style.dim(
+            f"  Each draft is scored with {name}-likeness weights learned without it, and each "
+            "edited draft with the weights that left out its original."
+        ),
+        "",
+        style.dim(f"  {'':12}{'AUC (95% CI)':>20}{'median likeness':>18}   drafts still flagged"),
+    ]
+    for set_label, entry in sets.items():
+        median = entry["likeness_median_chunks"]
+        flagged = f"{entry['flagged']} of {entry['drafts']}"
+        lines.append(
+            f"  {set_label:12}{_auc_cell(entry):>20}"
+            + (f"{median:>18.2f}" if median is not None else f"{'-':>18}")
+            + f"   {flagged}"
+        )
+    lines.append(
+        style.dim(
+            f"  AUC 1.0 separates every draft from the reference, 0.5 is chance. The median is "
+            f"over chunks; flagged drafts read "
+            f'"{likeness_words(2, name)}" or "{likeness_words(3, name)}".'
+        )
+    )
+    edits = [(set_label, entry["edits"]) for set_label, entry in sets.items() if entry.get("edits")]
+    if edits:
+        lines += ["", style.bold("How much the edits changed")]
+        for set_label, stats in edits:
+            changed = stats.get("ngram13_changed_median")
+            ratio = stats.get("word_ratio_median")
+            parts = [
+                f"{100 * changed:.0f}% of 13-word sequences rewritten"
+                if changed is not None
+                else "",
+                f"length x{ratio:.2f}" if ratio is not None else "",
+            ]
+            lines.append(f"  {set_label:12}" + ", ".join(part for part in parts if part))
+    edited_labels = [item for item in sets if item != "original"]
+    # A partial set is compared with the originals it covers, not the "original" column.
+    headers = {item: item + ("*" if sets[item].get("partial") else "") for item in edited_labels}
+    lines += [
+        "",
+        style.bold("Signal survival")
+        + style.dim(
+            f"   mean z of the strongest {name} signals; how much of the original gap from "
+            "the reference each edit removed (or added)"
+        ),
+        style.dim(
+            f"  {'':{LABEL_WIDTH - 2}}{'reference':>10}{'original':>10}"
+            + "".join(f"{headers[item]:>20}" for item in edited_labels)
+        ),
+    ]
+    for signal in result["signals"]:
+        text = label(signal["metric"].split(".", 1)[1])[0]
+        original = signal["original_z"]
+        cells = [
+            f"{signal['reference_z']:+10.1f}",
+            f"{original:+10.1f}" if original is not None else f"{'-':>10}",
+        ]
+        survival = [_survival(signal["edited"][item], style) for item in edited_labels]
+        # Pad by visible width, since color codes do not take up columns.
+        padded = [" " * max(0, 20 - len(_strip(cell))) + cell for cell in survival]
+        lines.append(f"  {text[: LABEL_WIDTH - 3]:{LABEL_WIDTH - 2}}" + "".join(cells + padded))
+    partial = [item for item in edited_labels if sets[item].get("partial")]
+    if partial:
+        lines.append(
+            style.dim(
+                f"  * {', '.join(partial)} edited only some drafts; its share is measured "
+                "against the original z of the drafts it covers, not the column above."
+            )
+        )
+    retrain = result.get("retrain")
+    if retrain:
+        lines += [
+            "",
+            style.bold("Retrained with the edited drafts in the contrast set")
+            + style.dim(f"   AUC {_auc_cell(retrain)} over all drafts"),
+        ]
+        for item, entry in retrain["by_set"].items():
+            before = entry.get("before")
+            lines.append(
+                f"  {item:12}{_auc_cell(entry):>20}"
+                + (style.dim(f"   was {before:.2f}") if before is not None else "")
+            )
+    lines += [
+        "",
+        style.dim(
+            f"Verdicts on edited text are weaker evidence: editing removes the {name} habits "
+            "the score relies on, so a draft that reads like the reference may still be a "
+            f"lightly edited {name} draft."
+        ),
+    ]
+    if result["warnings"]:
+        lines += ["", *(style.warn(f"Note: {warning}") for warning in result["warnings"])]
+    return "\n".join(lines)
+
+
+def _strip(text: str) -> str:
+    return re.sub(r"\033\[[0-9;]*m", "", text)
