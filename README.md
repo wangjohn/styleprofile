@@ -60,7 +60,10 @@ of the separation survives editing.
 
 Make edited copies of the contrast drafts with whatever you want to test: a person, an
 editing tool, or a model asked to polish or "humanize" them. Save each set in its own folder
-with the originals' file names:
+with the originals' file names. An edited draft is matched to its original by its path
+relative to the folder you pass (for JSONL, by record `id`), so keep the same layout: a
+file given directly matches by its bare file name. A set may leave out some drafts; it is
+then compared only with the drafts it covers.
 
 ```bash
 styleprofile evaluate --reference-inputs posts/ --contrast llm-drafts/ \

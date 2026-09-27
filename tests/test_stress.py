@@ -203,10 +203,93 @@ def test_edited_drafts_are_matched_to_originals_by_name(tmp_path: Path) -> None:
         *load_chunks([str(drafts)]),
         Chunk("draft0.md", str(tmp_path / "other" / "draft0.md"), "Another, different draft."),
     ]
-    with pytest.raises(StyleProfileError, match="both named"):
+    with pytest.raises(StyleProfileError, match="contrast: 1 name"):
         evaluate_rewording(
             load_chunks([str(author)]), twice, {"x": load_chunks([str(drafts)])}, parser=None
         )
+    # Two edited copies of one draft would be averaged into one verdict; refuse instead.
+    doubled = [*load_chunks([str(drafts)]), Chunk("draft0.md", "edits.jsonl", "Another copy.")]
+    with pytest.raises(StyleProfileError, match="x: 1 name"):
+        evaluate_rewording(
+            load_chunks([str(author)]), load_chunks([str(drafts)]), {"x": doubled}, parser=None
+        )
+    repeated = [Chunk("draft0.md", "e.jsonl", "One copy."), Chunk("draft0.md", "e.jsonl", "Two.")]
+    with pytest.raises(StyleProfileError, match="x: 1 name"):
+        evaluate_rewording(
+            load_chunks([str(author)]), load_chunks([str(drafts)]), {"x": repeated}, parser=None
+        )
+
+
+def test_partial_sets_are_compared_with_the_drafts_they_cover(tmp_path: Path) -> None:
+    """Unedited copies of the least dashed drafts must not look like dashes were removed."""
+    author, drafts = _corpus(tmp_path)
+    ranked = sorted(drafts.glob("*.md"), key=lambda path: path.read_text().count("—"))
+    subset = tmp_path / "subset"
+    subset.mkdir()
+    for path in ranked[:2]:
+        (subset / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    result = _evaluate(author, drafts, {"subset": subset})
+
+    dashes = next(s for s in result["signals"] if s["metric"] == "punctuation.em_dashes_per_1k")
+    entry = dashes["edited"]["subset"]
+    assert entry["remaining"] == pytest.approx(1.0)
+    assert entry["original_z"] < dashes["original_z"]
+    assert result["sets"]["subset"]["auc"] == result["sets"]["subset"]["original_auc_same_drafts"]
+
+
+def test_short_edits_are_not_reported_missing(tmp_path: Path) -> None:
+    author, drafts = _corpus(tmp_path)
+    edited = tmp_path / "edited"
+    _edit(drafts, edited, _identity)
+    (edited / "draft1.md").write_text("Too short.", encoding="utf-8")
+
+    result = _evaluate(author, drafts, {"edited": edited}, min_words=20)
+
+    assert result["sets"]["edited"]["missing"] == []
+    assert result["sets"]["edited"]["too_short"] == ["draft1.md"]
+    assert any("not scored" in warning for warning in result["warnings"])
+
+
+def test_contrast_is_measured_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from styleprofile import profile
+
+    author, drafts = _corpus(tmp_path)
+    _edit(drafts, tmp_path / "same", _identity)
+    measured: list[int] = []
+    original = profile._measure
+
+    def counting(chunks: Any, parser: Any, min_words: int) -> Any:
+        measured.append(len(chunks))
+        return original(chunks, parser, min_words)
+
+    monkeypatch.setattr(profile, "_measure", counting)
+    result = _evaluate(author, drafts, {"same": tmp_path / "same"})
+    # The reference, the contrast drafts and the edited set, once each.
+    assert measured == [8, 5, 5]
+    reference = profile.build_profile(
+        profile.load_chunks([str(author)]),
+        parser=None,
+        contrast=profile.load_chunks([str(drafts)]),
+    )
+    assert result["sets"]["original"]["auc"] == reference["contrast"]["calibration"]["auc"]
+
+
+def test_evaluate_rejects_stdin_twice_and_overwriting_an_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    author, drafts = _corpus(tmp_path)
+    base = ["evaluate", "--no-syntax", "--edited", f"x={drafts}"]
+    stdin_twice = [*base, "--reference-inputs", "-", "--contrast", "-", "--output", "o.json"]
+    assert main(stdin_twice) == 1
+    assert "only once" in capsys.readouterr().err
+    stdin_edits = [*base, "y=-", "--reference-inputs", str(author), "--contrast", str(drafts)]
+    assert main([*stdin_edits, "--output", str(tmp_path / "o.json")]) == 1
+    assert "not - (stdin)" in capsys.readouterr().err
+    target = drafts / "draft0.md"
+    clobber = [*base, "--reference-inputs", str(author), "--contrast", str(target)]
+    assert main([*clobber, "--output", str(target)]) == 1
+    assert "one of the inputs" in capsys.readouterr().err
 
 
 def test_ngram_changed_counts_verbatim_sequences() -> None:

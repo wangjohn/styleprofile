@@ -129,6 +129,13 @@ def _evaluate(args: argparse.Namespace) -> int:
     labels = [label for label, _ in args.edited]
     if len(set(labels)) != len(labels):
         raise StyleProfileError("each --edited LABEL must be distinct")
+    if any(folder == "-" for _, folder in args.edited):
+        raise StyleProfileError("--edited takes folders of files, not - (stdin)")
+    if [*args.reference_inputs, *args.contrast].count("-") > 1:
+        raise StyleProfileError("- (stdin) can be given only once")
+    inputs = [*args.reference_inputs, *args.contrast, *(folder for _, folder in args.edited)]
+    if _path(args.output) in {_path(value) for value in inputs if value != "-"}:
+        raise StyleProfileError("--output is one of the inputs; choose another output path")
     reference = load_chunks(args.reference_inputs, args.text_field)
     contrast = load_chunks(args.contrast, args.text_field)
     edited = {label: load_chunks([folder], args.text_field) for label, folder in args.edited}

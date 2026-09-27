@@ -218,7 +218,7 @@ def _fold(reference: Sums, contrast: Sums) -> tuple[dict[Key, float], dict[Key, 
     return effects, rms
 
 
-def _auc(positives: Sequence[float], negatives: Sequence[float]) -> float | None:
+def auc(positives: Sequence[float], negatives: Sequence[float]) -> float | None:
     """Probability a positive outscores a negative (ties count half), by ranking once."""
     if not positives or not negatives:
         return None
@@ -310,18 +310,18 @@ def length_baseline(
     A likeness AUC is only informative if it clearly beats this: otherwise the contrast set
     may simply be longer or shorter than the reference.
     """
-    auc = _auc(contrast_words, reference_words)
-    if auc is None:
+    value = auc(contrast_words, reference_words)
+    if value is None:
         return None
     return {
-        "auc": max(auc, 1 - auc),
-        "direction": "contrast longer" if auc >= 0.5 else "contrast shorter",
+        "auc": max(value, 1 - value),
+        "direction": "contrast longer" if value >= 0.5 else "contrast shorter",
         "reference_median_words": statistics.median(reference_words),
         "contrast_median_words": statistics.median(contrast_words),
     }
 
 
-def _by_document(scores: Sequence[float], sources: Sequence[str]) -> list[list[float]]:
+def by_document(scores: Sequence[float], sources: Sequence[str]) -> list[list[float]]:
     grouped: dict[str, list[float]] = defaultdict(list)
     for score, source in zip(scores, sources, strict=True):
         grouped[source].append(score)
@@ -450,11 +450,25 @@ def learn_contrast(
     show how the score behaves on text the weights have not seen. (Contrast z-scores are
     measured against the full reference, so a held-out reference source still shapes them
     slightly; with many sources the effect is negligible.)
+    """
+    learned = cross_validate(reference_held, reference_sources, contrast_z, contrast_sources)
+    return summarize_contrast(
+        learned, reference_sources, contrast_sources, reference_words, contrast_words
+    )
+
+
+def summarize_contrast(
+    learned: CrossValidated,
+    reference_sources: Sequence[str],
+    contrast_sources: Sequence[str],
+    reference_words: Sequence[float],
+    contrast_words: Sequence[float],
+) -> dict[str, Any]:
+    """The stored effects and calibration of a cross-validated contrast.
 
     The AUC gets a document-bootstrap 95% interval, and ``*_words`` (each chunk's prose word
     count) give the AUC of length alone, the baseline the likeness AUC should beat.
     """
-    learned = cross_validate(reference_held, reference_sources, contrast_z, contrast_sources)
     reference_scores, contrast_scores = learned.reference_scores, learned.contrast_scores
     return {
         "effects": nest(learned.effects),
@@ -468,10 +482,10 @@ def learn_contrast(
                 "median": statistics.median(contrast_scores),
                 "min": min(contrast_scores),
             },
-            "auc": _auc(contrast_scores, reference_scores),
+            "auc": auc(contrast_scores, reference_scores),
             "auc_ci": auc_interval(
-                _by_document(reference_scores, reference_sources),
-                _by_document(contrast_scores, contrast_sources),
+                by_document(reference_scores, reference_sources),
+                by_document(contrast_scores, contrast_sources),
             ),
             "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "unit": "document"},
             "length_baseline": length_baseline(reference_words, contrast_words),

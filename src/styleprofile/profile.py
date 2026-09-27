@@ -36,18 +36,20 @@ from styleprofile.syntax import Parser
 from styleprofile.weighting import (
     LENGTH_AUC_WARNING,
     UNSCORED_GROUPS,
+    CrossValidated,
     Key,
     ZScores,
     calibrate_delta,
+    cross_validate,
     delta,
     delta_weights,
     flatten,
     floors,
     held_out_z,
-    learn_contrast,
     likeness,
     nest,
     reliability,
+    summarize_contrast,
     z_score,
 )
 
@@ -256,7 +258,12 @@ def document_of(source: str, chunk_id: str) -> str:
     Windows ``post#w3`` share their document; files with the same name in different
     folders, and JSONL records with the same id in different files, stay separate.
     """
-    return f"{source}\x1f{_WINDOW_SUFFIX.sub('', chunk_id)}"
+    return f"{source}\x1f{base_id(chunk_id)}"
+
+
+def base_id(chunk_id: str) -> str:
+    """A chunk's id without the ``#wN`` suffix that windowing adds."""
+    return _WINDOW_SUFFIX.sub("", chunk_id)
 
 
 def _z_against(metrics: Metrics, summary: dict[str, Any], floor: dict[Key, float]) -> ZScores:
@@ -417,6 +424,23 @@ def _calibrate(report: dict[str, Any], chunk_metrics: Sequence[Metrics]) -> list
     return held
 
 
+@dataclass(frozen=True)
+class ContrastFit:
+    """What a contrast reference's likeness weights were learned from.
+
+    ``learned`` holds every held-out fold, so more text derived from a contrast document
+    (an edited copy, say) can be scored with the fold that left that document out, and
+    judged against the same reference scores and calibration the report stores.
+    """
+
+    reference_held: list[ZScores]
+    reference_documents: list[str]
+    contrast_chunks: list[Chunk]
+    contrast_z: list[ZScores]
+    contrast_documents: list[str]
+    learned: CrossValidated
+
+
 def _learn_contrast(
     report: dict[str, Any],
     held: list[ZScores] | None,
@@ -424,7 +448,7 @@ def _learn_contrast(
     label: str,
     parser: Parser | None,
     min_words: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ContrastFit]:
     if held is None:
         raise StyleProfileError(
             "--contrast needs a reference drawn from at least two documents with enough "
@@ -439,10 +463,18 @@ def _learn_contrast(
     floor = floors(report["summary"])
     contrast_z = [_z_against(metrics, report["summary"], floor) for metrics in measured.metrics]
     contrast_sources = [document_of(chunk.source, chunk.id) for chunk in measured.chunks]
-    learned = learn_contrast(
-        held,
-        [document_of(row["source"], row["id"]) for row in report["chunks"]],
-        contrast_z,
+    reference_sources = [document_of(row["source"], row["id"]) for row in report["chunks"]]
+    fit = ContrastFit(
+        reference_held=held,
+        reference_documents=reference_sources,
+        contrast_chunks=measured.chunks,
+        contrast_z=contrast_z,
+        contrast_documents=contrast_sources,
+        learned=cross_validate(held, reference_sources, contrast_z, contrast_sources),
+    )
+    learned = summarize_contrast(
+        fit.learned,
+        reference_sources,
         contrast_sources,
         [row["metrics"]["size"]["words"] for row in report["chunks"]],
         # Measured chunks all have prose, so words is never None.
@@ -471,7 +503,7 @@ def _learn_contrast(
         "chunk_count": len(measured.chunks),
         "sources": len(set(contrast_sources)),
         **learned,
-    }
+    }, fit
 
 
 def build_profile(
@@ -488,6 +520,67 @@ def build_profile(
 ) -> dict[str, Any]:
     """Profile chunks; score them against ``reference``, or, when building a reference,
     learn likeness weights from ``contrast`` chunks (for example LLM drafts)."""
+    return _build_profile(
+        chunks,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        reference=reference,
+        reference_path=reference_path,
+        settings=settings,
+        contrast=contrast,
+        contrast_label=contrast_label,
+    )[0]
+
+
+def build_contrast_reference(
+    chunks: Sequence[Chunk],
+    contrast: Sequence[Chunk],
+    *,
+    parser: Parser | None,
+    top_k: int = 300,
+    min_words: int = 1,
+    settings: dict[str, Any] | None = None,
+    contrast_label: str = "LLM",
+) -> tuple[dict[str, Any], ContrastFit]:
+    """``build_profile(chunks, contrast=contrast)``, plus what its weights were learned from."""
+    report, fit = _build_profile(
+        chunks,
+        parser=parser,
+        top_k=top_k,
+        min_words=min_words,
+        settings=settings,
+        contrast=contrast,
+        contrast_label=contrast_label,
+    )
+    assert fit is not None  # a contrast always produces a fit or raises
+    return report, fit
+
+
+def z_against_reference(
+    report: dict[str, Any], chunks: Sequence[Chunk], parser: Parser | None, min_words: int
+) -> tuple[list[Chunk], list[ZScores]]:
+    """Measure chunks and take their z-scores against a reference report, as the contrast
+    drafts are; returns the chunks kept (enough prose) and their z-scores."""
+    measured = _measure(chunks, parser, min_words)
+    floor = floors(report["summary"])
+    return measured.chunks, [
+        _z_against(metrics, report["summary"], floor) for metrics in measured.metrics
+    ]
+
+
+def _build_profile(
+    chunks: Sequence[Chunk],
+    *,
+    parser: Parser | None,
+    top_k: int = 300,
+    min_words: int = 1,
+    reference: dict[str, Any] | None = None,
+    reference_path: Path | None = None,
+    settings: dict[str, Any] | None = None,
+    contrast: Sequence[Chunk] | None = None,
+    contrast_label: str = "LLM",
+) -> tuple[dict[str, Any], ContrastFit | None]:
     if contrast is not None and reference is not None:
         raise StyleProfileError(
             "--contrast builds a reference profile; score samples against that reference "
@@ -548,10 +641,11 @@ def build_profile(
         "chunks": rows,
         "warnings": warnings,
     }
+    fit: ContrastFit | None = None
     if reference is None:
         held = _calibrate(report, chunk_metrics)
         if contrast is not None:
-            report["contrast"] = _learn_contrast(
+            report["contrast"], fit = _learn_contrast(
                 report, held, contrast, contrast_label, parser, min_words
             )
     if reference is not None:
@@ -632,7 +726,7 @@ def build_profile(
                 if name in reference.get("distributions", {})
             },
         }
-    return report
+    return report, fit
 
 
 def _round(value: Any) -> Any:

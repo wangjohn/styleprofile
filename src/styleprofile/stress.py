@@ -21,13 +21,12 @@ from typing import Any
 
 from styleprofile.display import likeness_level, likeness_words
 from styleprofile.profile import (
-    _WINDOW_SUFFIX,
     Chunk,
+    ContrastFit,
     StyleProfileError,
-    _measure,
-    _z_against,
-    build_profile,
-    document_of,
+    base_id,
+    build_contrast_reference,
+    z_against_reference,
 )
 from styleprofile.surface import prose, words
 from styleprofile.syntax import Parser
@@ -35,13 +34,11 @@ from styleprofile.weighting import (
     CrossValidated,
     Key,
     ZScores,
-    _auc,
-    _by_document,
+    auc,
     auc_interval,
+    by_document,
     cross_validate,
-    floors,
     fold_scores,
-    held_out_z,
 )
 
 VERSION = 1
@@ -58,7 +55,7 @@ def match_key(chunk: Chunk) -> str:
     """What pairs an edited chunk with its original: its file name (or JSONL id) with any
     window suffix removed. Folders are compared by relative path, so ``a/x.md`` and
     ``b/x.md`` pair with each other and with nothing else."""
-    return _WINDOW_SUFFIX.sub("", chunk.id)
+    return base_id(chunk.id)
 
 
 def ngram_changed(before: str, after: str, n: int = NGRAM) -> float | None:
@@ -110,11 +107,11 @@ def _set_summary(
     label: str,
 ) -> dict[str, Any]:
     """AUC against the reference's held-out chunks, and each draft's verdict."""
-    by_document: dict[str, list[float]] = defaultdict(list)
+    per_draft: dict[str, list[float]] = defaultdict(list)
     for score, document in zip(scores, documents, strict=True):
-        by_document[document].append(score)
+        per_draft[document].append(score)
     drafts = []
-    for document, values in sorted(by_document.items(), key=lambda item: names[item[0]]):
+    for document, values in sorted(per_draft.items(), key=lambda item: names[item[0]]):
         mean = statistics.fmean(values)
         level = likeness_level(mean, dict(calibration), len(values))
         drafts.append(
@@ -130,10 +127,10 @@ def _set_summary(
     return {
         "drafts": len(drafts),
         "chunks": len(scores),
-        "auc": _auc(scores, learned.reference_scores),
+        "auc": auc(scores, learned.reference_scores),
         "auc_ci": auc_interval(
-            _by_document(learned.reference_scores, reference_documents),
-            list(by_document.values()),
+            by_document(learned.reference_scores, reference_documents),
+            list(per_draft.values()),
         ),
         "likeness_median": statistics.median(scores),
         "flagged": sum(draft["level"] >= FLAGGED_LEVEL for draft in drafts),
@@ -154,41 +151,57 @@ def signal_survival(
     learned: CrossValidated,
     reference_held: Sequence[ZScores],
     original_z: Sequence[ZScores],
-    edited_z: Mapping[str, Sequence[ZScores]],
+    edited: Mapping[str, tuple[Sequence[ZScores], Sequence[ZScores]]],
     count: int = SIGNALS_TRACKED,
 ) -> list[dict[str, Any]]:
     """For the strongest contrast metrics, how much of the original drafts' gap from the
     reference each edited set keeps.
 
-    The gap is the drafts' mean z minus the reference's held-out mean z. ``remaining`` is
-    the edited set's gap over the original's: 1 means untouched, 0 means edited back to the
-    reference's level, negative means pushed past it.
+    ``edited`` maps each set to (its z-scores, the z-scores of the originals it covers): a
+    set that edits only some drafts is compared with those drafts alone, so differences
+    between drafts do not pass for an effect of the edit. The gap is the originals' mean z
+    minus the reference's held-out mean z. ``remaining`` is the edited set's gap over the
+    originals': 1 means untouched, 0 means edited back to the reference's level, negative
+    means pushed past it, and above 1 means the edit strengthened the signal.
     """
     ranked = sorted(learned.effects.items(), key=lambda item: -abs(item[1]))[:count]
     rows: list[dict[str, Any]] = []
     for key, effect in ranked:
         reference = _mean_z(reference_held, key) or 0.0
-        original = _mean_z(original_z, key)
-        gap = None if original is None else original - reference
-        edited: dict[str, Any] = {}
-        for label, rows_z in edited_z.items():
-            value = _mean_z(rows_z, key)
+        by_set: dict[str, Any] = {}
+        for label, (rows_z, covered) in edited.items():
+            value, original = _mean_z(rows_z, key), _mean_z(covered, key)
+            gap = None if original is None else original - reference
             remaining = (
                 (value - reference) / gap
                 if value is not None and gap is not None and abs(gap) >= MIN_GAP
                 else None
             )
-            edited[label] = {"z": value, "remaining": remaining}
+            by_set[label] = {"z": value, "original_z": original, "remaining": remaining}
         rows.append(
             {
                 "metric": f"{key[0]}.{key[1]}",
                 "effect": effect,
                 "reference_z": reference,
-                "original_z": original,
-                "edited": edited,
+                "original_z": _mean_z(original_z, key),
+                "edited": by_set,
             }
         )
     return rows
+
+
+def _duplicates(chunks: Sequence[Chunk]) -> list[str]:
+    """Names that more than one input maps to: two files (or a file and a JSONL record)
+    with the same relative name, or one JSONL id used twice."""
+    sources: dict[str, set[str]] = defaultdict(set)
+    seen: set[tuple[str, str]] = set()
+    repeated: set[str] = set()
+    for chunk in chunks:
+        sources[match_key(chunk)].add(chunk.source)
+        if (chunk.source, chunk.id) in seen:
+            repeated.add(match_key(chunk))
+        seen.add((chunk.source, chunk.id))
+    return sorted(repeated | {key for key, found in sources.items() if len(found) > 1})
 
 
 def evaluate_rewording(
@@ -213,34 +226,28 @@ def evaluate_rewording(
         raise StyleProfileError("pass at least one --edited LABEL=DIR")
     if ORIGINAL in edited:
         raise StyleProfileError(f"{ORIGINAL!r} names the unedited drafts; use another label")
-    profile = build_profile(
+    for set_label, chunks in {"contrast": contrast_chunks, **edited}.items():
+        duplicated = _duplicates(chunks)
+        if duplicated:
+            raise StyleProfileError(
+                f"{set_label}: {len(duplicated)} name(s) belong to more than one draft, e.g. "
+                f"{duplicated[0]!r}, so edited copies cannot be matched to originals; give "
+                "every draft a distinct name"
+            )
+    profile, fit = build_contrast_reference(
         reference_chunks,
+        contrast_chunks,
         parser=parser,
         min_words=min_words,
-        contrast=contrast_chunks,
         contrast_label=contrast_label,
     )
-    summary = profile["summary"]
-    floor = floors(summary)
-    reference_documents = [document_of(row["source"], row["id"]) for row in profile["chunks"]]
-    reference_held = held_out_z(
-        [row["metrics"] for row in profile["chunks"]], reference_documents, floor
-    )
-
-    contrast = _measure(contrast_chunks, parser, min_words)
-    contrast_z = [_z_against(metrics, summary, floor) for metrics in contrast.metrics]
-    contrast_documents = [document_of(chunk.source, chunk.id) for chunk in contrast.chunks]
-    documents_by_key: dict[str, str] = {}
-    for chunk, document in zip(contrast.chunks, contrast_documents, strict=True):
-        key = match_key(chunk)
-        if documents_by_key.setdefault(key, document) != document:
-            raise StyleProfileError(
-                f"two contrast drafts are both named {key!r}, so edited copies cannot be "
-                "matched to one of them; give them distinct names"
-            )
+    learned = fit.learned
+    documents_by_key = {
+        match_key(chunk): document
+        for chunk, document in zip(fit.contrast_chunks, fit.contrast_documents, strict=True)
+    }
     names = {document: key for key, document in documents_by_key.items()}
     original_texts = _texts(contrast_chunks)
-    learned = cross_validate(reference_held, reference_documents, contrast_z, contrast_documents)
     calibration = profile["contrast"]["calibration"]
     label = contrast_label
 
@@ -248,87 +255,86 @@ def evaluate_rewording(
     sets = {
         ORIGINAL: _set_summary(
             learned.contrast_scores,
-            contrast_documents,
+            fit.contrast_documents,
             names,
             learned,
-            reference_documents,
+            fit.reference_documents,
             calibration,
             label,
         )
     }
     edited_z: dict[str, list[ZScores]] = {}
     edited_documents: dict[str, list[str]] = {}
+    survival: dict[str, tuple[Sequence[ZScores], Sequence[ZScores]]] = {}
     for set_label, chunks in edited.items():
-        measured = _measure(chunks, parser, min_words)
-        unmatched = sorted({match_key(chunk) for chunk in measured.chunks} - set(documents_by_key))
+        loaded = {match_key(chunk) for chunk in chunks}
+        unmatched = sorted(loaded - set(documents_by_key))
         if unmatched:
             raise StyleProfileError(
                 f"{set_label}: {len(unmatched)} edited file(s) have no original among the "
                 f"contrast drafts (matched by name), e.g. {unmatched[0]!r}"
             )
-        z_rows = [_z_against(metrics, summary, floor) for metrics in measured.metrics]
-        documents = [documents_by_key[match_key(chunk)] for chunk in measured.chunks]
+        kept_chunks, z_rows = z_against_reference(profile, chunks, parser, min_words)
+        documents = [documents_by_key[match_key(chunk)] for chunk in kept_chunks]
         scores = fold_scores(z_rows, documents, learned.contrast_folds)
         edited_z[set_label] = z_rows
         edited_documents[set_label] = documents
         result = _set_summary(
-            scores, documents, names, learned, reference_documents, calibration, label
+            scores, documents, names, learned, fit.reference_documents, calibration, label
         )
-        missing = sorted(names[document] for document in set(names) - set(documents))
+        missing = sorted(set(documents_by_key) - loaded)
+        too_short = sorted(loaded - {match_key(chunk) for chunk in kept_chunks})
         result["missing"] = missing
+        result["too_short"] = too_short
         if missing:
             warnings.append(
                 f"{set_label}: {len(missing)} of {len(names)} drafts have no edited copy "
-                f"(e.g. {missing[0]!r}), so its AUC is not over the same drafts as the original"
+                f"(e.g. {missing[0]!r}); its AUC is over fewer drafts than the original's, "
+                "and signal survival compares it with the drafts it covers"
             )
-            present = set(documents)
-            kept = [index for index, doc in enumerate(contrast_documents) if doc in present]
-            result["original_auc_same_drafts"] = _auc(
-                [learned.contrast_scores[index] for index in kept], learned.reference_scores
+        if too_short:
+            warnings.append(
+                f"{set_label}: {len(too_short)} edited draft(s) have no chunk with at least "
+                f"{min_words} prose words (e.g. {too_short[0]!r}), so they are not scored"
             )
+        present = set(documents)
+        covered = [index for index, doc in enumerate(fit.contrast_documents) if doc in present]
+        if len(present) < len(names):
+            result["original_auc_same_drafts"] = auc(
+                [learned.contrast_scores[index] for index in covered], learned.reference_scores
+            )
+        survival[set_label] = (z_rows, [fit.contrast_z[index] for index in covered])
         result["edits"] = edit_statistics(original_texts, _texts(chunks))
         sets[set_label] = result
 
-    report: dict[str, Any] = {
+    return {
         "version": VERSION,
-        "settings": {**(settings or {}), "min_words": min_words, "retrain": retrain},
+        "settings": {
+            **(settings or {}),
+            "min_words": min_words,
+            "retrain": retrain,
+            "syntax": profile["settings"]["syntax"],
+        },
         "label": label,
         "reference": {
             "chunks": profile["chunk_count"],
-            "documents": len(set(reference_documents)),
+            "documents": len(set(fit.reference_documents)),
             "likeness": calibration["reference"],
         },
         "contrast": {
-            "chunks": len(contrast.chunks),
+            "chunks": len(fit.contrast_chunks),
             "drafts": len(names),
             "cross_validated": learned.cross_validated,
         },
         "sets": sets,
-        "signals": signal_survival(learned, reference_held, contrast_z, edited_z),
-        "retrain": (
-            _retrain(
-                learned,
-                reference_held,
-                reference_documents,
-                contrast_z,
-                contrast_documents,
-                edited_z,
-                edited_documents,
-            )
-            if retrain
-            else None
-        ),
+        "signals": signal_survival(learned, fit.reference_held, fit.contrast_z, survival),
+        "retrain": _retrain(fit, edited_z, edited_documents) if retrain else None,
         "warnings": warnings,
     }
-    return report
 
 
 def _retrain(
-    learned: CrossValidated,
-    reference_held: Sequence[ZScores],
-    reference_documents: Sequence[str],
-    contrast_z: Sequence[ZScores],
-    contrast_documents: Sequence[str],
+    fit: ContrastFit,
     edited_z: Mapping[str, Sequence[ZScores]],
     edited_documents: Mapping[str, Sequence[str]],
 ) -> dict[str, Any]:
@@ -337,6 +343,12 @@ def _retrain(
     Edited chunks carry their original's document, so a lineage is held out as a whole: an
     edited draft is never scored with weights learned from its own original or vice versa.
     """
+    learned, reference_held, reference_documents = (
+        fit.learned,
+        fit.reference_held,
+        fit.reference_documents,
+    )
+    contrast_z, contrast_documents = fit.contrast_z, fit.contrast_documents
     z_rows = list(contrast_z)
     documents = list(contrast_documents)
     slices = {ORIGINAL: (0, len(z_rows))}
@@ -349,21 +361,21 @@ def _retrain(
     for label, (start, end) in slices.items():
         scores = retrained.contrast_scores[start:end]
         by_set[label] = {
-            "auc": _auc(scores, retrained.reference_scores),
+            "auc": auc(scores, retrained.reference_scores),
             "auc_ci": auc_interval(
-                _by_document(retrained.reference_scores, reference_documents),
-                _by_document(scores, documents[start:end]),
+                by_document(retrained.reference_scores, reference_documents),
+                by_document(scores, documents[start:end]),
             ),
-            "before": _auc(
+            "before": auc(
                 fold_scores(z_rows[start:end], documents[start:end], learned.contrast_folds),
                 learned.reference_scores,
             ),
         }
     return {
-        "auc": _auc(retrained.contrast_scores, retrained.reference_scores),
+        "auc": auc(retrained.contrast_scores, retrained.reference_scores),
         "auc_ci": auc_interval(
-            _by_document(retrained.reference_scores, reference_documents),
-            _by_document(retrained.contrast_scores, documents),
+            by_document(retrained.reference_scores, reference_documents),
+            by_document(retrained.contrast_scores, documents),
         ),
         "by_set": by_set,
     }
