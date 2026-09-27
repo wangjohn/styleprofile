@@ -838,10 +838,12 @@ def test_length_baseline_detects_length_differences() -> None:
 
     reference = [Chunk(f"r{i}", "s", _words(30 + i)) for i in range(4)]
     long_drafts = [Chunk(f"l{i}", "s", GENERIC + " " + _words(200 + i)) for i in range(3)]
-    report = build_profile(reference, parser=None, contrast=long_drafts, min_words=1)
+    report = build_profile(
+        reference, parser=None, contrast=long_drafts, contrast_label="Editor", min_words=1
+    )
     length = report["contrast"]["calibration"]["length_baseline"]
     assert length["auc"] >= 0.75 and length["direction"] == "contrast longer"
-    assert any("differs strongly in length" in warning for warning in report["warnings"])
+    assert any("Editor-likeness may partly reflect length" in w for w in report["warnings"])
 
     # Word counts 43, 45, 47, 49 on both sides.
     reference = [Chunk(f"r{i}", "s", _words(40 + 2 * i) + " I think so.") for i in range(4)]

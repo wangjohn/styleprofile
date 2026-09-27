@@ -440,7 +440,7 @@ def _learn_contrast(
     if length and length["auc"] >= LENGTH_AUC_WARNING:
         report["warnings"].append(
             f"the contrast set differs strongly in length (length alone separates it with "
-            f"AUC {length['auc']:.2f}), so LLM-likeness may partly reflect length; match "
+            f"AUC {length['auc']:.2f}), so {label}-likeness may partly reflect length; match "
             "lengths or window the drafts with --window-words"
         )
     return {
