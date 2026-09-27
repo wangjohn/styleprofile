@@ -26,6 +26,7 @@ import random
 import statistics
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
@@ -359,25 +360,34 @@ def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str
     }
 
 
-def learn_contrast(
+Fold = tuple[dict[Key, float], dict[Key, float]]
+
+
+@dataclass(frozen=True)
+class CrossValidated:
+    """Contrast weights learned on everything, and the likeness of every chunk scored with
+    weights learned without its own document.
+
+    ``contrast_folds`` holds, per contrast document, the (effects, rms) learned without it:
+    any other text derived from that document (an edited copy, say) must be scored with that
+    fold, or its own original would have shaped the weights that judge it.
+    """
+
+    effects: dict[Key, float]
+    rms: dict[Key, float]
+    reference_scores: list[float]
+    contrast_scores: list[float]
+    contrast_folds: dict[str, Fold]
+    cross_validated: bool
+
+
+def cross_validate(
     reference_held: Sequence[ZScores],
     reference_sources: Sequence[str],
     contrast_z: Sequence[ZScores],
     contrast_sources: Sequence[str],
-    reference_words: Sequence[float],
-    contrast_words: Sequence[float],
-) -> dict[str, Any]:
-    """Learn effect-size weights and calibrate the likeness score by cross-validation.
-
-    Each reference chunk is scored with weights learned without its own source, and each
-    contrast chunk with weights learned without its own source, so the calibration ranges
-    show how the score behaves on text the weights have not seen. (Contrast z-scores are
-    measured against the full reference, so a held-out reference source still shapes them
-    slightly; with many sources the effect is negligible.)
-
-    The AUC gets a document-bootstrap 95% interval, and ``*_words`` (each chunk's prose word
-    count) give the AUC of length alone, the baseline the likeness AUC should beat.
-    """
+) -> CrossValidated:
+    """Leave-one-document-out likeness scores for the reference and the contrast chunks."""
     reference_total, reference_parts = _sums(reference_held, reference_sources)
     contrast_total, contrast_parts = _sums(contrast_z, contrast_sources)
     effects, rms = _fold(reference_total, contrast_total)
@@ -399,12 +409,55 @@ def learn_contrast(
         )
         for source in set(contrast_sources)
     }
-    contrast_scores = [
-        likeness(chunk_z, *contrast_folds[source])[0]
-        for chunk_z, source in zip(contrast_z, contrast_sources, strict=True)
-    ]
+    return CrossValidated(
+        effects=effects,
+        rms=rms,
+        reference_scores=reference_scores,
+        contrast_scores=fold_scores(contrast_z, contrast_sources, contrast_folds),
+        contrast_folds=contrast_folds,
+        cross_validated=cross_validated,
+    )
+
+
+def fold_scores(
+    z_scores: Sequence[ZScores], documents: Sequence[str], folds: Mapping[str, Fold]
+) -> list[float]:
+    """Each chunk's likeness under the fold that excluded ``documents[i]``.
+
+    ``documents`` names the contrast document each chunk belongs to or was derived from; a
+    chunk whose document has no fold is an error rather than silently scored in-sample.
+    """
+    scores: list[float] = []
+    for chunk_z, document in zip(z_scores, documents, strict=True):
+        if document not in folds:
+            raise KeyError(f"no held-out fold for contrast document {document!r}")
+        scores.append(likeness(chunk_z, *folds[document])[0])
+    return scores
+
+
+def learn_contrast(
+    reference_held: Sequence[ZScores],
+    reference_sources: Sequence[str],
+    contrast_z: Sequence[ZScores],
+    contrast_sources: Sequence[str],
+    reference_words: Sequence[float],
+    contrast_words: Sequence[float],
+) -> dict[str, Any]:
+    """Learn effect-size weights and calibrate the likeness score by cross-validation.
+
+    Each reference chunk is scored with weights learned without its own source, and each
+    contrast chunk with weights learned without its own source, so the calibration ranges
+    show how the score behaves on text the weights have not seen. (Contrast z-scores are
+    measured against the full reference, so a held-out reference source still shapes them
+    slightly; with many sources the effect is negligible.)
+
+    The AUC gets a document-bootstrap 95% interval, and ``*_words`` (each chunk's prose word
+    count) give the AUC of length alone, the baseline the likeness AUC should beat.
+    """
+    learned = cross_validate(reference_held, reference_sources, contrast_z, contrast_sources)
+    reference_scores, contrast_scores = learned.reference_scores, learned.contrast_scores
     return {
-        "effects": nest(effects),
+        "effects": nest(learned.effects),
         "calibration": {
             "reference": {
                 "median": statistics.median(reference_scores),
@@ -422,7 +475,7 @@ def learn_contrast(
             ),
             "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "unit": "document"},
             "length_baseline": length_baseline(reference_words, contrast_words),
-            "cross_validated": cross_validated,
+            "cross_validated": learned.cross_validated,
         },
     }
 

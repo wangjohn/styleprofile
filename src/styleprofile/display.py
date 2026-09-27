@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -546,3 +547,122 @@ def format_summary(
     if report["warnings"]:
         lines += ["", *(style.warn(f"Note: {warning}") for warning in report["warnings"])]
     return "\n".join(lines)
+
+
+def _auc_cell(result: dict[str, Any]) -> str:
+    auc = result.get("auc")
+    if auc is None:
+        return "-"
+    interval = result.get("auc_ci")
+    return f"{auc:.2f} ({interval[0]:.2f}-{interval[1]:.2f})" if interval else f"{auc:.2f}"
+
+
+def _survival(entry: dict[str, Any], style: _Style) -> str:
+    z, remaining = entry.get("z"), entry.get("remaining")
+    if z is None:
+        return "-"
+    if remaining is None:
+        return f"{z:+.1f}"
+    removed = 1 - remaining
+    # Color by how much of the signal is left: a surviving tell is the thing to look at.
+    level = 0 if remaining < 0.25 else 1 if remaining < 0.5 else 2 if remaining < 0.75 else 3
+    # An edit can also push a signal further from the reference than the original was.
+    change = f"{100 * removed:.0f}% gone" if removed >= 0 else f"{-100 * removed:.0f}% stronger"
+    return f"{z:+.1f} " + style.distance(change, level)
+
+
+def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
+    """Terminal view of a rewording stress test (``styleprofile evaluate``)."""
+    truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
+    style = _Style(color, truecolor=color and truecolor)
+    name = result["label"]
+    sets = result["sets"]
+    lines = [
+        style.bold("REWORDING STRESS TEST")
+        + style.dim(
+            f"   {result['contrast']['drafts']} {name} drafts vs "
+            f"{result['reference']['documents']} reference documents"
+        ),
+        style.dim(
+            f"  Each draft is scored with {name}-likeness weights learned without it, and each "
+            "edited draft with the weights that left out its original."
+        ),
+        "",
+        style.dim(f"  {'':12}{'AUC (95% CI)':>20}{'median likeness':>18}   still flagged"),
+    ]
+    for set_label, entry in sets.items():
+        flagged = f"{entry['flagged']} of {entry['drafts']}"
+        lines.append(
+            f"  {set_label:12}{_auc_cell(entry):>20}{entry['likeness_median']:>18.2f}   {flagged}"
+        )
+    lines.append(
+        style.dim(
+            f"  AUC 1.0 separates every draft from the reference, 0.5 is chance. Flagged drafts "
+            f'read "{likeness_words(2, name)}" or "{likeness_words(3, name)}".'
+        )
+    )
+    edits = [(set_label, entry["edits"]) for set_label, entry in sets.items() if entry.get("edits")]
+    if edits:
+        lines += ["", style.bold("How much the edits changed")]
+        for set_label, stats in edits:
+            changed = stats.get("ngram13_changed_median")
+            ratio = stats.get("word_ratio_median")
+            parts = [
+                f"{100 * changed:.0f}% of 13-word sequences rewritten"
+                if changed is not None
+                else "",
+                f"length x{ratio:.2f}" if ratio is not None else "",
+            ]
+            lines.append(f"  {set_label:12}" + ", ".join(part for part in parts if part))
+    edited_labels = [item for item in sets if item != "original"]
+    lines += [
+        "",
+        style.bold("Signal survival")
+        + style.dim(
+            f"   mean z of the strongest {name} signals; how much of the original gap from "
+            "the reference each edit removed (or added)"
+        ),
+        style.dim(
+            f"  {'':{LABEL_WIDTH - 2}}{'reference':>10}{'original':>10}"
+            + "".join(f"{item:>20}" for item in edited_labels)
+        ),
+    ]
+    for signal in result["signals"]:
+        text = label(signal["metric"].split(".", 1)[1])[0]
+        original = signal["original_z"]
+        cells = [
+            f"{signal['reference_z']:+10.1f}",
+            f"{original:+10.1f}" if original is not None else f"{'-':>10}",
+        ]
+        survival = [_survival(signal["edited"][item], style) for item in edited_labels]
+        # Pad by visible width, since color codes do not take up columns.
+        padded = [" " * max(0, 20 - len(_strip(cell))) + cell for cell in survival]
+        lines.append(f"  {text[: LABEL_WIDTH - 3]:{LABEL_WIDTH - 2}}" + "".join(cells + padded))
+    retrain = result.get("retrain")
+    if retrain:
+        lines += [
+            "",
+            style.bold("Retrained with the edited drafts in the contrast set")
+            + style.dim(f"   AUC {_auc_cell(retrain)} over all drafts"),
+        ]
+        for item, entry in retrain["by_set"].items():
+            before = entry.get("before")
+            lines.append(
+                f"  {item:12}{_auc_cell(entry):>20}"
+                + (style.dim(f"   was {before:.2f}") if before is not None else "")
+            )
+    lines += [
+        "",
+        style.dim(
+            f"Verdicts on edited text are weaker evidence: editing removes the {name} habits "
+            "the score relies on, so a draft that reads like the reference may still be a "
+            f"lightly edited {name} draft."
+        ),
+    ]
+    if result["warnings"]:
+        lines += ["", *(style.warn(f"Note: {warning}") for warning in result["warnings"])]
+    return "\n".join(lines)
+
+
+def _strip(text: str) -> str:
+    return re.sub(r"\033\[[0-9;]*m", "", text)
