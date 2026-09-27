@@ -164,17 +164,31 @@ def root_name(value: str) -> str:
     it was typed (``posts``, ``./posts/``, ``../x/posts`` and ``/home/me/posts`` all give
     ``posts``), so nothing above it is saved and the same corpus gives the same names from
     any directory. The working directory itself (``.``) gives ``""``, so its files are saved
-    by their paths inside it; the home directory, a filesystem root, or anything else without
-    a telling final part gives ``input``. Standard input is ``stdin``."""
+    by their paths inside it. A home directory (``$HOME``, or any folder directly in
+    ``/home`` or ``/Users``, or ``/root``: another user's, or yours under sudo or CI), a
+    filesystem root, or anything else without a telling final part gives ``input``, since
+    its name is a user name. Standard input is ``stdin``."""
     if value in ("-", "stdin"):
         return "stdin"
     typed = expand_path(value)
     absolute = Path(os.path.abspath(typed))
     if absolute == Path(os.path.abspath(Path.cwd())) and not typed.is_absolute():
         return ""
-    if absolute == Path(os.path.abspath(Path.home())) or absolute.name in ("", ".", ".."):
+    if _is_home(absolute) or absolute.name in ("", ".", ".."):
         return UNNAMED_ROOT
     return absolute.name
+
+
+# Folders whose children are home directories, and home directories outside them.
+HOME_PARENTS = (Path("/home"), Path("/Users"))
+OTHER_HOMES = (Path("/root"),)
+
+
+def _is_home(absolute: Path) -> bool:
+    """Whether ``absolute`` is a home directory, whose name is a user name."""
+    if absolute == Path(os.path.abspath(Path.home())) or absolute in OTHER_HOMES:
+        return True
+    return absolute.parent in HOME_PARENTS
 
 
 @dataclass

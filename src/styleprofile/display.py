@@ -761,9 +761,9 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
         lines += [
             "",
             style.dim(
-                '"exact": the drafts and the reference\'s chunks do not overlap at all, so every '
-                "resample gives the same AUC and there is no interval to show. That is not "
-                "certainty: with few documents, new drafts may well overlap."
+                '"exact": every resample gives the same AUC (the drafts and the reference\'s '
+                "chunks never overlap, or every chunk scores the same), so there is no interval "
+                "to show. That is not certainty: with few documents, new drafts may differ."
             ),
         ]
     lines += [

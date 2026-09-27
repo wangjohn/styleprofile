@@ -63,7 +63,6 @@ from styleprofile.profile import (
     load_chunks,
     load_reference,
     report_kind,
-    root_name,
     score,
     window,
     write_report,
@@ -689,17 +688,25 @@ def _items(inputs: Inputs) -> list[Input]:
 def _described(items: Sequence[Input], names: SourceNames) -> list[str]:
     """How inputs are recorded in a report's settings: paths by the name their sources were
     saved under (``posts``, ``posts (2)``; see ``load_chunks``), never as paths; texts and
-    chunks by name."""
+    chunks by name. A path that gave no sources of its own (all its files came from an
+    earlier input, or it was given twice) is left out."""
 
-    def name(item: Input) -> str:
+    described: list[str] = []
+    listed: set[str] = set()
+    for item in items:
         if isinstance(item, Text):
-            return item.name or "<text>"
-        if isinstance(item, Chunk):
-            return item.id
-        value = os.fspath(item)
-        return names.roots.get(value) or root_name(value)
-
-    return [name(item) for item in items]
+            described.append(item.name or "<text>")
+        elif isinstance(item, Chunk):
+            described.append(item.id)
+        else:
+            value = os.fspath(item)
+            # An input whose files all came from an earlier one, or the same path given
+            # again, gave no sources of its own, so it is not listed.
+            if value in listed or (value != "-" and value not in names.roots):
+                continue
+            listed.add(value)
+            described.append(names.roots[value] if value != "-" else "stdin")
+    return described
 
 
 def _typed(items: Sequence[Input]) -> list[str]:
@@ -798,11 +805,16 @@ def _read(
             continue
         value = os.fspath(item)
         require_path(value)
+        contributed = value in names.roots
         loaded = load_chunks([value], text_field, names=names)
         files = {chunk.path for chunk in loaded if chunk.path is not None}
         repeated = files & seen
         if repeated and repeated == files:
             notes.append(Note(f"{value} was already given; using it once", NoteCode.REPEATED_INPUT))
+            if not contributed:
+                # Every file came from an earlier input, so no source carries this name:
+                # leave it out of the report's settings (``_described``).
+                names.roots.pop(value, None)
         elif repeated:
             notes.append(
                 Note(

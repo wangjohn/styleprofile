@@ -180,6 +180,23 @@ def test_home_and_filesystem_roots_save_as_input(
         assert leak not in text
 
 
+def test_any_home_directory_saves_as_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Other users' homes, or yours when HOME points elsewhere (sudo, CI), are user names too.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for home in ("/home/alice", "/Users/bob", "/root", "/home/alice/"):
+        assert root_name(home) == "input", home
+    assert root_name("/home/alice/posts") == "posts"
+    assert root_name("/Users/bob/notes.md") == "notes.md"
+    assert root_name("/home") == "home"
+
+
+def test_an_input_given_twice_is_listed_once(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(corpus)
+    command = ["build", "writer", "writer", "writer/old-maps.md", "--no-syntax", "-o", "w.json"]
+    assert main(command) == 0
+    assert _json(corpus / "w.json")["settings"]["inputs"] == ["writer"]
+
+
 def test_unknown_users_home_is_a_clean_error(capsys: pytest.CaptureFixture[str]) -> None:
     missing = "~no-such-user-for-styleprofile/x.md"
     with pytest.raises(StyleProfileError):
@@ -201,6 +218,8 @@ def test_symlinks_and_stdin(
     built = _json(reference)
     assert {row["source"].split("/")[0] for row in built["chunks"]} == {"linked-posts"}
     assert built["document_count"] == 7
+    # The real path gave no sources of its own, so settings leave it out.
+    assert built["settings"]["inputs"] == ["linked-posts"]
     _no_absolute_paths(reference.read_text(encoding="utf-8"), corpus)
 
     monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b"Some words from stdin.")))
