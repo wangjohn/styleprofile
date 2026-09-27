@@ -493,7 +493,7 @@ def jensen_shannon(sample: dict[str, float], reference: dict[str, float]) -> flo
     if not sample or not reference:
         return None
     total = 0.0
-    for key in sample.keys() | reference.keys():
+    for key in sorted(sample.keys() | reference.keys()):
         p = sample.get(key, 0.0)
         q = reference.get(key, 0.0)
         m = (p + q) / 2
