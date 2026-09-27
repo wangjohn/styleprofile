@@ -34,6 +34,7 @@ from styleprofile.surface import (
 )
 from styleprofile.syntax import Parser
 from styleprofile.weighting import (
+    LENGTH_AUC_WARNING,
     UNSCORED_GROUPS,
     Key,
     ZScores,
@@ -54,7 +55,8 @@ from styleprofile.weighting import (
 # reference built with --contrast scores contrast likeness.
 # 4: percentage floors use their true denominators (paragraphs, apostrophes), and list
 # continuations extend their item instead of counting as paragraphs.
-VERSION = 4
+# 5: the contrast AUC has a document-bootstrap 95% interval and a length-only baseline.
+VERSION = 5
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 OTHER = "<other>"
@@ -419,11 +421,27 @@ def _learn_contrast(
         [document_of(row["source"], row["id"]) for row in report["chunks"]],
         contrast_z,
         contrast_sources,
+        [row["metrics"]["size"]["words"] for row in report["chunks"]],
+        # Measured chunks all have prose, so words is never None.
+        [metrics["size"]["words"] or 0.0 for metrics in measured.metrics],
     )
-    if not learned["calibration"]["cross_validated"]:
+    calibration = learned["calibration"]
+    if not calibration["cross_validated"]:
         report["warnings"].append(
             "the contrast set is one document, so its likeness range is measured in-sample "
             "and is optimistic; add more contrast documents"
+        )
+    if calibration["auc_ci"] is None:
+        report["warnings"].append(
+            "the reference or contrast set has fewer than 2 documents, so the contrast AUC "
+            "has no confidence interval"
+        )
+    length = calibration["length_baseline"]
+    if length and length["auc"] >= LENGTH_AUC_WARNING:
+        report["warnings"].append(
+            f"the contrast set differs strongly in length (length alone separates it with "
+            f"AUC {length['auc']:.2f}), so {label}-likeness may partly reflect length; match "
+            "lengths or window the drafts with --window-words"
         )
     return {
         "label": label,

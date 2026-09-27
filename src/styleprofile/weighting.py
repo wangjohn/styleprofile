@@ -21,6 +21,7 @@ into dozens of standard deviations.
 from __future__ import annotations
 
 import math
+import random
 import statistics
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -36,6 +37,10 @@ UNSCORED_GROUPS = frozenset({"size"})
 # a matching chunk 0. Metrics without a measured reliability are capped at it in Delta.
 UNSEEN_Z = 3.0
 SIGNALS_SHOWN = 5
+# The contrast AUC's confidence interval resamples whole documents this many times.
+BOOTSTRAP_RESAMPLES = 2000
+# Word count alone separating the contrast set this well means likeness may be partly length.
+LENGTH_AUC_WARNING = 0.75
 
 
 # What each percentage is a share of; any other *_pct metric is a share of sentences.
@@ -253,6 +258,98 @@ def _auc(positives: Sequence[float], negatives: Sequence[float]) -> float | None
     return (rank_sum - count * (count + 1) / 2) / (count * len(negatives))
 
 
+def bootstrap_auc(
+    reference: Sequence[Sequence[float]],
+    contrast: Sequence[Sequence[float]],
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = 0,
+) -> list[float]:
+    """The contrast-over-reference AUC on documents resampled with replacement.
+
+    Each argument holds one list of chunk scores per document. Reference and contrast
+    documents are resampled separately and a document's chunks always move together, so
+    the spread reflects how many documents there are rather than how many windows they were
+    cut into. The chunks are ranked once; each resample then only reweights them, so a
+    resample costs one pass over the chunks.
+    """
+    ranked = sorted(
+        [(score, 0, document) for document, scores in enumerate(reference) for score in scores]
+        + [(score, 1, document) for document, scores in enumerate(contrast) for score in scores]
+    )
+    # Tied scores form one group: (reference documents, contrast documents), one entry per chunk.
+    groups: list[tuple[list[int], list[int]]] = []
+    previous: float | None = None
+    for score, is_contrast, document in ranked:
+        if score != previous:
+            groups.append(([], []))
+            previous = score
+        groups[-1][is_contrast].append(document)
+    reference_sizes = [len(scores) for scores in reference]
+    contrast_sizes = [len(scores) for scores in contrast]
+    rng = random.Random(seed)
+    aucs: list[float] = []
+    for _ in range(resamples):
+        reference_draws = _draws(rng, len(reference))
+        contrast_draws = _draws(rng, len(contrast))
+        below = wins = 0.0
+        for reference_documents, contrast_documents in groups:
+            tied = sum(reference_draws[document] for document in reference_documents)
+            if contrast_documents:
+                wins += sum(contrast_draws[document] for document in contrast_documents) * (
+                    below + tied / 2
+                )
+            below += tied
+        positives = sum(n * size for n, size in zip(contrast_draws, contrast_sizes, strict=True))
+        negatives = sum(n * size for n, size in zip(reference_draws, reference_sizes, strict=True))
+        aucs.append(wins / (positives * negatives))
+    return aucs
+
+
+def _draws(rng: random.Random, count: int) -> list[int]:
+    """How many times each of ``count`` documents is drawn in one resample."""
+    drawn = [0] * count
+    for _ in range(count):
+        drawn[rng.randrange(count)] += 1
+    return drawn
+
+
+def auc_interval(
+    reference: Sequence[Sequence[float]], contrast: Sequence[Sequence[float]]
+) -> list[float] | None:
+    """The 95% document-bootstrap interval of the AUC, or None with fewer than 2 documents
+    on either side (resampling one document cannot show document-to-document variation)."""
+    if len(reference) < 2 or len(contrast) < 2:
+        return None
+    aucs = bootstrap_auc(reference, contrast)
+    return [quantile(aucs, 0.025), quantile(aucs, 0.975)]
+
+
+def length_baseline(
+    reference_words: Sequence[float], contrast_words: Sequence[float]
+) -> dict[str, Any] | None:
+    """How well chunk word count alone separates the contrast set, in its stronger direction.
+
+    A likeness AUC is only informative if it clearly beats this: otherwise the contrast set
+    may simply be longer or shorter than the reference.
+    """
+    auc = _auc(contrast_words, reference_words)
+    if auc is None:
+        return None
+    return {
+        "auc": max(auc, 1 - auc),
+        "direction": "contrast longer" if auc >= 0.5 else "contrast shorter",
+        "reference_median_words": statistics.median(reference_words),
+        "contrast_median_words": statistics.median(contrast_words),
+    }
+
+
+def _by_document(scores: Sequence[float], sources: Sequence[str]) -> list[list[float]]:
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for score, source in zip(scores, sources, strict=True):
+        grouped[source].append(score)
+    return list(grouped.values())
+
+
 def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str, Any] | None:
     """The reference's own Delta range on held-out chunks, overall and per area.
 
@@ -290,6 +387,8 @@ def learn_contrast(
     reference_sources: Sequence[str],
     contrast_z: Sequence[ZScores],
     contrast_sources: Sequence[str],
+    reference_words: Sequence[float],
+    contrast_words: Sequence[float],
 ) -> dict[str, Any]:
     """Learn effect-size weights and calibrate the likeness score by cross-validation.
 
@@ -298,6 +397,9 @@ def learn_contrast(
     show how the score behaves on text the weights have not seen. (Contrast z-scores are
     measured against the full reference, so a held-out reference source still shapes them
     slightly; with many sources the effect is negligible.)
+
+    The AUC gets a document-bootstrap 95% interval, and ``*_words`` (each chunk's prose word
+    count) give the AUC of length alone, the baseline the likeness AUC should beat.
     """
     reference_total, reference_parts = _sums(reference_held, reference_sources)
     contrast_total, contrast_parts = _sums(contrast_z, contrast_sources)
@@ -337,6 +439,12 @@ def learn_contrast(
                 "min": min(contrast_scores),
             },
             "auc": _auc(contrast_scores, reference_scores),
+            "auc_ci": auc_interval(
+                _by_document(reference_scores, reference_sources),
+                _by_document(contrast_scores, contrast_sources),
+            ),
+            "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "unit": "document"},
+            "length_baseline": length_baseline(reference_words, contrast_words),
             "cross_validated": cross_validated,
         },
     }

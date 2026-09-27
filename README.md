@@ -49,6 +49,14 @@ Two scores answer two questions:
   raise the score and fewer do not lower it. The reference stores a leave-one-document-out
   range (each document scored with weights learned without it), which sets the verdict
   words. Rename the contrast set with `--contrast-label`.
+- **How sure is the separation?** The profile reports the AUC (the chance a held-out
+  contrast chunk scores above a held-out reference chunk) with a 95% confidence interval
+  from 2,000 bootstrap resamples of whole documents, so windows cut from one post move
+  together. With few documents the interval is wide: an AUC of 0.96 from 8 drafts is less
+  certain than it looks.
+- **Is it just length?** The profile also reports how well chunk word count alone separates
+  the two sets. If length alone reaches an AUC of 0.75 or more, it warns: the likeness score
+  may partly reflect length, so match lengths or window the drafts with `--window-words`.
 
 ## Resolution floors
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from styleprofile.profile import UNSCORED_GROUPS
+from styleprofile.weighting import LENGTH_AUC_WARNING
 
 WORDS = "words"
 PCT = "%"
@@ -338,12 +339,18 @@ def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
     ]
     top = sorted(effects, key=lambda item: -abs(item[0]))[:4]
     auc = calibration.get("auc")
+    interval = calibration.get("auc_ci")
+    separation = ""
+    if auc is not None:
+        separation = f"; separates them from the reference with AUC {auc:.2f}"
+        if interval:
+            low, high = interval
+            separation += f" (95% CI {low:.2f}–{high:.2f}, resampling whole documents)"  # noqa: RUF001
     lines = [
         "",
         style.bold(f"Contrast: {name} drafts")
         + style.dim(
-            f"   {contrast['chunk_count']} chunks from {contrast['sources']} documents"
-            + (f"; separates them from the reference with AUC {auc:.2f}" if auc else "")
+            f"   {contrast['chunk_count']} chunks from {contrast['sources']} documents" + separation
         ),
         style.dim(
             f"  {name}-likeness on held-out text: reference "
@@ -354,7 +361,25 @@ def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
         f"  Compared with the reference, {name} drafts have: "
         + ", ".join(f"{label(metric)[0]} {'▲' if effect > 0 else '▼'}" for effect, metric in top),
     ]
+    length = calibration.get("length_baseline")
+    if length:
+        lines.insert(3, style.dim(f"  {_length_line(length, name)}"))
     return lines
+
+
+def _length_line(length: dict[str, Any], name: str) -> str:
+    """How well word count alone separates the contrast set, and what that means."""
+    auc = length["auc"]
+    if auc >= LENGTH_AUC_WARNING:
+        verdict = f"{name}-likeness may partly reflect length"
+    elif auc >= 0.6:
+        verdict = "some length difference"
+    else:
+        verdict = "not a length effect"
+    return (
+        f"Length alone: AUC {auc:.2f} (reference {length['reference_median_words']:.0f} words "
+        f"per chunk, {name} drafts {length['contrast_median_words']:.0f}): {verdict}"
+    )
 
 
 def _chunk_z(report: dict[str, Any]) -> dict[tuple[str, str], list[float]]:
