@@ -59,6 +59,8 @@ from styleprofile.weighting import (
 VERSION = 5
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
+# Directory walks skip dot-directories (.git, .venv) and these vendored ones.
+SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "site-packages"})
 OTHER = "<other>"
 DEVIATIONS_SHOWN = 8
 SHORT_CHUNK_WORDS = 150
@@ -75,27 +77,35 @@ class Chunk:
     text: str
 
 
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise StyleProfileError(f"{path} is not UTF-8 text ({error.reason})") from error
+
+
 def _jsonl_chunks(path: Path, text_field: str | None) -> list[Chunk]:
     chunks: list[Chunk] = []
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise StyleProfileError(f"{path}:{line_number}: invalid JSON: {error}") from error
-            if not isinstance(record, dict):
-                raise StyleProfileError(f"{path}:{line_number}: expected a JSON object")
-            fields = (text_field,) if text_field else TEXT_FIELDS
-            field = next((name for name in fields if isinstance(record.get(name), str)), None)
-            if field is None:
-                raise StyleProfileError(
-                    f"{path}:{line_number}: no string field among {', '.join(fields)}; "
-                    "pass --text-field"
-                )
-            chunk_id = str(record.get("id") or f"{path.name}:{line_number}")
-            chunks.append(Chunk(chunk_id, str(path), record[field]))
+    for line_number, line in enumerate(_read_text(path).split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise StyleProfileError(f"{path}:{line_number}: invalid JSON: {error}") from error
+        if not isinstance(record, dict):
+            raise StyleProfileError(f"{path}:{line_number}: expected a JSON object")
+        fields = (text_field,) if text_field else TEXT_FIELDS
+        field = next((name for name in fields if isinstance(record.get(name), str)), None)
+        if field is None:
+            raise StyleProfileError(
+                f"{path}:{line_number}: no string field among {', '.join(fields)}; "
+                "pass --text-field"
+            )
+        record_id = record.get("id")
+        # An id of 0 is kept; a missing, null or empty id falls back to the line.
+        chunk_id = f"{path.name}:{line_number}" if record_id in (None, "") else str(record_id)
+        chunks.append(Chunk(chunk_id, str(path), record[field]))
     return chunks
 
 
@@ -111,18 +121,24 @@ def load_chunks(inputs: Sequence[str], text_field: str | None = None) -> list[Ch
             files = sorted(
                 item
                 for item in path.rglob("*")
-                if item.is_file() and item.suffix.lower() in TEXT_SUFFIXES
+                if item.is_file()
+                and item.suffix.lower() in {*TEXT_SUFFIXES, ".jsonl"}
+                and not any(
+                    part.startswith(".") or part in SKIPPED_DIRS
+                    for part in item.relative_to(path).parts[:-1]
+                )
             )
             if not files:
-                raise StyleProfileError(f"{path} contains no .md, .markdown, or .txt files")
-            chunks.extend(
-                Chunk(str(item.relative_to(path)), str(item), item.read_text(encoding="utf-8"))
-                for item in files
-            )
+                raise StyleProfileError(f"{path} contains no .md, .markdown, .txt, or .jsonl files")
+            for item in files:
+                if item.suffix.lower() == ".jsonl":
+                    chunks.extend(_jsonl_chunks(item, text_field))
+                else:
+                    chunks.append(Chunk(str(item.relative_to(path)), str(item), _read_text(item)))
         elif path.suffix.lower() == ".jsonl":
             chunks.extend(_jsonl_chunks(path, text_field))
         else:
-            chunks.append(Chunk(path.name, str(path), path.read_text(encoding="utf-8")))
+            chunks.append(Chunk(path.name, str(path), _read_text(path)))
     return chunks
 
 
@@ -156,7 +172,8 @@ def window(chunks: Sequence[Chunk], window_words: int) -> list[Chunk]:
                 current, count = [], 0
         if current and pieces and count < window_words / 2:
             pieces[-1] = (pieces[-1][0] + current, pieces[-1][1] + count)
-        elif current and count:
+        elif current or not pieces:
+            # A chunk with no prose stays as one window, so it is counted as skipped.
             pieces.append((current, count))
         windows.extend(
             Chunk(f"{chunk.id}#w{index}", chunk.source, "\n\n".join(raw_blocks))
@@ -330,7 +347,7 @@ def _mean_of(values: Sequence[float | None]) -> float | None:
 
 def load_reference(path: Path) -> dict[str, Any]:
     try:
-        reference = json.loads(path.read_text(encoding="utf-8"))
+        reference = json.loads(_read_text(path))
     except json.JSONDecodeError as error:
         raise StyleProfileError(f"{path} is not a style profile: {error}") from error
     if not isinstance(reference, dict) or "summary" not in reference:

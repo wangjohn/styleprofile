@@ -473,7 +473,7 @@ def test_style_profile_cli_rejects_non_positive_top_k(
     assert "--top-k must be positive" in capsys.readouterr().err
 
 
-def test_markdown_edge_cases_found_in_review() -> None:
+def test_rules_inline_fences_quotes_and_number_abbreviations() -> None:
     rule = prose("---\n\nIntro para.\n\n---\n\nBody para.")
     assert "Intro para." in rule.blocks and "Body para." in rule.blocks
     assert prose("---\ntitle: Post\n---\nBody.").blocks == ["Body."]
@@ -523,7 +523,7 @@ def test_all_metrics_table_marks_never_varying_metrics() -> None:
     assert llm_row.endswith("▲▲▲")
 
 
-def test_third_review_parsing_cases() -> None:
+def test_front_matter_indented_blocks_and_unclosed_fences() -> None:
     unclosed = "---\ntitle: x\n" + "a b c d e f g h\n" * 40 + "\nBody."
     assert "Body." in prose(unclosed).text
 
@@ -693,7 +693,7 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
     assert "The reference's own writing scores" in output
 
 
-def test_review_fixes_for_weighting() -> None:
+def test_weighting_without_calibration_and_level_thresholds() -> None:
     from styleprofile.display import delta_level, likeness_level
     from styleprofile.profile import document_of
     from styleprofile.weighting import _auc
@@ -745,7 +745,7 @@ def test_rare_habit_cannot_dominate_delta() -> None:
     assert document_of("f.jsonl", "faq#what") != document_of("f.jsonl", "faq#why")
 
 
-def test_pr_review_fixes(tmp_path: Path) -> None:
+def test_list_continuations_percentage_floors_and_upper_case_extensions(tmp_path: Path) -> None:
     from styleprofile.weighting import resolution
 
     # Indented text under a list item extends the item; it is not a paragraph.
@@ -882,3 +882,92 @@ def test_contrast_summary_shows_interval_and_length_baseline() -> None:
         "Length alone: AUC 0.54 (reference 525 words per chunk, LLM drafts 526): "
         "not a length effect"
     ) in text
+
+
+def test_output_cannot_overwrite_the_reference(tmp_path: Path, capsys: Any) -> None:
+    source = tmp_path / "a.md"
+    source.write_text(AUTHOR, encoding="utf-8")
+    reference = tmp_path / "ref.json"
+    assert main([str(source), "--no-syntax", "--output", str(reference)]) == 0
+    saved = reference.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    same = str(tmp_path / "." / "ref.json")
+    assert main([str(source), "--no-syntax", "--reference", str(reference), "--output", same]) == 1
+    assert "--output is the --reference file" in capsys.readouterr().err
+    assert reference.read_text(encoding="utf-8") == saved
+
+
+def test_stdin_can_be_read_only_once(tmp_path: Path, capsys: Any) -> None:
+    assert main(["-", "-", "--no-syntax", "--output", str(tmp_path / "out.json")]) == 1
+    assert "can be given only once" in capsys.readouterr().err
+
+
+def test_indented_prose_with_code_characters_is_kept() -> None:
+    assert prose("\tIt was late; the train had gone.\n\n\tThe next morning was worse.").blocks == [
+        "It was late; the train had gone.",
+        "The next morning was worse.",
+    ]
+    wrapped = "    We waited {a while} at the gate, and\n    for the rest of the day it rained."
+    assert prose(wrapped).blocks == [
+        "We waited {a while} at the gate, and for the rest of the day it rained."
+    ]
+    assert prose("Text.\n\n    if (ready) { start(); }").blocks == ["Text."]
+    assert prose('Text.\n\n    greeting = "Hello there."').blocks == ["Text."]
+
+
+def test_unreadable_encodings_are_reported_and_a_bom_is_accepted(
+    tmp_path: Path, capsys: Any
+) -> None:
+    binary = tmp_path / "image.md"
+    binary.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+    with pytest.raises(StyleProfileError, match="is not UTF-8 text"):
+        load_chunks([str(binary)])
+    records = tmp_path / "latin.jsonl"
+    records.write_bytes(b'{"text": "caf\xe9"}\n')
+    with pytest.raises(StyleProfileError, match="is not UTF-8 text"):
+        load_chunks([str(records)])
+    assert main([str(binary), "--no-syntax", "--output", str(tmp_path / "o.json")]) == 1
+    assert "is not UTF-8 text" in capsys.readouterr().err
+
+    marked = tmp_path / "bom.jsonl"
+    marked.write_bytes(b"\xef\xbb\xbf" + json.dumps({"id": "b", "text": AUTHOR}).encode() + b"\n")
+    assert [chunk.id for chunk in load_chunks([str(marked)])] == ["b"]
+    text = tmp_path / "bom.md"
+    text.write_bytes(b"\xef\xbb\xbfHello there.")
+    assert load_chunks([str(text)])[0].text == "Hello there."
+
+
+def test_directories_read_jsonl_and_skip_hidden_and_vendored_folders(tmp_path: Path) -> None:
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    (posts / "all.jsonl").write_text(json.dumps({"id": "p1", "text": AUTHOR}) + "\n", "utf-8")
+    assert [chunk.id for chunk in load_chunks([str(posts)])] == ["p1"]
+
+    for hidden in (".git", "node_modules", ".venv/lib"):
+        (posts / hidden).mkdir(parents=True)
+        (posts / hidden / "README.md").write_text(GENERIC, encoding="utf-8")
+    (posts / "notes.md").write_text(AUTHOR, encoding="utf-8")
+    assert [chunk.id for chunk in load_chunks([str(posts)])] == ["p1", "notes.md"]
+
+    empty = tmp_path / "empty"
+    (empty / ".git").mkdir(parents=True)
+    (empty / ".git" / "HEAD.md").write_text(AUTHOR, encoding="utf-8")
+    with pytest.raises(StyleProfileError, match=r"\.txt, or \.jsonl files"):
+        load_chunks([str(empty)])
+
+
+def test_code_only_chunks_are_counted_after_windowing() -> None:
+    chunks = [Chunk("code", "s", "```python\nx = 1\n```"), Chunk("text", "s", AUTHOR)]
+    windows = window(chunks, 20)
+    assert windows[0].id == "code#w1"
+    report = build_profile(windows, parser=None)
+    assert any("skipped 1 chunk(s) with no prose" in warning for warning in report["warnings"])
+
+
+def test_jsonl_ids_of_zero_are_kept(tmp_path: Path) -> None:
+    records = tmp_path / "ids.jsonl"
+    lines = [{"id": 0, "text": AUTHOR}, {"id": "", "text": AUTHOR}, {"id": None, "text": AUTHOR}]
+    records.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    ids = [chunk.id for chunk in load_chunks([str(records)])]
+    assert ids == ["0", "ids.jsonl:2", "ids.jsonl:3"]
