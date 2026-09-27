@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from styleprofile import Chunk, StyleProfileError
+from styleprofile.calibration import verdict
 from styleprofile.cli import main
 from styleprofile.display import describe_delta, label, value
 from styleprofile.profile import VERSION, _prepare, build_reference, load_chunks, score, window
@@ -192,7 +193,9 @@ def test_profile_scores_chunks_against_a_reference() -> None:
     assert scored["reference"]["delta_mean"] == pytest.approx(
         (author_score["delta"] + generic_score["delta"]) / 2
     )
-    assert any("fewer than 150 words" in warning for warning in scored["warnings"])
+    # Both chunks are under 75 words: the means are indicative and there is no verdict.
+    assert scored["reference"]["verdict"]["verdict"] == "too short to judge"
+    assert not any("fewer than 150 words" in warning for warning in scored["warnings"])
 
 
 def test_syntax_metrics_when_spacy_is_installed() -> None:
@@ -316,15 +319,7 @@ def _handmade_comparison() -> tuple[dict[str, Any], dict[str, Any]]:
         "word_count": 400,
         "settings": {"syntax": None},
         "summary": {"voice": {"llm_markers_per_1k": {"mean": 5.0}, "hedges_per_1k": {"mean": 2.0}}},
-        "chunks": [
-            {
-                "id": "c1",
-                "reference": {
-                    "delta": 0.5,
-                    "z": {"voice": {"llm_markers_per_1k": 3.0, "hedges_per_1k": -0.1}},
-                },
-            }
-        ],
+        "chunks": [_handmade_row("c1", 0.5, {"llm_markers_per_1k": 3.0, "hedges_per_1k": -0.1})],
         "reference": {
             "path": "ref.json",
             "delta_mean": 0.5,
@@ -333,7 +328,29 @@ def _handmade_comparison() -> tuple[dict[str, Any], dict[str, Any]]:
         },
         "warnings": [],
     }
+    report["reference"]["verdict"] = verdict(report["chunks"], None)
     return report, reference
+
+
+def _handmade_row(chunk_id: str, delta: float, voice: dict[str, float]) -> dict[str, Any]:
+    """A scored 400-word chunk, judged against an uncalibrated reference."""
+    return {
+        "id": chunk_id,
+        "metrics": {"size": {"words": 400.0}},
+        "reference": {
+            "delta": delta,
+            "delta_by_group": {"voice": 0.6},
+            "z": {"voice": voice},
+            "calibration": {
+                "judged": True,
+                "reason": None,
+                "delta": None,
+                "delta_by_group": {},
+                "likeness": None,
+                "length_scale": {},
+            },
+        },
+    }
 
 
 def _paragraph(count: int) -> str:
@@ -558,8 +575,8 @@ def test_never_varying_differences_do_not_cancel() -> None:
     report["chunk_count"] = 2
     report["summary"]["voice"]["llm_markers_per_1k"]["mean"] = 0.0
     report["chunks"] = [
-        {"id": "up", "reference": {"delta": 0.5, "z": {"voice": {"llm_markers_per_1k": 3.0}}}},
-        {"id": "down", "reference": {"delta": 0.5, "z": {"voice": {"llm_markers_per_1k": -3.0}}}},
+        _handmade_row("up", 0.5, {"llm_markers_per_1k": 3.0}),
+        _handmade_row("down", 0.5, {"llm_markers_per_1k": -3.0}),
     ]
     differences = format_summary(report, reference).split("Biggest differences")[1]
 
@@ -601,7 +618,8 @@ def test_likeness_counts_only_the_contrast_direction_with_squared_weights() -> N
 
 
 def _score(metrics: Metrics, distributions: dict[str, Any], reference: dict[str, Any]) -> Any:
-    return _score_with(metrics, distributions, reference, _prepare(reference))
+    prepared = _prepare(reference)
+    return _score_with(metrics, distributions, reference, prepared, prepared.lengths.at(500))
 
 
 def _author_docs() -> list[Chunk]:
@@ -656,7 +674,8 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
         (llm_dir / f"{chunk.id}.md").write_text(chunk.text, encoding="utf-8")
     reference = tmp_path / "reference.json"
     sample = tmp_path / "sample.md"
-    sample.write_text(GENERIC, encoding="utf-8")
+    # Long enough to judge: under 75 words there is no verdict to explain.
+    sample.write_text(f"{GENERIC}\n\n{GENERIC}\n\n{GENERIC}", encoding="utf-8")
 
     build = ["build", str(author_dir), "--contrast", str(llm_dir), "-o", str(reference)]
     assert main([*build, "--no-syntax"]) == 0
@@ -666,7 +685,7 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
     assert main([*score, "--no-syntax"]) == 0
     output = capsys.readouterr().out
     assert "LLM-likeness: " in output
-    assert "The reference's own writing scores" in output
+    assert "The reference's own writing at this length (102 words) scores" in output
 
 
 def test_weighting_without_calibration_and_level_thresholds() -> None:
@@ -1173,9 +1192,10 @@ def test_json_output_is_the_only_thing_on_stdout(
     assert main(["score", sample, str(reference), "--quiet", "--window-words", "50"]) == 0
     quiet = capsys.readouterr()
     assert quiet.out.count("\n") == 1 and quiet.out.startswith(f"{sample}: ")
-    assert "Delta" in quiet.out
+    # Its 50-word windows are too short to judge, and -q says so.
+    assert quiet.out.endswith(": too short to judge (34 words)\n")
     # The caveats stay out of stdout, but -q still says they exist.
-    assert quiet.err.endswith("warnings; run without -q to see them\n")
+    assert quiet.err.endswith("; run without -q to see them\n")
 
 
 def test_score_reports_cannot_be_used_as_references(

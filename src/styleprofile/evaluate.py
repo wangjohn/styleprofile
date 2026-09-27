@@ -271,6 +271,9 @@ def evaluate_rewording(
         parser=parser,
         min_words=min_words,
         contrast_label=contrast_label,
+        # Drafts and edits are windowed as the reference is, and the AUCs compare chunk
+        # scores directly, so nothing here reads the calibration for shorter texts.
+        calibrate_lengths=False,
     )
     learned = fit.learned
     documents_by_key = {

@@ -34,6 +34,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Literal, TypedDict, Unpack
 
+from styleprofile.calibration import too_short_text
 from styleprofile.core import (
     LIKENESSES,
     LikenessVerdict,
@@ -45,11 +46,9 @@ from styleprofile.core import (
     Verdict,
 )
 from styleprofile.display import (
-    describe_delta,
     format_evaluation,
     format_reference_summary,
     format_summary,
-    mean_ceiling,
 )
 from styleprofile.evaluate import evaluate_rewording
 from styleprofile.formats import INPUT_FORMATS
@@ -71,7 +70,6 @@ from styleprofile.profile import (
     write_report,
 )
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
-from styleprofile.weighting import likeness_level
 
 AUTO = "auto"
 DEFAULT_WINDOW_WORDS = 500
@@ -378,9 +376,12 @@ class Profile(_Result):
 class ScoreResult(_Result):
     """Drafts scored against a profile: what ``styleprofile score`` prints and saves.
 
-    ``delta``, ``verdict`` and the likeness figures are pooled over every chunk of every
-    input, so scoring several documents at once gives one figure for all of them;
+    ``delta``, ``verdict`` and the likeness figures are pooled over the chunks of every
+    input that are long enough to judge, each read against the writer's range at its own
+    length, so scoring several documents at once gives one figure for all of them;
     per-document results arrive with plan PR 7. ``report["chunks"]`` has each chunk's own.
+    When no chunk is long enough, ``judged`` is False, both verdicts are ``TOO_SHORT``,
+    ``reason`` says why, and the figures cover every chunk as an indication only.
     """
 
     def __init__(
@@ -401,18 +402,34 @@ class ScoreResult(_Result):
 
     @property
     def delta(self) -> float | None:
-        """Mean Delta over the scored chunks: distance from the writer in the writer's own
+        """Mean Delta over the judged chunks: distance from the writer in the writer's own
         standard deviations. None when no metric could be compared."""
         return self._report["reference"]["delta_mean"]
 
     @property
+    def judged(self) -> bool:
+        """Whether any chunk is long enough to judge; if not, the verdicts are
+        ``TOO_SHORT`` and ``reason`` says why."""
+        return self._verdict["judged"]
+
+    @property
+    def reason(self) -> str | None:
+        """Why there is no verdict, such as "under 75 words, the writer's own text varies
+        too much by chance to judge"; None when there is one."""
+        return self._verdict["reason"]
+
+    @property
     def verdict(self) -> Verdict:
-        """Delta in words against the writer's held-out range, as the CLI prints it, or
+        """Delta in words against the writer's held-out range at the text's length, as the
+        CLI prints it; ``Verdict.TOO_SHORT`` when the text is too short to judge, or
         ``Verdict.NOT_COMPARABLE`` when no metric could be compared."""
         if self.delta is None:
             return Verdict.NOT_COMPARABLE
-        held = (self._reference.get("calibration") or {}).get("delta") or {}
-        return describe_delta(self.delta, mean_ceiling(held, self.chunk_count))
+        return Verdict(self._verdict["verdict"])
+
+    @property
+    def _verdict(self) -> dict[str, Any]:
+        return self._report["reference"]["verdict"]
 
     @property
     def contrast_label(self) -> str | None:
@@ -427,12 +444,17 @@ class ScoreResult(_Result):
 
     @property
     def likeness_verdict(self) -> LikenessVerdict | None:
-        """Likeness in words, or None without a contrast set. ``.words(contrast_label)``
-        gives the CLI's wording, such as ``leans LLM``."""
-        contrast = self._reference.get("contrast")
-        if not contrast or self.likeness is None:
+        """Likeness in words, ``LikenessVerdict.TOO_SHORT`` when the text is too short to
+        judge, or None without a contrast set. ``.words(contrast_label)`` gives the CLI's
+        wording, such as ``leans LLM``."""
+        if self.delta is None:
             return None
-        return LIKENESSES[likeness_level(self.likeness, contrast["calibration"], self.chunk_count)]
+        entry = self._verdict.get("likeness")
+        if not entry:
+            return None
+        if entry["level"] is None:
+            return LikenessVerdict.TOO_SHORT
+        return LIKENESSES[entry["level"]]
 
     def to_text(self, *, full: bool = False, color: bool = False) -> str:
         """The comparison ``styleprofile score`` prints; ``full`` shows every metric."""
@@ -441,6 +463,8 @@ class ScoreResult(_Result):
     def __repr__(self) -> str:
         if self.delta is None:
             return f"<ScoreResult: {self.verdict}>"
+        if not self.judged:
+            return f"<ScoreResult: {too_short_text(self._verdict)}>"
         return f"<ScoreResult: {self.verdict} (Delta {self.delta:.2f})>"
 
 

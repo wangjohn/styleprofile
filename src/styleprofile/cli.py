@@ -33,6 +33,7 @@ from styleprofile.api import (
     Settings,
     SettingsOverrides,
 )
+from styleprofile.calibration import too_short_text
 from styleprofile.core import Note, NoteCode, StyleProfileError
 from styleprofile.display import format_evaluation, format_summary
 from styleprofile.metrics import describe
@@ -472,6 +473,8 @@ def _headline(result: ScoreResult, samples: Sequence[str]) -> str:
         name = f"{len(samples)} inputs"
     if result.delta is None:
         return f"{name}: no metrics could be compared with the reference"
+    if not result.judged:
+        return f"{name}: {too_short_text(result.report['reference']['verdict'])}"
     parts = [f"{name}: {result.verdict} (Delta {result.delta:.2f})"]
     label = result.contrast_label
     if result.likeness is not None and result.likeness_verdict is not None and label:

@@ -80,6 +80,58 @@ Two scores answer two questions:
   may partly reflect length, so match lengths, or keep windowing on (`build` windows the
   writer and the drafts alike unless given `--no-window`).
 
+## Length-aware verdicts
+
+Every z-score is measured against the spread of the reference's windows (about 500 words). A
+shorter text varies far more than a window by chance alone: in a 75-word paragraph one
+semicolon is 13 per 1,000 words, and one long sentence moves the average sentence length a
+long way. Judged against the windows' range, the writer's own paragraphs would read as "very
+different". So every verdict is read against the writer's own range *at the text's length*.
+
+- **Calibration pieces.** `build` also cuts the reference's windows into pieces of about 75,
+  150 and 300 words. Each window is divided into round(words / length) equal parts, each cut
+  at the nearest sentence or block boundary (a paragraph break wins if it is within a
+  quarter of a piece), so no text is left over; code, headings, lists, quotes and tables
+  stay whole. A length is only cut from windows that hold one and a half pieces of it. On
+  a large corpus, at most 30,000 words of windows are cut (10,000 of the contrast's), taken
+  evenly across the corpus. With spaCy, each window is parsed once and a piece's syntax
+  metrics come from its span of that parse.
+- **Held out, like the windows.** Each piece is z-scored against the windows of every other
+  document, exactly as a draft of that length is scored against the whole reference. Per
+  length the profile stores (`calibration.by_length`, about 20 KB): each metric's rms, the
+  Delta range (median and 95th percentile) overall and per area, with each document's
+  pieces weighted by reliabilities learned without that document, and the likeness range of
+  reference and contrast pieces cut the same way. Likeness keeps the effects learned on
+  whole windows (each piece scored with the fold that left its document out), and scales
+  each z by the pieces' own rms. Every entry records how many pieces and documents it
+  rests on.
+- **Scoring at the text's length.** Each scored chunk reads the calibration for its own word
+  count, interpolated linearly in log word count between the stored lengths; the windows
+  themselves (their median word count) are the longest anchor, and anything longer uses the
+  windows' values. The chunk's Delta weights (1 / rms²) and likeness scaling use the
+  length-matched rms, and "Biggest differences" divides each z by how many times more that
+  metric swings at the chunk's length than in a window, so a short text's arrows count
+  standard deviations of the writer's own text at that length. The verdict bounds for Delta,
+  each area and likeness use the length-matched ranges.
+- **Too short to judge.** Under 75 words there is no verdict: the headline, `-q`, the JSON
+  report (`reference.verdict`) and the library say "too short to judge (N words)", the By
+  area block drops its verdict words, and the numbers and traits are shown as indicative.
+  The same happens when a text is shorter than every length the reference has enough pieces
+  for. A length needs at least 20 pieces from two or more documents: the bound is the 95th
+  percentile, and with 20 pieces one lies above it, so it is observed rather than set by the
+  largest piece. The contrast's likeness range at a length is a median and needs 5 pieces.
+  `build` prints which lengths are calibrated and on how many pieces.
+- **Several chunks.** Each chunk is judged at its own length. The headline covers the chunks
+  long enough to judge (the rest are left out, with a note); if none is, it is "too short to
+  judge" and its numbers are indicative. Its mean is read against a pooled bound: the mean
+  of the chunks' medians plus the root sum of squares of their (95th percentile − median)
+  over n, which for n chunks of one length is the usual median + (p95 − median) / sqrt(n).
+- **`evaluate` stays on window calibration.** It builds its reference without the shorter
+  lengths: its drafts and edited drafts are windowed exactly like the reference, its AUCs
+  compare chunk scores directly and need no verdict bound, and its per-draft counts judge
+  window-sized chunks. An edited set much shorter than its originals is visible in its
+  length ratio.
+
 ## Resolution floors
 
 Every z uses a spread of at least half of one occurrence per chunk for counts (5% of the

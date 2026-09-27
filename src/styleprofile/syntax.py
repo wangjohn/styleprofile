@@ -40,8 +40,12 @@ class Parser:
     model_version: str
     spacy_version: str
 
+    def docs(self, texts: Iterable[str]) -> Iterator[Any]:
+        """Each text parsed once, as a spaCy ``Doc``."""
+        yield from self.nlp.pipe(texts, batch_size=16)
+
     def parse(self, texts: Iterable[str]) -> Iterator[tuple[Metrics, Counter[str]]]:
-        for doc in self.nlp.pipe(texts, batch_size=16):
+        for doc in self.docs(texts):
             yield syntax_metrics(doc), pos_trigrams(doc)
 
 
@@ -74,7 +78,11 @@ def _pct(part: int, whole: int) -> float | None:
 
 
 def syntax_metrics(doc: Any) -> Metrics:
-    """Parser-based metrics for one parsed chunk, named and grouped by the registry."""
+    """Parser-based metrics for one parsed chunk, named and grouped by the registry.
+
+    ``doc`` is a spaCy ``Doc`` or a ``Span`` of one, so a part of a parsed text (a shorter
+    piece cut from a window, say) is measured without parsing it again.
+    """
     words = [token for token in doc if token.is_alpha]
     per_1k = 1000 / len(words) if words else None
 

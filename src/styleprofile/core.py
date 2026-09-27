@@ -104,7 +104,8 @@ class Verdict(StrEnum):
     NOT_COMPARABLE = "not comparable"
     """No metric could be compared with the reference."""
     TOO_SHORT = "too short to judge"
-    """Reserved for length-aware verdicts: too little text for any verdict."""
+    """Too little text for any verdict: under 75 words, or shorter than any length the
+    reference is calibrated for (see ``calibration``)."""
 
 
 # The Delta verdicts from closest to furthest, indexed by level.
@@ -124,6 +125,8 @@ class LikenessVerdict(StrEnum):
     FEW_TRAITS = "a few traits"
     LEANS = "leans"
     LIKE_DRAFTS = "like the drafts"
+    TOO_SHORT = "too short to judge"
+    """Too little text for any verdict, as ``Verdict.TOO_SHORT``."""
 
     def words(self, label: str) -> str:
         """``"leans LLM"`` for ``LEANS`` and the label ``LLM``."""
@@ -132,8 +135,14 @@ class LikenessVerdict(StrEnum):
             LikenessVerdict.FEW_TRAITS: f"a few {label} traits",
             LikenessVerdict.LEANS: f"leans {label}",
             LikenessVerdict.LIKE_DRAFTS: f"like the {label} drafts",
+            LikenessVerdict.TOO_SHORT: "too short to judge",
         }[self]
 
 
 # The likeness verdicts by level, 0 to 3.
-LIKENESSES = tuple(LikenessVerdict)
+LIKENESSES = (
+    LikenessVerdict.LIKE_REFERENCE,
+    LikenessVerdict.FEW_TRAITS,
+    LikenessVerdict.LEANS,
+    LikenessVerdict.LIKE_DRAFTS,
+)

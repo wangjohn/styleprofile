@@ -3,34 +3,34 @@ $ styleprofile score --all examples/draft.md '<tmp>/writer.json'
 --- stdout
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
-Overall: close   Delta 0.84
-  Lower is closer. The reference's own held-out writing scores 0.78 typically, 95% under 0.99.
+Overall: close   Delta 0.82
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.81 typically, 95% under 1.06.
 
-LLM-likeness: like the reference   0.79
-  The reference's own writing scores 0.20 typically (95% under 0.86); the LLM drafts 13.88.
+LLM-likeness: like the reference   0.73
+  The reference's own writing at this length (542 words) scores 0.19 typically (95% under 0.86); the LLM drafts 13.74.
 
 By area   Delta ÷ the top of the reference's usual range in each area
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.42x  █████████░░░░░░░░░░░  somewhat different
-  Vocabulary                   0.84x  ██████░░░░░░░░░░░░░░  close
-  Function words               0.78x  █████░░░░░░░░░░░░░░░  close
-  Punctuation                  0.77x  █████░░░░░░░░░░░░░░░  close
-  Sentence shape               0.65x  ████░░░░░░░░░░░░░░░░  close
-  Rhythm                       0.59x  ████░░░░░░░░░░░░░░░░  close
-  Syntax                       0.46x  ███░░░░░░░░░░░░░░░░░  close
-  How sentences open           0.32x  ██░░░░░░░░░░░░░░░░░░  close
+  Voice and stance             1.38x  █████████░░░░░░░░░░░  somewhat different
+  Vocabulary                   0.75x  █████░░░░░░░░░░░░░░░  close
+  Function words               0.71x  █████░░░░░░░░░░░░░░░  close
+  Punctuation                  0.68x  █████░░░░░░░░░░░░░░░  close
+  Sentence shape               0.57x  ████░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.54x  ████░░░░░░░░░░░░░░░░  close
+  Syntax                       0.42x  ███░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.29x  ██░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference
   Sentences per paragraph                               4.38        6.15   ▼▼▼
-  "more"                                             5.5 /1k     1.5 /1k   ▲▲▲
+  "more"                                             5.5 /1k     1.5 /1k   ▲▲
   "but"                                              5.5 /1k     2.0 /1k   ▲▲
-  Words per paragraph                             67.8 words  86.9 words   ▼▼
-  "at"                                               1.8 /1k     5.8 /1k   ▼▼
   Sentences starting However / Moreover                 2.9%        0.0%   ▲▲  reference never varies
+  Words per paragraph                             67.8 words  86.9 words   ▼▼
   Median sentence length                          15.0 words  10.7 words   ▲▲
   Em dashes                                          1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲▲  reference never varies
 
 Pattern divergence   (Jensen-Shannon: 0 = identical, 1 = nothing shared)
   Function-word transitions                      0.16
@@ -39,14 +39,14 @@ Pattern divergence   (Jensen-Shannon: 0 = identical, 1 = nothing shared)
 
 Delta by area   (the reference's held-out median, and the top of its usual range)
                                                    this text      median   range top
-  Voice and stance                                      1.34        0.80        0.95
-  Vocabulary                                            0.67        0.58        0.79
-  Function words                                        0.90        0.99        1.16
-  Punctuation                                           0.68        0.46        0.88
-  Sentence shape                                        1.45        0.73        2.24
-  Rhythm                                                1.07        0.99        1.82
-  Syntax                                                0.77        1.31        1.69
-  How sentences open                                    0.60        1.32        1.86
+  Voice and stance                                      1.36        0.77        0.99
+  Vocabulary                                            0.65        0.61        0.87
+  Function words                                        0.88        1.03        1.24
+  Punctuation                                           0.65        0.45        0.96
+  Sentence shape                                        1.33        0.76        2.32
+  Rhythm                                                1.07        1.09        1.98
+  Syntax                                                0.77        1.36        1.83
+  How sentences open                                    0.59        1.35        2.03
   Formatting                                            0.07        0.01        0.50
 
 All metrics
@@ -63,8 +63,8 @@ Sentence shape
   One-sentence paragraphs                               0.0%        0.0%
 
 Rhythm
-  Sentence length variation (0 = uniform)               0.66        0.75   ▼
-  Length change from one sentence to the next     13.9 words  12.5 words   ▲
+  Sentence length variation (0 = uniform)               0.66        0.75
+  Length change from one sentence to the next     13.9 words  12.5 words
 
 Vocabulary
   Average word length (letters)                         4.14        3.96
@@ -111,7 +111,7 @@ Function words
   "an"                                               3.7 /1k     4.2 /1k
   "and"                                             44.3 /1k    34.9 /1k   ▲
   "but"                                              5.5 /1k     2.0 /1k   ▲▲
-  "or"                                               0.0 /1k     4.2 /1k   ▼▼
+  "or"                                               0.0 /1k     4.2 /1k   ▼
   "so"                                               0.0 /1k     3.4 /1k   ▼
   "because"                                          0.0 /1k     1.1 /1k   ▼
   "if"                                               5.5 /1k     3.4 /1k   ▲
@@ -128,7 +128,7 @@ Function words
   "of"                                              25.8 /1k    17.8 /1k   ▲
   "to"                                              14.8 /1k    14.4 /1k
   "in"                                              25.8 /1k    17.4 /1k   ▲
-  "on"                                              14.8 /1k    10.3 /1k   ▲
+  "on"                                              14.8 /1k    10.3 /1k
   "for"                                             14.8 /1k     8.7 /1k   ▲
   "with"                                             5.5 /1k     6.0 /1k
   "at"                                               1.8 /1k     5.8 /1k   ▼▼
@@ -145,14 +145,14 @@ Function words
   "really"                                           0.0 /1k     0.0 /1k
   "very"                                             0.0 /1k     0.2 /1k
   "much"                                             0.0 /1k     1.1 /1k
-  "more"                                             5.5 /1k     1.5 /1k   ▲▲▲
+  "more"                                             5.5 /1k     1.5 /1k   ▲▲
   "most"                                             1.8 /1k     2.4 /1k
   "also"                                             0.0 /1k     0.6 /1k
   "even"                                             1.8 /1k     0.2 /1k   ▲▲
   "still"                                            1.8 /1k     1.1 /1k
   "only"                                             1.8 /1k     2.4 /1k
   "actually"                                         0.0 /1k     0.0 /1k
-  "though"                                           1.8 /1k     0.9 /1k   ▲
+  "though"                                           1.8 /1k     0.9 /1k
   "although"                                         0.0 /1k     0.4 /1k
   "however"                                          0.0 /1k     0.0 /1k
   "instead"                                          0.0 /1k     0.4 /1k
@@ -173,7 +173,7 @@ Function words
   "is"                                              12.9 /1k    11.8 /1k
   "are"                                              0.0 /1k     4.0 /1k   ▼
   "was"                                              1.8 /1k     5.6 /1k   ▼
-  "were"                                             0.0 /1k     0.9 /1k   ▼
+  "were"                                             0.0 /1k     0.9 /1k
   "be"                                               1.8 /1k     1.3 /1k
   "been"                                             1.8 /1k     2.9 /1k
   "have"                                             9.2 /1k     4.6 /1k   ▲
@@ -189,8 +189,8 @@ Function words
   "should"                                           0.0 /1k     0.0 /1k
   "might"                                            0.0 /1k     0.2 /1k
   "may"                                              0.0 /1k     0.7 /1k
-  "i"                                               20.3 /1k    27.5 /1k   ▼
-  "you"                                              9.2 /1k    14.0 /1k   ▼
+  "i"                                               20.3 /1k    27.5 /1k
+  "you"                                              9.2 /1k    14.0 /1k
   "we"                                               1.8 /1k     0.4 /1k   ▲
   "they"                                             3.7 /1k     5.1 /1k
   "he"                                               5.5 /1k     4.0 /1k
@@ -208,7 +208,7 @@ Syntax
   Adjectives                                        55.1 /1k    53.1 /1k
   Adverbs                                           51.5 /1k    56.5 /1k
   Modal verbs (can, should)                          5.5 /1k    10.1 /1k
-  Nominalizations (-tion, -ment)                     7.4 /1k     3.1 /1k   ▲▲
+  Nominalizations (-tion, -ment)                     7.4 /1k     3.1 /1k   ▲
 
 How sentences open
   Opener: pronoun (I, It, You)                           62%         62%
@@ -216,5 +216,5 @@ How sentences open
   Opener: adverb or preposition (Still, In)             8.8%        9.0%
   Opener: subordinator (If, When, Because)              2.9%        2.3%
   Opener: conjunction (And, But)                        5.9%        2.5%   ▲
-  Opener: noun                                          8.8%        5.1%   ▲
+  Opener: noun                                          8.8%        5.1%
   Opener: verb                                          0.0%        0.7%

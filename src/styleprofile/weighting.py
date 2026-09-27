@@ -31,7 +31,7 @@ from itertools import accumulate, groupby, islice
 from operator import itemgetter, mul
 from typing import Any, NamedTuple
 
-from styleprofile.core import LIKENESSES
+from styleprofile.core import DISTANCES, LIKENESSES, Verdict
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
 from styleprofile.surface import Metrics
 
@@ -111,25 +111,36 @@ def _values(metrics: Metrics) -> dict[Key, float]:
 
 
 def held_out_z(
-    chunk_metrics: Sequence[Metrics], sources: Sequence[str], floor: Mapping[Key, float]
+    chunk_metrics: Sequence[Metrics],
+    sources: Sequence[str],
+    floor: Mapping[Key, float],
+    *,
+    others: tuple[Sequence[Metrics], Sequence[str]] | None = None,
 ) -> list[ZScores]:
     """Each chunk's z-scores against the chunks from every other source.
 
-    Running sums keep this linear in the number of chunks, so a corpus of thousands of
-    comments costs about as much as profiling it.
+    With ``others`` (more texts and their sources, such as shorter pieces cut from these
+    chunks), those texts are scored instead, each against the chunks from every source but
+    its own. Running sums keep this linear in the number of chunks, so a corpus of
+    thousands of comments costs about as much as profiling it.
     """
     values = [_values(metrics) for metrics in chunk_metrics]
     total, parts = _sums(values, sources)
+    if others is not None:
+        values, sources = [_values(metrics) for metrics in others[0]], others[1]
     scored: list[ZScores] = []
     for chunk_values, source in zip(values, sources, strict=True):
-        own = parts[source]
+        own = parts.get(source, {})
         chunk_z: ZScores = {}
         for key, value in chunk_values.items():
-            n = total[key][0] - own[key][0]
+            if key not in total:
+                continue
+            mine = own.get(key, _EMPTY)
+            n = total[key][0] - mine[0]
             if n < 2:
                 continue
-            mean = (total[key][1] - own[key][1]) / n
-            variance = (total[key][2] - own[key][2] - n * mean * mean) / (n - 1)
+            mean = (total[key][1] - mine[1]) / n
+            variance = (total[key][2] - mine[2] - n * mean * mean) / (n - 1)
             sd = math.sqrt(variance) if variance > 1e-12 * max(1.0, mean * mean) else 0.0
             z = z_score(value, mean, sd, int(n), floor.get(key, 0.0))
             if z is not None:
@@ -200,6 +211,7 @@ def likeness(
 
 
 Sums = dict[Key, list[float]]
+_EMPTY = (0.0, 0.0, 0.0)
 
 
 def _sums(
@@ -275,6 +287,21 @@ def _fold_without(
         else:
             effects.pop(key, None)
     return effects, rms
+
+
+def _rms_without(
+    total: Sums, full: Mapping[Key, float], part: Mapping[Key, list[float]]
+) -> dict[Key, float]:
+    """``_rms`` of ``total`` less one source's ``part``, given ``full``, the rms of the whole
+    total; only the metrics the part has are recomputed."""
+    rms = dict(full)
+    for key in part:
+        n, _, squares = _less(total[key], part, key)
+        if n < 1:
+            rms.pop(key, None)
+        else:
+            rms[key] = math.sqrt(squares / n)
+    return rms
 
 
 def _by_source(sources: Sequence[str]) -> dict[str, list[int]]:
@@ -628,6 +655,54 @@ def fold_scores(
     return scores
 
 
+def likeness_range(
+    reference_held: Sequence[ZScores],
+    reference_sources: Sequence[str],
+    contrast_z: Sequence[ZScores],
+    piece_held: Sequence[ZScores],
+    piece_sources: Sequence[str],
+    contrast_piece_z: Sequence[ZScores],
+    contrast_piece_sources: Sequence[str],
+    learned: CrossValidated,
+) -> dict[str, Any]:
+    """The likeness range of shorter pieces: the reference's held-out median and 95th
+    percentile, and the contrast pieces' median.
+
+    Effects stay those learned on whole chunks, each piece scored with the fold that left
+    out its own document, as ``cross_validate`` does; the rms that scales each z is the
+    pieces' own, since that is what a text of their length is scored with. A reference
+    piece's rms leaves out its document too. ``reference_held``, ``reference_sources`` and
+    ``contrast_z`` are the whole chunks ``learned`` came from; folds are made only for the
+    documents that have pieces, one at a time.
+    """
+    reference_total, reference_parts = _sums(reference_held, reference_sources)
+    contrast_total = _sums(contrast_z, [""] * len(contrast_z), by_source=False)[0]
+    piece_total, piece_parts = _sums(piece_held, piece_sources)
+    rms = _rms(piece_total)
+    reference_scores = [0.0] * len(piece_held)
+    for source, positions in _by_source(piece_sources).items():
+        effects = _fold_without(
+            reference_total,
+            contrast_total,
+            (learned.effects, learned.rms),
+            reference_part=reference_parts.get(source, {}),
+        )[0]
+        own_rms = _rms_without(piece_total, rms, piece_parts[source])
+        for index in positions:
+            reference_scores[index] = likeness(piece_held[index], effects, own_rms)[0]
+    contrast_scores = [
+        likeness(chunk_z, learned.contrast_folds[source][0], rms)[0]
+        for chunk_z, source in zip(contrast_piece_z, contrast_piece_sources, strict=True)
+    ]
+    return {
+        "reference": {
+            "median": statistics.median(reference_scores),
+            "p95": quantile(reference_scores, 0.95),
+        },
+        "contrast": {"median": statistics.median(contrast_scores)},
+    }
+
+
 def summarize_contrast(
     learned: CrossValidated,
     reference_sources: Sequence[str],
@@ -667,6 +742,30 @@ def summarize_contrast(
 
 # Verdicts: where a Delta or likeness score sits relative to the reference's own range.
 
+DISTANCE_WORDS: tuple[Verdict, ...] = DISTANCES
+# What every verdict says for a text too short to judge (see ``calibration``).
+TOO_SHORT = Verdict.TOO_SHORT
+
+
+def delta_level(delta: float, ceiling: float | None = None) -> int:
+    """0-3 for Delta, relative to a ceiling from the reference's held-out range when known.
+
+    Up to that ceiling (see ``mean_ceiling``) reads as close; 1.5x and 2x mark the next
+    steps. Without a calibrated reference, fixed steps suit a writer whose own text scores
+    about 0.8.
+    """
+    if ceiling:
+        return (
+            0
+            if delta <= ceiling
+            else 1
+            if delta <= 1.5 * ceiling
+            else 2
+            if delta <= 2 * ceiling
+            else 3
+        )
+    return 0 if delta < 1.0 else 1 if delta < 1.5 else 2 if delta < 2.5 else 3
+
 
 def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
     """The usual upper bound for an average over ``count`` chunks.
@@ -682,12 +781,34 @@ def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) 
     return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
 
 
+def pooled_ceiling(stats: Sequence[Mapping[str, Any]], floor: float = MIN_CEILING) -> float | None:
+    """``mean_ceiling`` for the mean of several chunks that each have their own range, as
+    chunks of different lengths do.
+
+    Each chunk's spread above its median is taken as (p95 - median); the mean's median is
+    the mean of the medians, and its spread the root sum of squares over n, as for a mean
+    of independent values. With n equal ranges this is ``mean_ceiling(stats, n)``.
+    """
+    if not stats or any(item.get("p95") is None for item in stats):
+        return None
+    medians = [item.get("median", item["p95"]) for item in stats]
+    spread = math.sqrt(
+        sum((item["p95"] - median) ** 2 for item, median in zip(stats, medians, strict=True))
+    )
+    return max(statistics.fmean(medians) + spread / len(stats), floor)
+
+
 def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
     """0-3 from the reference's own held-out range up to the contrast set's typical score."""
     ceiling = (
         mean_ceiling(calibration["reference"], count, LIKENESS_MIN_CEILING) or LIKENESS_MIN_CEILING
     )
-    target = calibration["contrast"]["median"]
+    return likeness_step(score, ceiling, calibration["contrast"]["median"])
+
+
+def likeness_step(score: float, ceiling: float, target: float) -> int:
+    """0-3 for a likeness score, given the top of the reference's usual range (``ceiling``)
+    and the contrast set's typical score (``target``)."""
     if score <= ceiling:
         return 0
     if target <= ceiling:
