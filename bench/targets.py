@@ -30,11 +30,13 @@ and memory, 1.05 for the deterministic profile size. The first term is the plan'
 failing CI while still catching a regression.
 
 The ratchet is enforced: ``run.py --check`` also fails when a baseline is *stale*, that is when
-the metric is back within 2x its target (the baseline is no longer needed) or below
-``baseline / NOISE`` (it improved by more than noise). The PR that made the improvement must
-then lower or delete the baseline, so the budget tightens towards 2x the target and the gain
-can't quietly be lost again. Time and memory baselines are only judged stale on the CI runner
-(in GitHub Actions), where they were measured; profile size is judged on any machine.
+the metric is comfortably back within 2x its target, ``measured x NOISE <= 2 x target`` (the
+baseline is no longer needed, and deleting it still leaves noise headroom under 2x the
+target), or below ``baseline / NOISE`` (it improved by more than noise). The PR that made the
+improvement must then lower or delete the baseline, so the budget tightens towards 2x the
+target and the gain can't quietly be lost again. Time and memory baselines are only judged
+stale on the CI runner (in GitHub Actions), where they were measured; profile size is judged
+on any machine.
 
 Peak memory is the main ``styleprofile`` process's alone (``ru_maxrss`` from ``os.wait4``),
 not its process tree. That is exact while styleprofile runs in one process; PR 13, which adds
@@ -75,7 +77,8 @@ class Case:
     about: str
     targets: dict[str, float]
     # Measured on the CI runner; only for cases that CI runs. Lower a value (or delete it once
-    # the metric is within 2x its target) whenever a PR improves on it; --check insists.
+    # the metric is comfortably within 2x its target) whenever a PR improves on it; --check
+    # insists.
     baseline: dict[str, float] = field(default_factory=dict)
     ci: bool = False  # run by the CI benchmark job and `--quick`
 
@@ -96,8 +99,13 @@ class Case:
         if metric not in DETERMINISTIC and not on_runner:
             return None
         baseline = self.baseline[metric]
-        if value <= CI_MARGIN * self.targets[metric]:
-            return "is within 2x its target, so its baseline is no longer needed; delete it"
+        # Hysteresis: only when deleting the baseline leaves noise headroom under 2x target,
+        # or a value just under 2x target would flake between stale and over budget.
+        if value * NOISE[metric] <= CI_MARGIN * self.targets[metric]:
+            return (
+                "is within 2x its target with room for noise, so its baseline is no longer "
+                "needed; delete it"
+            )
         if value < baseline / NOISE[metric]:
             return f"improved on its baseline ({baseline:g}) by more than noise; lower it"
         return None
@@ -131,10 +139,11 @@ CASES = {
                 "score_s": SCORE_S,
             },
             # Only values over 2x target need a baseline; the rest fall back to 2x target.
-            # build_s meets its target on a laptop (1.3s) but the shared runner is about 2.8x
-            # slower; PRs 13 and 14 should bring it under 3.2s there and let the baseline go.
+            # build_s meets its target on a laptop (1.3s) but the shared runner is about 2.3x
+            # slower. Plan PR 3 brought it from 3.72s to 2.94s there; the baseline can go once
+            # it measures under 3.2s / 1.5 = 2.13s (PRs 13 and 14).
             # profile_mb goes with PR 14, which drops per-chunk rows from the profile.
-            baseline={"build_s": 3.72, "profile_mb": 2.21},
+            baseline={"build_s": 2.94, "profile_mb": 2.21},
             ci=True,
         ),
         Case(
