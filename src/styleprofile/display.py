@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +31,14 @@ from styleprofile.weighting import (
     mean_ceiling,
 )
 
-LABEL_WIDTH = 42
+# Wide enough for the longest metric label, so value columns stay aligned.
+LABEL_WIDTH = 46
 VALUE_WIDTH = 12
 DIFFERENCES_SHOWN = 8
 NOTABLE_Z = 1.0
 CHUNKS_SHOWN = 3
 BAR_WIDTH = 20
+# A full bar is 3x an area's usual held-out range, or a raw Delta of 3 without calibration.
 BAR_SCALE = 3.0
 
 
@@ -297,10 +300,11 @@ def _comparison_rows(report: dict[str, Any], reference: dict[str, Any], style: _
             text, unit = label(name)
             ref = reference["summary"].get(group, {}).get(name, {})
             z = averaged.get((group, name))
-            lines.append(
-                _row(text, value(stats["mean"], unit), value(ref.get("mean"), unit))
-                + f"   {style.distance(_arrow(z), z_level(z)) if z is not None else ''}"
-            )
+            row = _row(text, value(stats["mean"], unit), value(ref.get("mean"), unit))
+            # No trailing spaces on rows without arrows.
+            if z is not None and (arrow := _arrow(z)):
+                row += f"   {style.distance(arrow, z_level(z))}"
+            lines.append(row)
     return lines
 
 
@@ -327,12 +331,14 @@ def _differences(report: dict[str, Any], reference: dict[str, Any], style: _Styl
         text, unit = label(name)
         here = report["summary"][group][name]["mean"]
         ref = reference["summary"][group][name]
+        # With one chunk, "1 of 1 chunks differ" says nothing the row does not.
+        count = report["chunk_count"]
         note = (
             ""
             if ref.get("sd")
             else style.dim(
-                f"  reference never varies; {differing[(group, name)]} of "
-                f"{report['chunk_count']} chunks differ"
+                "  reference never varies"
+                + (f"; {differing[(group, name)]} of {count} chunks differ" if count > 1 else "")
             )
         )
         lines.append(
@@ -406,7 +412,7 @@ def _flagged_chunks(
             lines += ["", style.bold(f"Most {name}-like chunks")]
             for chunk, level in flagged:
                 word = style.distance(f"{likeness_words(level, name):22}", level)
-                lines.append(f"  {chunk['reference']['likeness']:4.2f}  {word}  {chunk['id']}")
+                lines.append(f"  {chunk['reference']['likeness']:5.2f}  {word}  {chunk['id']}")
     ranked = sorted(report["chunks"], key=lambda chunk: -(chunk["reference"]["delta"] or 0))
     flagged = [
         (chunk, level)
@@ -417,7 +423,104 @@ def _flagged_chunks(
         lines += ["", style.bold("Least like the reference")]
         for chunk, level in flagged:
             word = style.distance(f"{DISTANCE_WORDS[level]:22}", level)
-            lines.append(f"  {chunk['reference']['delta'] or 0.0:4.2f}  {word}  {chunk['id']}")
+            lines.append(f"  {chunk['reference']['delta'] or 0.0:5.2f}  {word}  {chunk['id']}")
+    return lines
+
+
+@dataclass(frozen=True)
+class _Area:
+    """One area's Delta for the "By area" view, read against the reference's held-out range."""
+
+    group: str
+    delta: float
+    # Delta divided by the top of the area's usual held-out range (the bound of "close",
+    # see ``mean_ceiling``), rounded as shown; None without calibration.
+    relative: float | None
+    level: int
+    # The reference's median held-out Delta for the area and the top of its usual range.
+    typical: float | None
+    ceiling: float | None
+
+
+def _areas(report: dict[str, Any], reference: dict[str, Any]) -> list[_Area]:
+    """Each scored area, most different first: by verdict, then by Delta relative to the
+    top of the area's usual held-out range.
+
+    Areas vary by different amounts on the writer's own text, so raw area Deltas do not
+    compare: 1.45 can be usual for sentence shape while 1.34 is unusual for voice. The
+    relative value is what the verdict reads, and the verdict is taken from it as rounded
+    for display, so the order, the numbers and the words agree.
+    """
+    held = (reference.get("calibration") or {}).get("delta", {}).get("by_group", {})
+    areas = []
+    for group, amount in report["reference"]["delta_by_group_mean"].items():
+        if amount is None:
+            continue
+        stats = held.get(group, {})
+        ceiling = mean_ceiling(stats, report["chunk_count"])
+        if ceiling:
+            relative = round(amount / ceiling, 2)
+            level = delta_level(relative, 1.0)
+        else:
+            relative, level = None, delta_level(amount)
+        areas.append(_Area(group, amount, relative, level, stats.get("median"), ceiling))
+    return sorted(areas, key=lambda area: (-area.level, -(area.relative or area.delta)))
+
+
+def _area_lines(areas: list[_Area], style: _Style) -> list[str]:
+    """The "By area" block: each area's Delta over the top of its usual held-out range, or
+    the raw Delta when the reference has no calibration for it."""
+    calibrated = any(area.relative is not None for area in areas)
+    lines = [
+        style.bold("By area")
+        + style.dim(
+            "   Delta ÷ the top of the reference's usual range in each area"
+            if calibrated
+            else "   Delta in each area"
+        )
+    ]
+    if calibrated:
+        lines.append(
+            style.dim(
+                "  close up to 1x, somewhat different to 1.5x, clearly different to 2x, "
+                "very different above"
+            )
+        )
+    for area in areas:
+        relative = area.relative
+        amount = area.delta if relative is None else relative
+        cell = f"Delta {amount:.2f}" if relative is None else f"{amount:.2f}x"
+        lines.append(
+            f"  {group_title(area.group):24}{cell:>10}  "
+            + _bar(amount, style, area.level)
+            + "  "
+            + style.distance(DISTANCE_WORDS[area.level], area.level)
+        )
+    return lines
+
+
+def _area_deltas(areas: list[_Area], style: _Style) -> list[str]:
+    """The raw area Deltas behind "By area", with the held-out values they are read against.
+
+    Without calibration "By area" already shows the raw Deltas, so this adds nothing.
+    """
+    if not any(area.ceiling is not None for area in areas):
+        return []
+    lines = [
+        "",
+        style.bold("Delta by area")
+        + style.dim("   (the reference's held-out median, and the top of its usual range)"),
+        style.dim(_row("", "this text", "median", "range top")),
+    ]
+    for area in areas:
+        lines.append(
+            _row(
+                group_title(area.group),
+                f"{area.delta:.2f}",
+                f"{area.typical:.2f}" if area.typical is not None else "-",
+                f"{area.ceiling:.2f}" if area.ceiling is not None else "-",
+            )
+        )
     return lines
 
 
@@ -432,33 +535,20 @@ def _comparison_view(
     count = report["chunk_count"]
     ceiling = mean_ceiling(held, count)
     chunk_ceiling = mean_ceiling(held, 1)
-    area_ceilings = {
-        group: mean_ceiling(stats, count) for group, stats in held.get("by_group", {}).items()
-    }
     level = delta_level(delta, ceiling)
+    # The shading is described only when it is shown; the words carry the same reading.
+    shading = " Darker orange is further away." if style.color else ""
     lines = [
         "",
         style.bold("Overall: ")
         + style.distance(style.bold(describe_delta(delta, ceiling)), level)
         + f"   Delta {delta:.2f}",
-        style.dim(
-            f"  Lower is closer. {_delta_baseline(reference)} Darker orange is further away."
-        ),
+        style.dim(f"  Lower is closer. {_delta_baseline(reference)}{shading}"),
     ]
     if reference.get("contrast"):
         lines += ["", *_likeness(report, reference["contrast"], style)]
-    lines += ["", style.bold("By area")]
-    for group, amount in sorted(
-        scored["delta_by_group_mean"].items(), key=lambda item: -(item[1] or 0)
-    ):
-        if amount is not None:
-            area_level = delta_level(amount, area_ceilings.get(group))
-            lines.append(
-                f"  {group_title(group):24}{amount:5.2f}  "
-                + _bar(amount, style, area_level)
-                + "  "
-                + style.distance(DISTANCE_WORDS[area_level], area_level)
-            )
+    areas = _areas(report, reference)
+    lines += ["", *_area_lines(areas, style)]
     lines += ["", *_differences(report, reference, style)]
     if report["chunk_count"] > 1:
         lines += _flagged_chunks(report, reference, chunk_ceiling, style)
@@ -478,6 +568,7 @@ def _comparison_view(
                 f"  {DISTRIBUTION_LABELS.get(name, name):{LABEL_WIDTH}}{amount:5.2f}"
                 for name, amount in divergences
             ]
+        lines += _area_deltas(areas, style)
         lines += _comparison_rows(report, reference, style)
     return lines
 
@@ -611,7 +702,7 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
             "the reference each edit removed (or added)"
         ),
         style.dim(
-            f"  {'':{LABEL_WIDTH - 2}}{'reference':>10}{'original':>10}"
+            f"  {'':{LABEL_WIDTH}}{'reference':>10}{'original':>10}"
             + "".join(f"{headers[item]:>20}" for item in edited_labels)
         ),
     ]
@@ -625,7 +716,7 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
         survival = [_survival(signal["edited"][item], style) for item in edited_labels]
         # Pad by visible width, since color codes do not take up columns.
         padded = [" " * max(0, 20 - len(_strip(cell))) + cell for cell in survival]
-        lines.append(f"  {text[: LABEL_WIDTH - 3]:{LABEL_WIDTH - 2}}" + "".join(cells + padded))
+        lines.append(f"  {text:{LABEL_WIDTH}}" + "".join(cells + padded))
     partial = [item for item in edited_labels if sets[item].get("partial")]
     if partial:
         lines.append(

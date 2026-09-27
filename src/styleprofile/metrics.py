@@ -446,7 +446,7 @@ METRICS: tuple[Metric, ...] = (
     Metric(
         "sentence_openers",
         "opens_pronoun_pct",
-        "Pronoun (I, It, You)",
+        "Opener: pronoun (I, It, You)",
         PCT,
         _SENTENCES,
         syntax=True,
@@ -454,26 +454,30 @@ METRICS: tuple[Metric, ...] = (
     ),
     _opener(
         "opens_determiner_pct",
-        "Determiner (The, A, This)",
+        "Opener: determiner (The, A, This)",
         "Share of (3+ word) sentences that open with a determiner.",
     ),
     _opener(
         "opens_adverb_or_preposition_pct",
-        "Adverb or preposition (Still, In)",
+        "Opener: adverb or preposition (Still, In)",
         "Share of (3+ word) sentences that open with an adverb or preposition.",
     ),
     _opener(
         "opens_subordinator_pct",
-        "Subordinator (If, When, Because)",
+        "Opener: subordinator (If, When, Because)",
         "Share of (3+ word) sentences that open with a subordinating conjunction.",
     ),
     _opener(
         "opens_conjunction_pct",
-        "Conjunction (And, But)",
+        "Opener: conjunction (And, But)",
         "Share of (3+ word) sentences that open with a coordinating conjunction.",
     ),
-    _opener("opens_noun_pct", "Noun", "Share of (3+ word) sentences that open with a noun."),
-    _opener("opens_verb_pct", "Verb", "Share of (3+ word) sentences that open with a verb."),
+    _opener(
+        "opens_noun_pct", "Opener: noun", "Share of (3+ word) sentences that open with a noun."
+    ),
+    _opener(
+        "opens_verb_pct", "Opener: verb", "Share of (3+ word) sentences that open with a verb."
+    ),
     *(
         _rate("function_words", f"fw_{word}_per_1k", f'"{word}"', f'The word "{word}".')
         for word in FUNCTION_WORDS

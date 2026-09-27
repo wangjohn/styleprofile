@@ -73,13 +73,13 @@ Syntax
   Nominalizations (-tion, -ment)               /1k    Nouns ending in -tion, -ment, -ness, -ity and similar.
 
 How sentences open
-  Pronoun (I, It, You)                         %      Share of (3+ word) sentences that open with a pronoun.
-  Determiner (The, A, This)                    %      Share of (3+ word) sentences that open with a determiner.
-  Adverb or preposition (Still, In)            %      Share of (3+ word) sentences that open with an adverb or preposition.
-  Subordinator (If, When, Because)             %      Share of (3+ word) sentences that open with a subordinating conjunction.
-  Conjunction (And, But)                       %      Share of (3+ word) sentences that open with a coordinating conjunction.
-  Noun                                         %      Share of (3+ word) sentences that open with a noun.
-  Verb                                         %      Share of (3+ word) sentences that open with a verb.
+  Opener: pronoun (I, It, You)                 %      Share of (3+ word) sentences that open with a pronoun.
+  Opener: determiner (The, A, This)            %      Share of (3+ word) sentences that open with a determiner.
+  Opener: adverb or preposition (Still, In)    %      Share of (3+ word) sentences that open with an adverb or preposition.
+  Opener: subordinator (If, When, Because)     %      Share of (3+ word) sentences that open with a subordinating conjunction.
+  Opener: conjunction (And, But)               %      Share of (3+ word) sentences that open with a coordinating conjunction.
+  Opener: noun                                 %      Share of (3+ word) sentences that open with a noun.
+  Opener: verb                                 %      Share of (3+ word) sentences that open with a verb.
 
 Function words
   "the"                                        /1k    The word "the".
