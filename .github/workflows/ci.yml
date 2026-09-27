@@ -12,29 +12,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --extra syntax
+      - run: uv sync --locked --extra syntax
       - run: make test
-      # Lint, format and type checks do not depend on the interpreter; run them once.
-      - if: matrix.python-version == '3.12'
+      # Lint, format and type checks target the oldest supported Python (see pyproject.toml);
+      # run them once, on that version.
+      - if: matrix.python-version == '3.11'
         run: make lint typecheck
-      - if: matrix.python-version == '3.12'
+      - if: matrix.python-version == '3.11'
         run: make demo
 
   no-syntax:
-    name: test (Python 3.12, without spaCy)
+    name: test (Python 3.11, without spaCy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
-      - run: uv sync
+          python-version: "3.11"
+      - run: uv sync --locked
       - name: Confirm spaCy is absent
         run: uv run python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('spacy') is not None)"
       - run: make test
