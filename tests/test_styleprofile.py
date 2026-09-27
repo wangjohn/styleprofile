@@ -1369,6 +1369,26 @@ def test_show_renders_saved_reports_without_recomputing(
     assert "score the sample again" in capsys.readouterr().err
 
 
+def test_show_renders_a_score_against_an_uncalibrated_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One document in several windows: a spread, but no held-out calibration.
+    essay = tmp_path / "essay.md"
+    essay.write_text("\n\n".join([AUTHOR, GENERIC] * 3), encoding="utf-8")
+    reference = tmp_path / "writer.json"
+    command = ["build", str(essay), "-o", str(reference), "--no-syntax", "--window-words", "100"]
+    assert main(command) == 0
+    scored = tmp_path / "draft.json"
+    assert main(["score", str(_sample(tmp_path)), str(reference), "-o", str(scored)]) == 0
+    live = capsys.readouterr().out
+    assert "calibration" not in json.loads(reference.read_text(encoding="utf-8"))
+
+    assert main(["show", str(scored)]) == 0
+    shown = capsys.readouterr().out
+    overall = next(line for line in live.splitlines() if line.startswith("Overall"))
+    assert overall in shown
+
+
 @pytest.mark.parametrize(
     ("flags", "syntax"), [([], None), (["--no-syntax"], False), (["--syntax"], True)]
 )

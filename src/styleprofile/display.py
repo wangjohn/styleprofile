@@ -416,7 +416,7 @@ def _likeness(report: dict[str, Any], contrast: dict[str, Any], style: _Style) -
 
 
 def _delta_baseline(reference: dict[str, Any]) -> str:
-    held = reference.get("calibration", {}).get("delta")
+    held = (reference.get("calibration") or {}).get("delta")
     if not held:
         return "Text by the reference's own writer usually scores around 0.8."
     return (
@@ -465,7 +465,7 @@ def _comparison_view(
     delta = scored["delta_mean"]
     if delta is None:
         return ["", style.warn("No metrics could be compared with the reference.")]
-    held = reference.get("calibration", {}).get("delta", {})
+    held = (reference.get("calibration") or {}).get("delta", {})
     count = report["chunk_count"]
     ceiling = mean_ceiling(held, count)
     chunk_ceiling = mean_ceiling(held, 1)
