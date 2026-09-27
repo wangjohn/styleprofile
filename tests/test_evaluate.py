@@ -317,10 +317,8 @@ def test_contrast_is_measured_once(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result = _evaluate(author, drafts, {"same": tmp_path / "same"})
     # The reference, the contrast drafts and the edited set, once each.
     assert measured == [8, 5, 5]
-    reference = profile.build_profile(
-        profile.load_chunks([str(author)]),
-        parser=None,
-        contrast=profile.load_chunks([str(drafts)]),
+    reference = profile.build_reference(
+        profile.load_chunks([str(author)]), parser=None, contrast=profile.load_chunks([str(drafts)])
     )
     assert result["sets"]["original"]["auc"] == reference["contrast"]["calibration"]["auc"]
 

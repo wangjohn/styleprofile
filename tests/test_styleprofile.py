@@ -9,10 +9,9 @@ import pytest
 from styleprofile import (
     Chunk,
     StyleProfileError,
-    build_profile,
     build_reference,
     load_chunks,
-    load_reference,
+    score,
     surface_metrics,
     window,
 )
@@ -172,16 +171,16 @@ def test_profile_scores_chunks_against_a_reference() -> None:
             "a4", "src", "It's a small thing. So I wrote it down, because I'll forget otherwise."
         ),
     ]
-    reference = build_profile(author, parser=None, settings={"window_words": None})
+    reference = build_reference(author, parser=None, settings={"window_words": None})
 
     assert reference["chunk_count"] == 4
     assert reference["summary"]["voice"]["contractions_per_1k"]["n"] == 4
     assert set(reference["distributions"]) == {"masked_bigram", "char_trigram"}
 
-    scored = build_profile(
+    scored = score(
         [Chunk("author", "src", AUTHOR), Chunk("generic", "src", GENERIC)],
+        reference,
         parser=None,
-        reference=reference,
         settings={"window_words": None},
     )
     author_score, generic_score = (row["reference"] for row in scored["chunks"])
@@ -203,46 +202,6 @@ def test_profile_scores_chunks_against_a_reference() -> None:
     assert any("fewer than 150 words" in warning for warning in scored["warnings"])
 
 
-def test_legacy_flat_form_still_works_with_a_deprecation_note(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = tmp_path / "essay.md"
-    source.write_text("\n\n".join([AUTHOR] * 6), encoding="utf-8")
-    reference = tmp_path / "reference.json"
-    output = tmp_path / "report.json"
-    command = [str(source), "--no-syntax", "--window-words", "100"]
-
-    assert main([*command, "--output", str(reference)]) == 0
-    built = capsys.readouterr()
-    assert "deprecated" in built.err
-    assert f"use: styleprofile build {source} -o {reference} --no-syntax --window-words 100" in (
-        built.err
-    )
-    assert main([*command, "--reference", str(reference), "--output", str(output)]) == 0
-
-    report = json.loads(output.read_text(encoding="utf-8"))
-    assert report["kind"] == "score"
-    assert report["chunk_count"] == 3
-    assert report["settings"]["window_words"] == 100
-    assert report["settings"]["syntax"] is None
-    scored = capsys.readouterr()
-    assert f"use: styleprofile score {source} {reference} -o {output}" in scored.err
-    assert "STYLE COMPARISON" in scored.out
-    assert "Overall: close" in scored.out
-    assert "No metric differs by 1 sd or more on average." in scored.out
-
-    # A reference built by the flat form keeps its old default of no windowing.
-    assert main([str(source), "--no-syntax", "--output", str(reference)]) == 0
-    assert "--no-window" in capsys.readouterr().err
-    assert json.loads(reference.read_text(encoding="utf-8"))["chunk_count"] == 1
-
-    # The flat form's parser accepted abbreviations of --output, and so does its detection.
-    assert main([str(source), "--no-syntax", f"--out={reference}"]) == 0
-    assert "deprecated" in capsys.readouterr().err
-    assert main([str(source), "--no-syntax", "--outp", str(reference)]) == 0
-    assert "deprecated" in capsys.readouterr().err
-
-
 def test_syntax_metrics_when_spacy_is_installed() -> None:
     pytest.importorskip("spacy")
     from styleprofile import SyntaxUnavailableError, load_parser
@@ -251,7 +210,7 @@ def test_syntax_metrics_when_spacy_is_installed() -> None:
         parser = load_parser()
     except SyntaxUnavailableError:
         pytest.skip("spaCy English model is not installed")
-    report = build_profile([Chunk("a", "src", AUTHOR)], parser=parser)
+    report = build_reference([Chunk("a", "src", AUTHOR)], parser=parser)
     chunk = report["chunks"][0]["metrics"]
 
     assert chunk["syntax"]["parse_depth_mean"] > 0
@@ -286,7 +245,7 @@ def test_profile_and_comparison_views_are_readable() -> None:
         Chunk("a2", "src", "I don't know. But we tried it anyway, and it mostly worked."),
         Chunk("a3", "src", "You can't plan everything. We shipped it, and I think that was right."),
     ]
-    reference = build_profile(author, parser=None)
+    reference = build_reference(author, parser=None)
     brief = format_summary(reference)
 
     assert brief.startswith("STYLE PROFILE   3 chunks")
@@ -300,7 +259,7 @@ def test_profile_and_comparison_views_are_readable() -> None:
     assert '"the"' in full
     assert "--all" not in full
 
-    scored = build_profile([Chunk("g", "src", GENERIC)], parser=None, reference=reference)
+    scored = score([Chunk("g", "src", GENERIC)], reference, parser=None)
     comparison = format_summary(scored, reference, color=True)
 
     assert "Overall: " in comparison
@@ -317,7 +276,7 @@ def test_distance_colors_only_mark_what_is_far(monkeypatch: pytest.MonkeyPatch) 
     assert [delta_level(d) for d in (0.75, 1.2, 1.74, 6.9)] == [0, 1, 2, 3]
     assert [z_level(z) for z in (0.4, -1.5, 2.2, -8.0)] == [0, 1, 2, 3]
 
-    reference = build_profile(
+    reference = build_reference(
         [
             Chunk("a1", "src", AUTHOR),
             Chunk("a2", "src", "I don't know. But we tried it anyway, and it mostly worked."),
@@ -327,7 +286,7 @@ def test_distance_colors_only_mark_what_is_far(monkeypatch: pytest.MonkeyPatch) 
         ],
         parser=None,
     )
-    scored = build_profile([Chunk("g", "src", GENERIC)], parser=None, reference=reference)
+    scored = score([Chunk("g", "src", GENERIC)], reference, parser=None)
 
     monkeypatch.setenv("COLORTERM", "truecolor")
     deep = "\033[1;38;2;184;70;26m"
@@ -441,18 +400,18 @@ def test_sentence_and_voice_edge_cases() -> None:
 def test_chunks_without_prose_are_skipped() -> None:
     assert surface_metrics("```\ncode only\n```")["punctuation"]["commas_per_1k"] is None
 
-    report = build_profile(
+    report = build_reference(
         [Chunk("code", "s", "```\nx = 1\n```"), Chunk("text", "s", AUTHOR)], parser=None
     )
     assert [row["id"] for row in report["chunks"]] == ["text"]
     assert any("skipped 1 chunk(s) with no prose" in warning for warning in report["warnings"])
 
     with pytest.raises(StyleProfileError, match="1 had no prose"):
-        build_profile([Chunk("code", "s", "| a | b |")], parser=None)
+        build_reference([Chunk("code", "s", "| a | b |")], parser=None)
 
 
 def test_never_varying_metrics_count_toward_delta() -> None:
-    reference = build_profile(
+    reference = build_reference(
         [
             Chunk("a1", "s", AUTHOR),
             Chunk("a2", "s", "I don't know. But we tried it anyway, and it mostly worked."),
@@ -460,9 +419,9 @@ def test_never_varying_metrics_count_toward_delta() -> None:
         ],
         parser=None,
     )
-    plain = build_profile([Chunk("a", "s", AUTHOR)], parser=None, reference=reference)
-    marked = build_profile(
-        [Chunk("a", "s", AUTHOR + " Moreover, this is crucial.")], parser=None, reference=reference
+    plain = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
+    marked = score(
+        [Chunk("a", "s", AUTHOR + " Moreover, this is crucial.")], reference, parser=None
     )
     plain_z = plain["chunks"][0]["reference"]["z"]["voice"]
     marked_z = marked["chunks"][0]["reference"]["z"]["voice"]
@@ -475,9 +434,9 @@ def test_never_varying_metrics_count_toward_delta() -> None:
 
 
 def test_reference_syntax_mismatch_is_warned() -> None:
-    reference = build_profile([Chunk("a", "s", AUTHOR)] * 2, parser=None)
+    reference = build_reference([Chunk("a", "s", AUTHOR)] * 2, parser=None)
     reference["settings"]["syntax"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
-    report = build_profile([Chunk("a", "s", AUTHOR)], parser=None, reference=reference)
+    report = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
 
     assert any("this run does not" in warning for warning in report["warnings"])
 
@@ -517,7 +476,7 @@ def test_rules_inline_fences_quotes_and_number_abbreviations() -> None:
 
 
 def test_min_words_and_rounded_references() -> None:
-    report = build_profile(
+    report = build_reference(
         [Chunk("short", "s", "Too short."), Chunk("long", "s", AUTHOR)], parser=None, min_words=10
     )
     assert [row["id"] for row in report["chunks"]] == ["long"]
@@ -589,7 +548,7 @@ def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
     assert scored["delta"] == pytest.approx((0.1 / 1.01 + 1.0) / 2)
     assert "likeness" not in scored
 
-    report = build_profile([Chunk("a", "s", AUTHOR)], parser=None, reference=reference)
+    report = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
     assert any("report version 1" in warning for warning in report["warnings"])
 
 
@@ -670,7 +629,7 @@ def _llm_docs() -> list[Chunk]:
 
 
 def test_contrast_reference_learns_weights_and_scores_likeness() -> None:
-    reference = build_profile(_author_docs(), parser=None, contrast=_llm_docs())
+    reference = build_reference(_author_docs(), parser=None, contrast=_llm_docs())
 
     assert reference["calibration"]["sources"] == 4
     contrast = reference["contrast"]
@@ -678,15 +637,13 @@ def test_contrast_reference_learns_weights_and_scores_likeness() -> None:
     assert contrast["effects"]["voice"]["llm_markers_per_1k"] > 0
     assert contrast["calibration"]["cross_validated"] is True
 
-    author = build_profile([Chunk("a", "s", AUTHOR)], parser=None, reference=reference)
-    generic = build_profile([Chunk("g", "s", GENERIC)], parser=None, reference=reference)
+    author = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
+    generic = score([Chunk("g", "s", GENERIC)], reference, parser=None)
     assert generic["reference"]["likeness_mean"] > author["reference"]["likeness_mean"]
     assert generic["chunks"][0]["reference"]["likeness_signals"]
 
-    with pytest.raises(StyleProfileError, match="builds a reference"):
-        build_profile(_author_docs(), parser=None, reference=reference, contrast=_llm_docs())
     with pytest.raises(StyleProfileError, match="at least two documents"):
-        build_profile([Chunk("one", "s", AUTHOR)], parser=None, contrast=_llm_docs())
+        build_reference([Chunk("one", "s", AUTHOR)], parser=None, contrast=_llm_docs())
 
 
 def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -719,14 +676,14 @@ def test_weighting_without_calibration_and_level_thresholds() -> None:
     from styleprofile.weighting import auc
 
     # Two single-chunk documents: no held-out spread, so no calibration and no crash.
-    report = build_profile(
+    report = build_reference(
         [Chunk("a.md", "x/a.md", AUTHOR), Chunk("b.md", "x/b.md", GENERIC)], parser=None
     )
     assert "calibration" not in report and "reliability" not in report
 
     # Scoring against a reference without reliability falls back to a capped Delta.
-    reference = build_profile([Chunk("one", "s", AUTHOR)] * 3, parser=None)
-    scored = build_profile([Chunk("g", "s", GENERIC)], parser=None, reference=reference)
+    reference = build_reference([Chunk("one", "s", AUTHOR)] * 3, parser=None)
+    scored = score([Chunk("g", "s", GENERIC)], reference, parser=None)
     assert any("caps each metric at 3" in warning for warning in scored["warnings"])
     assert (scored["reference"]["delta_mean"] or 0) <= 3
 
@@ -776,11 +733,9 @@ def test_rare_habit_cannot_dominate_delta() -> None:
     base = "We built it slowly and carefully over many months. " * 12
     docs = [Chunk(f"d{i}#w{j}", f"doc{i}", base) for i in range(10) for j in range(5)]
     docs[0] = Chunk("d0#w0", "doc0", base.replace("months.", "months; really.", 1))
-    reference = build_profile(docs, parser=None)
-    sample = build_profile(
-        [Chunk("s", "s", base.replace("months.", "months; really.", 5))],
-        parser=None,
-        reference=reference,
+    reference = build_reference(docs, parser=None)
+    sample = score(
+        [Chunk("s", "s", base.replace("months.", "months; really.", 5))], reference, parser=None
     )
     scored = sample["chunks"][0]["reference"]
     # Five semicolons in ~120 words, against a reference that used one once: clearly
@@ -830,8 +785,8 @@ def _words(count: int) -> str:
 
 
 def test_contrast_auc_has_a_document_bootstrap_interval() -> None:
-    first = build_profile(_author_docs(), parser=None, contrast=_llm_docs())
-    second = build_profile(_author_docs(), parser=None, contrast=_llm_docs())
+    first = build_reference(_author_docs(), parser=None, contrast=_llm_docs())
+    second = build_reference(_author_docs(), parser=None, contrast=_llm_docs())
     calibration = first["contrast"]["calibration"]
 
     low, high = calibration["auc_ci"]
@@ -839,7 +794,7 @@ def test_contrast_auc_has_a_document_bootstrap_interval() -> None:
     assert calibration["bootstrap"] == {"resamples": 2000, "unit": "document"}
     assert second["contrast"]["calibration"]["auc_ci"] == [low, high]
 
-    single = build_profile(_author_docs(), parser=None, contrast=_llm_docs()[:1])
+    single = build_reference(_author_docs(), parser=None, contrast=_llm_docs()[:1])
     assert single["contrast"]["calibration"]["auc_ci"] is None
     assert any("no confidence interval" in warning for warning in single["warnings"])
 
@@ -886,7 +841,7 @@ def test_length_baseline_detects_length_differences() -> None:
 
     reference = [Chunk(f"r{i}", "s", _words(30 + i)) for i in range(4)]
     long_drafts = [Chunk(f"l{i}", "s", GENERIC + " " + _words(200 + i)) for i in range(3)]
-    report = build_profile(
+    report = build_reference(
         reference, parser=None, contrast=long_drafts, contrast_label="Editor", min_words=1
     )
     length = report["contrast"]["calibration"]["length_baseline"]
@@ -898,7 +853,7 @@ def test_length_baseline_detects_length_differences() -> None:
     matched_drafts = [
         Chunk(f"m{i}", "s", _words(41 + 2 * i) + " Moreover, robust.") for i in range(4)
     ]
-    report = build_profile(reference, parser=None, contrast=matched_drafts, min_words=1)
+    report = build_reference(reference, parser=None, contrast=matched_drafts, min_words=1)
     assert report["contrast"]["calibration"]["length_baseline"]["auc"] == 0.5
     assert not any("differs strongly in length" in warning for warning in report["warnings"])
 
@@ -1015,7 +970,7 @@ def test_code_only_chunks_are_counted_after_windowing() -> None:
     chunks = [Chunk("code", "s", "```python\nx = 1\n```"), Chunk("text", "s", AUTHOR)]
     windows = window(chunks, 20)
     assert windows[0].id == "code#w1"
-    report = build_profile(windows, parser=None)
+    report = build_reference(windows, parser=None)
     assert any("skipped 1 chunk(s) with no prose" in warning for warning in report["warnings"])
 
 
@@ -1243,13 +1198,6 @@ def test_score_reports_cannot_be_used_as_references(
     assert main(["show", "empty.json"]) == 1
     assert capsys.readouterr().err.startswith("error: empty.json is not a style profile")
 
-    # Reports written before `kind` existed are recognized by their reference section.
-    legacy = json.loads(scored.read_text(encoding="utf-8"))
-    del legacy["kind"]
-    scored.write_text(json.dumps(legacy), encoding="utf-8")
-    with pytest.raises(StyleProfileError, match="is a score report"):
-        load_reference(scored)
-
 
 @pytest.mark.parametrize(
     ("arguments", "message"),
@@ -1258,7 +1206,6 @@ def test_score_reports_cannot_be_used_as_references(
         (["score", "{reference}", "{sample}"], "the reference profile goes last"),
         (["score", "{sample}", "-"], "must be a file"),
         (["score", "{sample}", "missing.json"], "missing.json not found; it goes last"),
-        (["score", "{sample}", "--reference", "{reference}"], "not --reference"),
         (["score", "{sample}", "{reference}", "-o", "{reference}"], "--output is the reference"),
         (["score", "-", "-", "{reference}"], "can be given only once"),
         (["build", "{sample}", "-o", "x.json", "--window-words", "-1"], "0 (no windowing)"),
@@ -1384,17 +1331,6 @@ def test_show_renders_saved_reports_without_recomputing(
     overall = next(line for line in live.splitlines() if line.startswith("Overall"))
     assert overall in shown
 
-    # A score report from before baselines were saved falls back to its reference file.
-    report = json.loads(scored.read_text(encoding="utf-8"))
-    del report["reference"]["baseline"]
-    scored.write_text(json.dumps(report), encoding="utf-8")
-    assert main(["show", str(scored)]) == 0
-    captured = capsys.readouterr()
-    assert overall in captured.out and "no saved copy of its reference" in captured.err
-    reference.unlink()
-    assert main(["show", str(scored)]) == 1
-    assert "score the sample again" in capsys.readouterr().err
-
 
 def test_show_renders_a_score_against_an_uncalibrated_reference(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1490,15 +1426,12 @@ def test_color_honors_no_color_and_force_color(
     assert cli._color() is expected
 
 
-def test_build_profile_wraps_build_reference_and_score() -> None:
-    from styleprofile import report_kind, score
+def test_reports_carry_their_kind_and_scores_a_baseline() -> None:
+    from styleprofile import report_kind
 
     reference = build_reference(_author_docs(), parser=None)
-    assert reference == build_profile(_author_docs(), parser=None)
     assert report_kind(reference) == "reference"
-    sample = [Chunk("g", "s", GENERIC)]
-    scored = score(sample, reference, parser=None)
-    assert scored == build_profile(sample, parser=None, reference=reference)
+    scored = score([Chunk("g", "s", GENERIC)], reference, parser=None)
     assert report_kind(scored) == "score"
     baseline = scored["reference"]["baseline"]
     assert baseline["summary"]["voice"]["contractions_per_1k"].keys() == {"mean", "sd"}
@@ -1590,22 +1523,6 @@ def test_a_missing_command_before_a_path_suggests_build_or_score(
     err = capsys.readouterr().err
     assert "draft.md is not a command; did you mean `styleprofile build draft.md" in err
     assert "`styleprofile score draft.md writer.json`?" in err
-
-
-def test_legacy_score_says_it_now_windows_like_the_reference(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    reference = _built(tmp_path)
-    output = tmp_path / "report.json"
-    capsys.readouterr()
-    sample = str(_sample(tmp_path))
-    assert (
-        main([sample, "--no-syntax", "--reference", str(reference), "--output", str(output)]) == 0
-    )
-    assert "the samples are split into windows the same size as the reference's" in (
-        capsys.readouterr().err
-    )
-    assert json.loads(output.read_text(encoding="utf-8"))["settings"]["window_words"] == 100
 
 
 def test_metrics_without_syntax_does_not_mention_spacy(

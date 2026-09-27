@@ -98,9 +98,6 @@ the metrics, the weighting math, the reliability checks and the resolution floor
 Keep corpora, drafts and generated profiles out of version control; the `.gitignore`
 excludes `profiles/`, `corpora/` and `data/`.
 
-The flat form of earlier releases (`styleprofile posts/ --output writer.json`, with
-`--reference` to score) still works in this release and prints the equivalent new command.
-
 ## Stress-testing LLM-likeness
 
 The contrast weights learn whatever separates the writer from the drafts they were given.

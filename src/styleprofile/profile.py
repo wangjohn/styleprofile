@@ -58,15 +58,15 @@ from styleprofile.weighting import (
 # 4: percentage floors use their true denominators (paragraphs, apostrophes), and list
 # continuations extend their item instead of counting as paragraphs.
 # 5: the contrast AUC has a document-bootstrap 95% interval and a length-only baseline.
-# Reports also carry ``kind`` ("reference" or "score"), and score reports a ``baseline`` copy
-# of what rendering needs from their reference. Both are additive, so they did not bump the
-# version: a version-5 reader ignores them, and ``report_kind`` infers the kind of reports
-# written before them.
+# Every report carries ``kind`` (see ``KINDS``), and score reports a ``baseline`` copy of what
+# rendering needs from their reference.
 VERSION = 5
 REFERENCE = "reference"
 SCORE = "score"
 # Written by ``styleprofile evaluate`` (see the evaluate module); shown, never scored against.
 EVALUATION = "evaluation"
+KINDS = (REFERENCE, SCORE, EVALUATION)
+UNREADABLE = "not a style profile this version of styleprofile can read; rebuild it"
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 # Directory walks skip dot-directories (.git, .venv) and these vendored ones.
@@ -386,13 +386,13 @@ def _mean_of(values: Sequence[float | None]) -> float | None:
 
 
 def report_kind(report: dict[str, Any]) -> str:
-    """``"reference"``, ``"score"`` or ``"evaluation"``. Reports written before ``kind``
-    existed are inferred: a report scored against a reference carries a ``reference``
-    section."""
+    """``"reference"``, ``"score"`` or ``"evaluation"``, from the report's ``kind``."""
     kind = report.get("kind")
-    if kind in (REFERENCE, SCORE, EVALUATION):
-        return kind
-    return SCORE if isinstance(report.get("reference"), dict) else REFERENCE
+    if kind not in KINDS:
+        raise StyleProfileError(
+            f"the report has no known kind, so it is {UNREADABLE}", code="outdated"
+        )
+    return kind
 
 
 def load_report(path: Path) -> dict[str, Any]:
@@ -405,9 +405,12 @@ def load_report(path: Path) -> dict[str, Any]:
         report = json.loads(_read_text(path))
     except (json.JSONDecodeError, StyleProfileError):
         report = None
-    evaluation = isinstance(report, dict) and report.get("kind") == EVALUATION
-    if not isinstance(report, dict) or ("summary" not in report and not evaluation):
+    if not isinstance(report, dict) or ("summary" not in report and "kind" not in report):
         raise StyleProfileError(f"{path} is not a style profile", code="not_a_profile")
+    kind = report.get("kind")
+    if kind not in KINDS or (kind != EVALUATION and "summary" not in report):
+        # A pre-release report without ``kind``, or a kind this version does not know.
+        raise StyleProfileError(f"{path} is {UNREADABLE}", code="outdated")
     return report
 
 
@@ -854,47 +857,6 @@ def score(
         "baseline": _baseline(reference),
     }
     return report
-
-
-def build_profile(
-    chunks: Sequence[Chunk],
-    *,
-    parser: Parser | None,
-    top_k: int = 300,
-    min_words: int = 1,
-    reference: dict[str, Any] | None = None,
-    reference_path: Path | None = None,
-    settings: dict[str, Any] | None = None,
-    contrast: Sequence[Chunk] | None = None,
-    contrast_label: str = "LLM",
-) -> dict[str, Any]:
-    """Compatibility wrapper: ``score`` against ``reference`` when one is given, otherwise
-    ``build_reference``."""
-    if reference is None:
-        return build_reference(
-            chunks,
-            parser=parser,
-            top_k=top_k,
-            min_words=min_words,
-            settings=settings,
-            contrast=contrast,
-            contrast_label=contrast_label,
-        )
-    if contrast is not None:
-        raise StyleProfileError(
-            "a contrast set builds a reference profile; score samples against that reference "
-            "separately",
-            code="contrast_with_reference",
-        )
-    return score(
-        chunks,
-        reference,
-        parser=parser,
-        top_k=top_k,
-        min_words=min_words,
-        settings=settings,
-        reference_path=reference_path,
-    )
 
 
 def dumps_report(report: dict[str, Any]) -> str:
