@@ -11,8 +11,13 @@ from typing import Any
 
 import pytest
 
-from styleprofile import format_summary
-from styleprofile.display import BAR_SCALE, BAR_WIDTH, LABEL_WIDTH, format_evaluation
+from styleprofile.display import (
+    BAR_SCALE,
+    BAR_WIDTH,
+    LABEL_WIDTH,
+    format_evaluation,
+    format_summary,
+)
 from styleprofile.metrics import METRICS
 from styleprofile.profile import write_report
 

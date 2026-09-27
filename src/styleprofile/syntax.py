@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
+from styleprofile.core import StyleProfileError
 from styleprofile.metrics import grouped
 from styleprofile.surface import Metrics
 
@@ -25,8 +26,11 @@ _NOMINALIZATION = re.compile(r"(?:tion|sion|ment|ness|ity|ance|ence)s?$")
 _MIN_SENTENCE_WORDS = 3
 
 
-class SyntaxUnavailableError(ValueError):
+class SyntaxUnavailableError(StyleProfileError):
     """spaCy or its English model is not installed."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="syntax_unavailable")
 
 
 @dataclass(frozen=True)

@@ -5,8 +5,8 @@ Delta, and, given contrast drafts, learn which habits separate the writer from L
 Only the standard library is required; spaCy adds parser-based syntax metrics.
 
 ``build``, ``Profile.score`` and ``evaluate`` run the same pipeline as the command line; see
-``docs/library.md``. ``build_reference`` and ``score`` are the lower-level steps under them,
-taking chunks exactly as given.
+``docs/library.md``. The lower-level steps under them, which take chunks exactly as given,
+are in ``styleprofile.profile`` (``build_reference``, ``score``).
 """
 
 from importlib.metadata import PackageNotFoundError
@@ -15,29 +15,23 @@ from importlib.metadata import version as _version
 from styleprofile.api import (
     Evaluation,
     Profile,
-    Progress,
     ScoreResult,
     Settings,
     Text,
     build,
     evaluate,
 )
-from styleprofile.display import format_summary
-from styleprofile.profile import (
-    Chunk,
+from styleprofile.core import (
+    LikenessVerdict,
     Note,
+    NoteCode,
+    Phase,
+    Progress,
     StyleProfileError,
-    build_reference,
-    load_chunks,
-    load_reference,
-    load_report,
-    report_kind,
-    score,
-    window,
-    write_report,
+    Verdict,
 )
-from styleprofile.surface import surface_metrics
-from styleprofile.syntax import SyntaxUnavailableError, load_parser
+from styleprofile.profile import Chunk
+from styleprofile.syntax import SyntaxUnavailableError
 
 try:
     __version__ = _version("styleprofile")
@@ -47,7 +41,10 @@ except PackageNotFoundError:  # running from a source tree that was never instal
 __all__ = [
     "Chunk",
     "Evaluation",
+    "LikenessVerdict",
     "Note",
+    "NoteCode",
+    "Phase",
     "Profile",
     "Progress",
     "ScoreResult",
@@ -55,18 +52,8 @@ __all__ = [
     "StyleProfileError",
     "SyntaxUnavailableError",
     "Text",
+    "Verdict",
     "__version__",
     "build",
-    "build_reference",
     "evaluate",
-    "format_summary",
-    "load_chunks",
-    "load_parser",
-    "load_reference",
-    "load_report",
-    "report_kind",
-    "score",
-    "surface_metrics",
-    "window",
-    "write_report",
 ]

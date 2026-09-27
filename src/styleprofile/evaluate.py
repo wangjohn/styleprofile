@@ -332,7 +332,7 @@ def evaluate_rewording(
             **(settings or {}),
             "min_words": min_words,
             "retrain": retrain,
-            "syntax": profile["settings"]["syntax"],
+            "syntax_used": profile["settings"]["syntax_used"],
         },
         "label": label,
         "reference": {

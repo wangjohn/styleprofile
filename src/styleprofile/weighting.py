@@ -29,6 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from styleprofile.core import LIKENESSES
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
 from styleprofile.surface import Metrics
 
@@ -522,12 +523,8 @@ def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) ->
 
 
 def likeness_words(level: int, label: str) -> str:
-    return (
-        "like the reference",
-        f"a few {label} traits",
-        f"leans {label}",
-        f"like the {label} drafts",
-    )[level]
+    """A likeness level (see ``likeness_level``) in words naming the contrast set."""
+    return LIKENESSES[level].words(label)
 
 
 def flatten(nested: Mapping[str, Mapping[str, float]]) -> dict[Key, float]:

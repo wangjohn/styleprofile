@@ -8,14 +8,14 @@ and only adds flags and output, so the two cannot give different numbers::
     import styleprofile as sp
     from pathlib import Path
 
-    profile = sp.build([Path("posts/")], contrast=[Path("llm-drafts/")])
+    profile = sp.build(Path("posts/"), contrast=Path("llm-drafts/"))
     result = profile.score(sp.Text("A draft to check against the writer."))
     print(result.verdict, result.delta)
 
 Inputs are paths (``str`` or ``Path``: files, folders, or ``"-"`` for stdin), ``Text`` for
 raw text, or ``Chunk`` objects, alone or in a list. A ``str`` is always a path, as on the
 command line. Nothing here prints: what a front end should mention comes back as ``notes``,
-and problems raise ``StyleProfileError`` with a ``code``.
+and problems raise ``StyleProfileError`` with a ``code`` (and the notes collected so far).
 
 The lower-level ``build_reference`` and ``score`` in ``styleprofile.profile`` take chunks
 exactly as given; use them to control windowing and parsing yourself.
@@ -23,6 +23,7 @@ exactly as given; use them to control windowing and parsing yourself.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -32,6 +33,16 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
+from styleprofile.core import (
+    LIKENESSES,
+    LikenessVerdict,
+    Note,
+    NoteCode,
+    Phase,
+    Progress,
+    StyleProfileError,
+    Verdict,
+)
 from styleprofile.display import (
     describe_delta,
     format_evaluation,
@@ -44,9 +55,8 @@ from styleprofile.profile import (
     REFERENCE,
     TEXT_FIELDS,
     Chunk,
-    Note,
-    StyleProfileError,
     build_reference,
+    document_of,
     dumps_report,
     load_chunks,
     load_reference,
@@ -56,7 +66,7 @@ from styleprofile.profile import (
     write_report,
 )
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
-from styleprofile.weighting import likeness_level, likeness_words
+from styleprofile.weighting import likeness_level
 
 AUTO = "auto"
 DEFAULT_WINDOW_WORDS = 500
@@ -64,14 +74,10 @@ DEFAULT_TOP_K = 300
 # How inputs are read. Only format detection by file extension exists so far.
 INPUT_FORMATS = (AUTO,)
 SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
-
-# Coarse phases passed to a ``progress`` callback, in the order a run reaches them.
-READ = "read"
-LOAD_PARSER = "load_parser"
-BUILD = "build"
-SCORE = "score"
-EVALUATE = "evaluate"
-DONE = "done"
+# A reference below these is usable but thin; ``build`` notes why and how to fix it.
+ENOUGH_DOCUMENTS = 2
+ENOUGH_CHUNKS = 15
+ENOUGH_WORDS = 20_000
 
 
 @dataclass(frozen=True)
@@ -79,7 +85,8 @@ class Text:
     """Raw text to profile or score, as opposed to a path to read it from.
 
     ``name`` identifies it in reports (as a file name does) and pairs an edited text with
-    its original in ``evaluate``; by default it is ``text1``, ``text2``, ... by position.
+    its original in ``evaluate``. Unnamed texts are ``text1``, ``text2``, ... in order,
+    skipping names other texts already have; two texts with one name are an error.
     """
 
     text: str
@@ -88,25 +95,13 @@ class Text:
 
 Input = str | os.PathLike[str] | Text | Chunk
 Inputs = Input | Iterable[Input]
-
-
-@dataclass(frozen=True)
-class Progress:
-    """Where a run is: its ``phase`` (``READ``, ``LOAD_PARSER``, ``BUILD``, ``SCORE``,
-    ``EVALUATE`` or ``DONE``) and, when a phase counts its work, how much of it is done."""
-
-    phase: str
-    done: int | None = None
-    total: int | None = None
-
-
 ProgressCallback = Callable[[Progress], None]
 
 
 @dataclass(frozen=True)
 class Settings:
-    """How texts are read and cut into chunks. ``build`` records them in the profile, and
-    ``Profile.score`` inherits them unless overridden.
+    """How texts are read and cut into chunks. ``build`` records them in the profile
+    verbatim (``to_report``), and ``Profile.score`` inherits them unless overridden.
 
     - ``window_words``: split texts into windows of about this many prose words at
       paragraph breaks; 0 profiles each text whole.
@@ -114,9 +109,13 @@ class Settings:
     - ``text_field``: the JSONL field that holds the text; by default the first of
       ``TEXT_FIELDS`` a record has.
     - ``syntax``: ``True`` needs spaCy for the syntax metrics, ``False`` leaves them out, and
-      ``"auto"`` uses spaCy when it is installed and adds a note when it is not.
-    - ``top_k``: distribution entries kept in a profile.
+      ``"auto"`` uses spaCy when it is installed and adds a note when it is not. A report
+      records this as asked, and what was used as ``syntax_used``.
+    - ``top_k``: distribution entries kept in a report.
     - ``input_format``: how inputs are read; ``"auto"`` goes by file extension.
+
+    A new setting is one field here: recording, reading back, inheriting and overriding
+    all go through the fields.
     """
 
     window_words: int = DEFAULT_WINDOW_WORDS
@@ -127,34 +126,54 @@ class Settings:
     input_format: str = AUTO
 
     def __post_init__(self) -> None:
-        # Messages about a setting start with its name, so a front end can name its own
-        # option instead (the CLI swaps in the flag).
-        if self.window_words < 0:
-            raise StyleProfileError(
-                "window_words must be 0 (no windowing) or positive", code="window_words"
+        _count(self, "window_words", 0, "must be 0 (no windowing) or positive")
+        _count(self, "min_words", 0, "must be 0 or more")
+        _count(self, "top_k", 1, "must be positive")
+        if not (self.text_field is None or (isinstance(self.text_field, str) and self.text_field)):
+            _invalid(
+                "text_field", f"text_field must be a field name or None, not {self.text_field!r}"
             )
-        if self.min_words < 0:
-            raise StyleProfileError("min_words must be 0 or more", code="min_words")
-        if self.top_k < 1:
-            raise StyleProfileError("top_k must be positive", code="top_k")
-        if self.syntax not in (AUTO, True, False):
-            raise StyleProfileError(
-                f"syntax must be True, False or {AUTO!r}, not {self.syntax!r}", code="syntax"
-            )
+        if not (type(self.syntax) is bool or self.syntax == AUTO):
+            _invalid("syntax", f"syntax must be True, False or {AUTO!r}, not {self.syntax!r}")
         if self.input_format not in INPUT_FORMATS:
-            raise StyleProfileError(
-                f"input_format {self.input_format!r} is not supported; use "
-                + ", ".join(repr(name) for name in INPUT_FORMATS),
-                code="input_format",
+            choices = ", ".join(repr(name) for name in INPUT_FORMATS)
+            _invalid(
+                "input_format",
+                f"input_format {self.input_format!r} is not supported; use {choices}",
             )
+
+    def to_report(self) -> dict[str, Any]:
+        """The settings as a report records them: every field, verbatim."""
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_report(cls, recorded: Mapping[str, Any]) -> Settings:
+        """Settings read back from a report's ``settings``. A field the report lacks (it was
+        made with the lower-level functions, say) takes its default; other keys (``inputs``,
+        ``syntax_used``) are ignored."""
+        names = {field.name for field in dataclasses.fields(cls)}
+        return cls(**{name: value for name, value in recorded.items() if name in names})
+
+
+def _invalid(name: str, message: str) -> None:
+    raise StyleProfileError(message, code="invalid_setting", setting=name)
+
+
+def _count(settings: Settings, name: str, minimum: int, rule: str) -> None:
+    """Check an int setting (not a bool or a string of digits) is at least ``minimum``."""
+    value = getattr(settings, name)
+    if type(value) is not int:
+        _invalid(name, f"{name} {rule}, not {value!r}")
+    elif value < minimum:
+        _invalid(name, f"{name} {rule}")
 
 
 DEFAULTS = Settings()
 
 
 class _Result:
-    """What every result wraps: its report dict (``report``, the saved JSON), and what the
-    run noted and read, which are not saved."""
+    """What every result wraps: its report dict, plus what the run noted and read, which are
+    not saved."""
 
     def __init__(
         self, report: dict[str, Any], *, notes: Sequence[Note] = (), sources: Sequence[str] = ()
@@ -169,7 +188,8 @@ class _Result:
 
     @property
     def report(self) -> dict[str, Any]:
-        """The full report, as saved."""
+        """The full report, as saved. This is the live dict, not a copy: changing it changes
+        what the other properties return."""
         return self._report
 
     @property
@@ -185,9 +205,9 @@ class _Result:
         return self._sources
 
     @property
-    def warnings(self) -> list[str]:
+    def warnings(self) -> tuple[str, ...]:
         """Why the result may be unreliable, as saved in the report."""
-        return self._report["warnings"]
+        return tuple(self._report["warnings"])
 
 
 class Profile(_Result):
@@ -216,8 +236,8 @@ class Profile(_Result):
         return cls(load_reference(Path(path).expanduser()), path=path)
 
     def save(self, path: str | os.PathLike[str]) -> None:
-        """Write the profile as JSON; scores made after this record ``path`` as their
-        reference."""
+        """Write the profile as JSON. This also sets ``path`` in place, so scores made
+        afterwards record it as their reference."""
         self._path = _resolved(path)
         write_report(self._report, self._path)
 
@@ -228,15 +248,13 @@ class Profile(_Result):
 
     @property
     def settings(self) -> Settings:
-        """The settings it was built with, which ``score`` inherits."""
-        recorded = self._report.get("settings") or {}
-        return Settings(
-            window_words=recorded.get("window_words") or 0,
-            min_words=recorded.get("min_words") or 1,
-            text_field=recorded.get("text_field"),
-            syntax=recorded.get("syntax") is not None,
-            top_k=recorded.get("top_k") or DEFAULT_TOP_K,
-        )
+        """The settings it was built with, as recorded."""
+        return Settings.from_report(self._report.get("settings") or {})
+
+    @property
+    def has_syntax(self) -> bool:
+        """Whether the profile has syntax metrics (spaCy was used to build it)."""
+        return (self._report.get("settings") or {}).get("syntax_used") is not None
 
     def to_text(self, *, full: bool = False, color: bool = False) -> str:
         """The summary ``styleprofile build`` prints; ``full`` adds every metric."""
@@ -245,85 +263,82 @@ class Profile(_Result):
     def score(
         self,
         inputs: Inputs,
+        settings: Settings | None = None,
         *,
-        window_words: int | None = None,
-        min_words: int | None = None,
-        text_field: str | None = None,
-        syntax: Literal["auto"] | bool | None = None,
-        input_format: str = AUTO,
         progress: ProgressCallback | None = None,
+        **overrides: Any,
     ) -> ScoreResult:
         """Score drafts against this profile.
 
-        Window size, minimum words, text field, syntax and ``top_k`` come from the profile;
-        a keyword given here overrides it (``window_words=0`` turns windowing off). A
-        different window size or syntax setting is warned about in the report, since
-        z-scores assume chunks like the reference's. ``input_format`` is not inherited:
-        drafts are often in another format than the writer's corpus.
+        By default the settings are the profile's, except that syntax is used (``"auto"``)
+        only when the profile has it, and ``input_format`` is ``"auto"``: drafts are often
+        in another format than the writer's corpus. ``settings`` replaces them, and keyword
+        ``overrides`` (``window_words=0``, ``min_words=5``) change single fields.
+
+        A window size or syntax setting unlike the profile's is warned about in the report,
+        since z-scores assume chunks like the reference's; another ``min_words`` gets a
+        note. A ``text_field`` given here is the only one read; the profile's is tried
+        first, then the defaults.
         """
         notes: list[Note] = []
         with _notes_on_error(notes):
-            inherited = self.settings
-            if syntax is None:
-                syntax = AUTO if inherited.syntax else False
-            settings = Settings(
-                window_words=inherited.window_words if window_words is None else window_words,
-                min_words=inherited.min_words if min_words is None else min_words,
-                text_field=text_field or inherited.text_field,
-                syntax=syntax,
-                top_k=inherited.top_k,
-                input_format=input_format,
-            )
-            if settings.min_words != inherited.min_words:
+            base = settings
+            if base is None:
+                base = dataclasses.replace(
+                    self.settings, syntax=AUTO if self.has_syntax else False, input_format=AUTO
+                )
+            try:
+                chosen = dataclasses.replace(base, **overrides)
+            except TypeError:
+                unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
+                raise TypeError(f"unknown setting(s): {', '.join(unknown)}") from None
+            recorded = self.settings
+            if chosen.min_words != recorded.min_words:
                 notes.append(
                     Note(
-                        f"min_words {settings.min_words} overrides the reference's "
-                        f"{inherited.min_words}",
-                        "min_words",
+                        f"min_words {chosen.min_words} overrides the reference's "
+                        f"{recorded.min_words}",
+                        NoteCode.SETTING_OVERRIDDEN,
+                        setting="min_words",
                     )
                 )
-            # An explicit text field is the only one read; the reference's is tried first.
-            fields: str | tuple[str, ...] | None = text_field
-            if not text_field and inherited.text_field:
+            given = overrides.get("text_field") or (settings.text_field if settings else None)
+            fields: str | tuple[str, ...] | None = given
+            if not given and chosen.text_field:
                 fields = (
-                    inherited.text_field,
-                    *(name for name in TEXT_FIELDS if name != inherited.text_field),
+                    chosen.text_field,
+                    *(name for name in TEXT_FIELDS if name != chosen.text_field),
                 )
             step = _progress(progress)
+            step(Phase.READ)
             items = _items(inputs)
             _stdin_once(items)
+            chunks = _read(items, fields, set(), notes, "<text>")
             parser = _parser(
-                settings.syntax,
+                chosen.syntax,
                 notes,
                 (
-                    "the reference has syntax metrics but spaCy is not installed, so syntax is "
-                    f"left out of this score; {SYNTAX_INSTALL} to include it"
+                    "the reference has syntax metrics but spaCy is not installed, so syntax "
+                    f"is left out of this score; {SYNTAX_INSTALL} to include it"
                 )
-                if inherited.syntax
+                if self.has_syntax
                 else (
                     "spaCy is not installed, so this score has surface metrics only; "
                     f"{SYNTAX_INSTALL} to include syntax"
                 ),
                 step,
             )
-            step(READ)
-            chunks = _read(items, fields, set(), notes, "<text>")
-            step(SCORE)
+            step(Phase.SCORE)
             report = score(
-                _windowed(chunks, settings.window_words),
+                _windowed(chunks, chosen.window_words),
                 self._report,
                 parser=parser,
-                top_k=settings.top_k,
-                min_words=settings.min_words,
+                top_k=chosen.top_k,
+                min_words=chosen.min_words,
                 reference_path=self._path,
-                settings={
-                    "inputs": _described(inputs, items),
-                    "text_field": settings.text_field,
-                    "window_words": settings.window_words or None,
-                    "min_words": settings.min_words,
-                },
+                settings={"inputs": _described(items), **chosen.to_report()},
             )
-            step(DONE)
+            step(Phase.DONE)
             return ScoreResult(
                 report, self._report, notes=notes, sources=[chunk.source for chunk in chunks]
             )
@@ -337,7 +352,12 @@ class Profile(_Result):
 
 
 class ScoreResult(_Result):
-    """Drafts scored against a profile: what ``styleprofile score`` prints and saves."""
+    """Drafts scored against a profile: what ``styleprofile score`` prints and saves.
+
+    ``delta``, ``verdict`` and the likeness figures are pooled over every chunk of every
+    input, so scoring several documents at once gives one figure for all of them;
+    per-document results arrive with plan PR 7. ``report["chunks"]`` has each chunk's own.
+    """
 
     def __init__(
         self,
@@ -362,11 +382,11 @@ class ScoreResult(_Result):
         return self._report["reference"]["delta_mean"]
 
     @property
-    def verdict(self) -> str | None:
-        """Delta in words against the writer's held-out range: ``close``, ``somewhat
-        different``, ``clearly different`` or ``very different``."""
+    def verdict(self) -> Verdict:
+        """Delta in words against the writer's held-out range, as the CLI prints it, or
+        ``Verdict.NOT_COMPARABLE`` when no metric could be compared."""
         if self.delta is None:
-            return None
+            return Verdict.NOT_COMPARABLE
         held = (self._reference.get("calibration") or {}).get("delta") or {}
         return describe_delta(self.delta, mean_ceiling(held, self.chunk_count))
 
@@ -382,13 +402,13 @@ class ScoreResult(_Result):
         return self._report["reference"].get("likeness_mean")
 
     @property
-    def likeness_verdict(self) -> str | None:
-        """Likeness in words, such as ``like the reference`` or ``leans LLM``."""
+    def likeness_verdict(self) -> LikenessVerdict | None:
+        """Likeness in words, or None without a contrast set. ``.words(contrast_label)``
+        gives the CLI's wording, such as ``leans LLM``."""
         contrast = self._reference.get("contrast")
         if not contrast or self.likeness is None:
             return None
-        level = likeness_level(self.likeness, contrast["calibration"], self.chunk_count)
-        return likeness_words(level, contrast["label"])
+        return LIKENESSES[likeness_level(self.likeness, contrast["calibration"], self.chunk_count)]
 
     def to_text(self, *, full: bool = False, color: bool = False) -> str:
         """The comparison ``styleprofile score`` prints; ``full`` shows every metric."""
@@ -396,7 +416,7 @@ class ScoreResult(_Result):
 
     def __repr__(self) -> str:
         if self.delta is None:
-            return f"<ScoreResult: {self.chunk_count} chunks, nothing compared>"
+            return f"<ScoreResult: {self.verdict}>"
         return f"<ScoreResult: {self.verdict} (Delta {self.delta:.2f})>"
 
 
@@ -420,12 +440,13 @@ def build(
 
     Given ``contrast`` texts (LLM drafts of the same briefs, say), the profile also learns
     what separates the writer from them and scores likeness to them. A file or folder given
-    twice, in ``inputs`` or ``contrast``, is read once, with a note.
+    twice, in ``inputs`` or ``contrast``, is read once, with a note. A reference too small
+    to trust gets one ``NoteCode.THIN_REFERENCE`` note per reason.
     """
     notes: list[Note] = []
     with _notes_on_error(notes):
         step = _progress(progress)
-        step(READ)
+        step(Phase.READ)
         items = _items(inputs)
         contrast_items = _items(contrast) if contrast is not None else None
         _stdin_once([*items, *(contrast_items or [])])
@@ -443,7 +464,7 @@ def build(
             f"metrics, {SYNTAX_INSTALL} and build again",
             step,
         )
-        step(BUILD)
+        step(Phase.BUILD)
         report = build_reference(
             _windowed(chunks, settings.window_words),
             parser=parser,
@@ -456,18 +477,13 @@ def build(
             ),
             contrast_label=contrast_label,
             settings={
-                "inputs": _described(inputs, items),
-                "text_field": settings.text_field,
-                "window_words": settings.window_words or None,
-                "min_words": settings.min_words,
-                "contrast": (
-                    _described(contrast, contrast_items)
-                    if contrast is not None and contrast_items is not None
-                    else None
-                ),
+                "inputs": _described(items),
+                "contrast": _described(contrast_items) if contrast_items is not None else None,
+                **settings.to_report(),
             },
         )
-        step(DONE)
+        notes += _thin_reference(report, settings)
+        step(Phase.DONE)
         sources = [chunk.source for chunk in [*chunks, *(contrast_chunks or [])]]
         # Keep the profile exactly as it is saved (floats rounded), so scoring it before or
         # after a save and load gives the same numbers.
@@ -492,10 +508,11 @@ def evaluate(
     notes: list[Note] = []
     with _notes_on_error(notes):
         step = _progress(progress)
-        step(READ)
+        step(Phase.READ)
         items, contrast_items = _items(inputs), _items(contrast)
         edited_items = {label: _items(value) for label, value in edited.items()}
-        _stdin_once([*items, *contrast_items, *(item for v in edited_items.values() for item in v)])
+        every = [*items, *contrast_items, *(item for v in edited_items.values() for item in v)]
+        _stdin_once(every)
         seen: set[str] = set()
         reference_chunks = _read(items, settings.text_field, seen, notes, "<text>")
         contrast_chunks = _read(contrast_items, settings.text_field, seen, notes, "<contrast>")
@@ -504,15 +521,13 @@ def evaluate(
             edited_chunks[label] = _read(value, settings.text_field, set(), notes, f"<{label}>")
             overlap = {chunk.source for chunk in edited_chunks[label]} & seen
             if overlap:
-                where = _described(edited[label], value)
-                where = where if isinstance(where, str) else ", ".join(where)
                 count = len(overlap)
                 notes.append(
                     Note(
-                        f"{label}: {count:,} file{'' if count == 1 else 's'} in {where} are also "
-                        "given as the writer's texts or the original drafts, so that set is not "
-                        "an edit of them",
-                        "edited_overlap",
+                        f"{label}: {count:,} file{'' if count == 1 else 's'} in "
+                        f"{', '.join(_described(value))} are also given as the writer's "
+                        "texts or the original drafts, so that set is not an edit of them",
+                        NoteCode.EDITED_OVERLAP,
                     )
                 )
         parser = _parser(
@@ -522,7 +537,7 @@ def evaluate(
             f"{SYNTAX_INSTALL} and run again",
             step,
         )
-        step(EVALUATE)
+        step(Phase.EVALUATE)
         report = evaluate_rewording(
             _windowed(reference_chunks, settings.window_words),
             _windowed(contrast_chunks, settings.window_words),
@@ -535,64 +550,106 @@ def evaluate(
             contrast_label=contrast_label,
             retrain=retrain,
             settings={
-                "inputs": _described(inputs, items),
-                "contrast": _described(contrast, contrast_items),
-                "edited": {
-                    label: _described(edited[label], value) for label, value in edited_items.items()
-                },
-                "text_field": settings.text_field,
-                "window_words": settings.window_words or None,
+                "inputs": _described(items),
+                "contrast": _described(contrast_items),
+                "edited": {label: _described(value) for label, value in edited_items.items()},
+                **settings.to_report(),
             },
         )
-        step(DONE)
-        loaded = [
-            *reference_chunks,
-            *contrast_chunks,
-            *(c for v in edited_chunks.values() for c in v),
-        ]
+        step(Phase.DONE)
+        loaded = [*reference_chunks, *contrast_chunks]
+        loaded += [chunk for chunks in edited_chunks.values() for chunk in chunks]
         return Evaluation(report, notes=notes, sources=[chunk.source for chunk in loaded])
 
 
 @contextmanager
 def _notes_on_error(notes: list[Note]) -> Iterator[None]:
-    """Attach the notes a run collected to a ``StyleProfileError`` it raises, so a front end
-    can still show them (a skipped file often explains the error)."""
+    """Give an error raised during a run the notes collected before it, so a front end can
+    still show them (a skipped file often explains the error). An ``OSError`` becomes a
+    ``StyleProfileError`` (code ``unreadable``) with the original as its cause."""
     try:
         yield
     except StyleProfileError as error:
-        error.notes[:0] = notes
+        error.notes = (*notes, *error.notes)
         raise
+    except OSError as error:
+        wrapped = StyleProfileError(str(error), code="unreadable")
+        wrapped.notes = tuple(notes)
+        raise wrapped from error
+
+
+def _thin_reference(report: dict[str, Any], settings: Settings) -> list[Note]:
+    """Why a reference may be too small to trust, each with its fix."""
+    documents = len({document_of(row["source"], row["id"]) for row in report["chunks"]})
+    thin: list[Note] = []
+
+    def note(message: str, setting: str | None = None) -> None:
+        thin.append(Note(message, NoteCode.THIN_REFERENCE, setting=setting))
+
+    if documents < ENOUGH_DOCUMENTS:
+        note(
+            f"it comes from {_plural(documents, 'document')}, so it has no held-out "
+            "calibration and cannot learn a contrast; add more of the writer's documents"
+        )
+    if report["chunk_count"] < ENOUGH_CHUNKS:
+        smaller = (
+            "a smaller window_words"
+            if settings.window_words
+            else f"window_words {DEFAULT_WINDOW_WORDS}"
+        )
+        note(
+            f"it has {_plural(report['chunk_count'], 'chunk')}; aim for {ENOUGH_CHUNKS} or "
+            f"more by adding documents or using {smaller}",
+            "window_words",
+        )
+    if report["word_count"] < ENOUGH_WORDS:
+        note(
+            f"it has {_plural(report['word_count'], 'word')}; aim for {ENOUGH_WORDS:,} or "
+            "more of the writer's text, in one genre"
+        )
+    return thin
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count:,} {word}" + ("" if count == 1 else "s")
 
 
 def _resolved(path: str | os.PathLike[str]) -> Path:
     return Path(path).expanduser().resolve()
 
 
-def _progress(callback: ProgressCallback | None) -> Callable[[str], None]:
-    def step(phase: str) -> None:
+def _progress(callback: ProgressCallback | None) -> Callable[[Phase], None]:
+    def step(phase: Phase) -> None:
         if callback is not None:
             callback(Progress(phase))
 
     return step
 
 
+def _is_input(value: object) -> bool:
+    return isinstance(value, str | os.PathLike | Text | Chunk)
+
+
 def _items(inputs: Inputs) -> list[Input]:
     """One input or several, as a list; refuses anything that is not an input."""
+    if isinstance(inputs, bytes | bytearray):
+        raise TypeError(
+            "bytes are not an input: pass a path as str or Path, or decoded text as Text(...)"
+        )
     if isinstance(inputs, str | os.PathLike | Text | Chunk):
         return [inputs]
     items = list(inputs)
     for item in items:
-        if not isinstance(item, str | os.PathLike | Text | Chunk):
+        if not _is_input(item):
             raise TypeError(
                 f"expected a path (str or Path), Text or Chunk, not {type(item).__name__}"
             )
     return items
 
 
-def _described(inputs: Inputs, items: Sequence[Input]) -> str | list[str]:
+def _described(items: Sequence[Input]) -> list[str]:
     """How inputs are recorded in a report's settings: paths as given, texts and chunks by
-    name; one input as a string, several as a list. ``items`` is ``_items(inputs)``, since
-    an iterator of inputs can be read only once."""
+    name."""
 
     def name(item: Input) -> str:
         if isinstance(item, Text):
@@ -601,14 +658,12 @@ def _described(inputs: Inputs, items: Sequence[Input]) -> str | list[str]:
             return item.id
         return os.fspath(item)
 
-    if isinstance(inputs, str | os.PathLike | Text | Chunk):
-        return name(inputs)
     return [name(item) for item in items]
 
 
 def _stdin_once(items: Sequence[Input]) -> None:
     if sum(isinstance(item, str | os.PathLike) and os.fspath(item) == "-" for item in items) > 1:
-        raise StyleProfileError("- (stdin) can be given only once")
+        raise StyleProfileError("- (stdin) can be given only once", code="stdin_twice")
 
 
 def _exists(value: str) -> bool:
@@ -619,14 +674,44 @@ def _exists(value: str) -> bool:
 
 
 def _missing(value: str) -> StyleProfileError:
-    if "\n" in value or len(value) > 255:
-        shown = value.strip().split("\n")[0][:40]
-        return StyleProfileError(
-            f"{shown!r}... is not a file or folder: a str input is a path, so pass raw text "
-            "as Text(...)",
-            code="input_not_found",
-        )
-    return StyleProfileError(f"{value} not found", code="input_not_found")
+    """An error for a path that does not exist, pointing to ``Text`` when the value reads
+    like text: it has whitespace, or no folder separator and no file suffix."""
+    path = Path(value)
+    looks_like_text = any(char.isspace() for char in value) or (
+        os.sep not in value and "/" not in value and not path.suffix
+    )
+    if not looks_like_text:
+        return StyleProfileError(f"{value} not found", code="input_not_found")
+    shown = value.strip().split("\n")[0]
+    shown = shown if len(shown) <= 40 else shown[:40] + "..."
+    return StyleProfileError(
+        f"{shown!r} not found; a str input is a path, so pass raw text as Text(...)",
+        code="input_not_found",
+    )
+
+
+def _text_chunks(texts: Sequence[Text], role: str) -> Iterator[Chunk]:
+    """Chunks for ``Text`` inputs in one role, named as ``Text`` says."""
+    taken: set[str] = set()
+    for text in texts:
+        if text.name is None:
+            continue
+        if text.name in taken:
+            raise StyleProfileError(
+                f"two texts are named {text.name!r}, so they would be read as one document; "
+                "give each Text a distinct name",
+                code="duplicate_names",
+            )
+        taken.add(text.name)
+    number = 0
+    for text in texts:
+        name = text.name
+        if name is None:
+            number += 1
+            while f"text{number}" in taken:
+                number += 1
+            name = f"text{number}"
+        yield Chunk(name, role, text.text)
 
 
 def _read(
@@ -636,18 +721,17 @@ def _read(
     notes: list[Note],
     role: str,
 ) -> list[Chunk]:
-    """Chunks from each input, skipping files an earlier path (tracked in ``seen``) already
-    gave. ``Text`` inputs get ``role`` as their source, so texts in different roles
-    (writer, contrast) are never the same document."""
+    """Chunks from each input, in order, skipping files an earlier path (tracked in
+    ``seen``) already gave. ``Text`` inputs get ``role`` as their source, so texts in
+    different roles (writer, contrast) are never the same document."""
+    texts = iter(_text_chunks([item for item in items if isinstance(item, Text)], role))
     chunks: list[Chunk] = []
-    texts = 0
     for item in items:
         if isinstance(item, Chunk):
             chunks.append(item)
             continue
         if isinstance(item, Text):
-            texts += 1
-            chunks.append(Chunk(item.name or f"text{texts}", role, item.text))
+            chunks.append(next(texts))
             continue
         value = os.fspath(item)
         if value != "-" and not _exists(value):
@@ -656,13 +740,12 @@ def _read(
         sources = {chunk.source for chunk in loaded if value != "-"}
         repeated = sources & seen
         if repeated and repeated == sources:
-            notes.append(Note(f"{value} was already given; using it once", "repeated_input"))
+            notes.append(Note(f"{value} was already given; using it once", NoteCode.REPEATED_INPUT))
         elif repeated:
-            count = len(repeated)
             notes.append(
                 Note(
-                    f"skipping {count:,} file{'' if count == 1 else 's'} in {value} already given",
-                    "repeated_input",
+                    f"skipping {_plural(len(repeated), 'file')} in {value} already given",
+                    NoteCode.REPEATED_INPUT,
                 )
             )
         chunks += [chunk for chunk in loaded if chunk.source not in repeated]
@@ -684,16 +767,16 @@ def _parser(
     syntax: Literal["auto"] | bool,
     notes: list[Note],
     missing: str,
-    step: Callable[[str], None],
+    step: Callable[[Phase], None],
 ) -> Parser | None:
     """The parser ``syntax`` asks for; with ``"auto"`` and no spaCy, None and a note."""
     if syntax is False:
         return None
-    step(LOAD_PARSER)
+    step(Phase.LOAD_PARSER)
     try:
         return _default_parser()
     except SyntaxUnavailableError:
         if syntax is True:
             raise
-        notes.append(Note(missing, "no_syntax"))
+        notes.append(Note(missing, NoteCode.NO_SYNTAX))
         return None

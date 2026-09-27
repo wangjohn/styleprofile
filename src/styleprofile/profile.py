@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from styleprofile.core import StyleProfileError
 from styleprofile.surface import (
     Metrics,
     block_word_count,
@@ -75,35 +76,6 @@ SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "site-packages"})
 OTHER = "<other>"
 DEVIATIONS_SHOWN = 8
 SHORT_CHUNK_WORDS = 150
-
-
-class StyleProfileError(ValueError):
-    """Style profile inputs or a reference profile are unusable.
-
-    ``code`` names the kind of problem so a front end can add its own advice (such as the
-    command-line flag that fixes it); the messages themselves never mention flags. ``notes``
-    holds what the run noted before it failed (see ``Note``), for the front end to show
-    before the error.
-    """
-
-    def __init__(self, message: str, *, code: str | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.notes: list[Note] = []
-
-
-@dataclass(frozen=True)
-class Note:
-    """Something a front end should tell the user about a run that is not an error: an input
-    given twice, or syntax metrics left out because spaCy is missing.
-
-    ``code`` names the kind of note, as ``StyleProfileError.code`` does, and ``message``
-    never mentions flags. Notes describe the run, not the text, so they are not saved in
-    reports; warnings about the text are (``report["warnings"]``).
-    """
-
-    message: str
-    code: str
 
 
 @dataclass(frozen=True)
@@ -481,7 +453,8 @@ def _measure(
     if not kept:
         raise StyleProfileError(
             f"no chunks with at least {max(min_words, 1)} prose word(s) to profile "
-            f"({empty} had no prose, {below} were shorter)"
+            f"({empty} had no prose, {below} were shorter)",
+            code="no_chunks",
         )
     chunk_metrics = [surface_metrics(chunk.text, parsed) for chunk, parsed in kept]
     chunk_distributions: list[dict[str, Counter[str]]] = [
@@ -632,7 +605,8 @@ def _base_report(
         "settings": {
             **(settings or {}),
             "top_k": top_k,
-            "syntax": (
+            # What was used, as opposed to the ``syntax`` setting, which is what was asked.
+            "syntax_used": (
                 {
                     "model": parser.model,
                     "model_version": parser.model_version,
@@ -837,15 +811,17 @@ def score(
             )
     if reference.get("chunk_count", 0) < 2:
         warnings.append("the reference has one chunk, so it has no spread; split it into windows")
-    if reference_settings.get("window_words") != report["settings"].get("window_words"):
+    # 0 and None both mean no windowing.
+    own_window = report["settings"].get("window_words") or None
+    reference_window = reference_settings.get("window_words") or None
+    if own_window != reference_window:
         warnings.append(
             "window sizes differ from the reference "
-            f"({report['settings'].get('window_words') or 'off'} vs "
-            f"{reference_settings.get('window_words') or 'off'}); "
+            f"({own_window or 'off'} vs {reference_window or 'off'}); "
             "z-scores assume equal-sized chunks"
         )
-    own_syntax = report["settings"]["syntax"]
-    reference_syntax = reference_settings.get("syntax")
+    own_syntax = report["settings"]["syntax_used"]
+    reference_syntax = reference_settings.get("syntax_used")
     if own_syntax and not reference_syntax:
         warnings.append("the reference has no syntax metrics, so syntax is not scored")
     elif reference_syntax and not own_syntax:

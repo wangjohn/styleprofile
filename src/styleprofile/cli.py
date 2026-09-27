@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -30,6 +31,7 @@ from styleprofile.api import (
     ScoreResult,
     Settings,
 )
+from styleprofile.core import Note, NoteCode, StyleProfileError
 from styleprofile.display import format_evaluation, format_summary
 from styleprofile.metrics import describe
 from styleprofile.profile import (
@@ -37,20 +39,12 @@ from styleprofile.profile import (
     REFERENCE,
     UNREADABLE,
     VERSION,
-    Note,
-    StyleProfileError,
-    document_of,
     dumps_report,
     load_report,
     report_kind,
 )
-from styleprofile.syntax import SyntaxUnavailableError
 
 PROG = "styleprofile"
-# A reference below these is usable but thin; `build` says so and how to fix it.
-ENOUGH_DOCUMENTS = 2
-ENOUGH_CHUNKS = 15
-ENOUGH_WORDS = 20_000
 # Advice for library errors, which name the problem but never a flag.
 HINTS = {
     "text_field": "pass --text-field with the JSONL field that holds the text",
@@ -60,7 +54,8 @@ HINTS = {
     "duplicate_names": "give each draft a distinct file name or JSONL id",
     "outdated": f"run `{PROG} build` again for a reference, or `{PROG} score` for a score report",
 }
-# Library errors and notes about a setting start with its name; these print the flag instead.
+# Library errors and notes name a setting (``setting``) as a whole word; the CLI prints the
+# flag that sets it instead.
 FLAGS = {
     "window_words": "--window-words",
     "min_words": "--min-words",
@@ -327,17 +322,27 @@ def build_parser() -> argparse.ArgumentParser:
     return _subparsers()[0]
 
 
-def _flagged(message: str, code: str | None) -> str:
-    """A library message about a setting, naming the flag that sets it instead."""
-    flag = FLAGS.get(code or "")
-    if flag and code and message.startswith(code):
-        return flag + message[len(code) :]
-    return message
+def _flagged(message: str, setting: str | None) -> str:
+    """A library message naming a setting, with the flag that sets it in its place."""
+    flag = FLAGS.get(setting or "")
+    if not flag or not setting:
+        return message
+    return re.sub(rf"\b{re.escape(setting)}\b", flag, message)
 
 
 def _notes(notes: Sequence[Note]) -> None:
+    """Print notes as ``note:`` lines, except thin-reference notes, which ``build`` prints
+    as warnings after its summary."""
     for note in notes:
-        _note(_flagged(note.message, note.code))
+        if note.code != NoteCode.THIN_REFERENCE:
+            _note(_flagged(note.message, note.setting))
+
+
+def _inputs_exist(values: Sequence[str]) -> None:
+    """Refuse a typed input that does not exist, naming it as typed."""
+    for value in values:
+        if value != "-" and not Path(value).expanduser().exists():
+            raise StyleProfileError(f"{value} not found", code="input_not_found")
 
 
 def _plural(count: int, word: str) -> str:
@@ -365,29 +370,6 @@ def _settings(args: argparse.Namespace) -> Settings:
     )
 
 
-def _thin_reference(report: dict[str, Any], window_words: int | None) -> list[str]:
-    """Why a reference may be too small to trust, each with its fix."""
-    documents = len({document_of(row["source"], row["id"]) for row in report["chunks"]})
-    thin = []
-    if documents < ENOUGH_DOCUMENTS:
-        thin.append(
-            f"it comes from {_plural(documents, 'document')}, so it has no held-out calibration "
-            "and cannot learn a contrast; add more of the writer's documents"
-        )
-    if report["chunk_count"] < ENOUGH_CHUNKS:
-        smaller = "a smaller --window-words" if window_words else "--window-words 500"
-        thin.append(
-            f"it has {_plural(report['chunk_count'], 'chunk')}; aim for {ENOUGH_CHUNKS} or more "
-            f"by adding documents or using {smaller}"
-        )
-    if report["word_count"] < ENOUGH_WORDS:
-        thin.append(
-            f"it has {_plural(report['word_count'], 'word')}; aim for {ENOUGH_WORDS:,} or more "
-            "of the writer's text, in one genre"
-        )
-    return thin
-
-
 def _warn(text: str, color: bool) -> str:
     return f"\033[33m{text}\033[0m" if color else text
 
@@ -395,6 +377,7 @@ def _warn(text: str, color: bool) -> str:
 def _run_build(args: argparse.Namespace) -> int:
     settings = _settings(args)
     typed = [*args.inputs, *(args.contrast or [])]
+    _inputs_exist(typed)
     _refuse_overwrite(args.output, typed)
     profile = api.build(
         args.inputs, settings, contrast=args.contrast, contrast_label=args.contrast_label
@@ -403,12 +386,13 @@ def _run_build(args: argparse.Namespace) -> int:
     # Files found inside a folder are known only once it has been read.
     _refuse_overwrite(args.output, typed, profile.sources)
     profile.save(args.output)
-    report = profile.report
     print(profile.to_text(color=_color(), full=args.all))
     sys.stdout.flush()  # keep the warnings after the summary when both go to one pipe
     color_err = _color(sys.stderr)
-    for reason in _thin_reference(report, report["settings"]["window_words"]):
-        print(_warn(f"Thin reference: {reason}.", color_err), file=sys.stderr)
+    for note in profile.notes:
+        if note.code == NoteCode.THIN_REFERENCE:
+            reason = _flagged(note.message, note.setting)
+            print(_warn(f"Thin reference: {reason}.", color_err), file=sys.stderr)
     print(f"\nwrote {args.output}")
     print(f"Next, score a draft against it:\n  {PROG} score <draft> {shlex.quote(args.output)}")
     return 0
@@ -456,9 +440,10 @@ def _headline(result: ScoreResult, samples: Sequence[str]) -> str:
     if result.delta is None:
         return f"{name}: no metrics could be compared with the reference"
     parts = [f"{name}: {result.verdict} (Delta {result.delta:.2f})"]
-    if result.likeness is not None and result.likeness_verdict is not None:
-        likeness = f"{result.likeness_verdict} ({result.likeness:.2f})"
-        parts.append(f"{result.contrast_label}-likeness {likeness}")
+    label = result.contrast_label
+    if result.likeness is not None and result.likeness_verdict is not None and label:
+        likeness = f"{result.likeness_verdict.words(label)} ({result.likeness:.2f})"
+        parts.append(f"{label}-likeness {likeness}")
     return "; ".join(parts)
 
 
@@ -466,15 +451,18 @@ def _run_score(args: argparse.Namespace) -> int:
     samples, reference_arg = _split_score_paths(args)
     if args.output and _path(args.output) == _path(reference_arg):
         raise StyleProfileError("--output is the reference file; choose another output path")
+    _inputs_exist(samples)
     if args.output:
         _refuse_overwrite(args.output, samples)
     profile = _load_score_reference(reference_arg)
+    overrides = {
+        "window_words": args.window_words,
+        "min_words": args.min_words,
+        "text_field": args.text_field,
+        "syntax": False if args.no_syntax else None,
+    }
     result = profile.score(
-        samples,
-        window_words=args.window_words,
-        min_words=args.min_words,
-        text_field=args.text_field,
-        syntax=False if args.no_syntax else None,
+        samples, **{name: value for name, value in overrides.items() if value is not None}
     )
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
@@ -555,6 +543,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
     if "-" in folders:
         raise StyleProfileError("--edited takes folders of files, not - (stdin)")
     typed = [*args.inputs, *args.contrast, *folders]
+    _inputs_exist(typed)
     if args.output:
         _refuse_overwrite(args.output, typed)
     result = api.evaluate(
@@ -650,10 +639,10 @@ def _dispatch(argv: Sequence[str]) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _dispatch(sys.argv[1:] if argv is None else list(argv))
-    except (StyleProfileError, SyntaxUnavailableError, OSError) as error:
+    except (StyleProfileError, OSError) as error:
         _notes(getattr(error, "notes", ()))
         code = getattr(error, "code", None)
-        print(f"error: {_flagged(str(error), code)}", file=sys.stderr)
+        print(f"error: {_flagged(str(error), getattr(error, 'setting', None))}", file=sys.stderr)
         hint = HINTS.get(code or "")
         if hint:
             print(f"hint: {hint}", file=sys.stderr)

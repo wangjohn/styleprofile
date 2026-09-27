@@ -6,18 +6,10 @@ from typing import Any
 
 import pytest
 
-from styleprofile import (
-    Chunk,
-    StyleProfileError,
-    build_reference,
-    load_chunks,
-    score,
-    surface_metrics,
-    window,
-)
+from styleprofile import Chunk, StyleProfileError
 from styleprofile.cli import main
 from styleprofile.display import describe_delta, label, value
-from styleprofile.profile import _prepare
+from styleprofile.profile import _prepare, build_reference, load_chunks, score, window
 from styleprofile.profile import _score as _score_with
 from styleprofile.surface import (
     Metrics,
@@ -28,6 +20,7 @@ from styleprofile.surface import (
     mtld,
     prose,
     sentences,
+    surface_metrics,
 )
 
 AUTHOR = (
@@ -204,7 +197,7 @@ def test_profile_scores_chunks_against_a_reference() -> None:
 
 def test_syntax_metrics_when_spacy_is_installed() -> None:
     pytest.importorskip("spacy")
-    from styleprofile import SyntaxUnavailableError, load_parser
+    from styleprofile.syntax import SyntaxUnavailableError, load_parser
 
     try:
         parser = load_parser()
@@ -216,7 +209,7 @@ def test_syntax_metrics_when_spacy_is_installed() -> None:
     assert chunk["syntax"]["parse_depth_mean"] > 0
     assert chunk["sentence_openers"]["opens_pronoun_pct"] > 0
     assert "pos_trigram" in report["distributions"]
-    assert report["settings"]["syntax"]["model"] == "en_core_web_sm"
+    assert report["settings"]["syntax_used"]["model"] == "en_core_web_sm"
 
 
 def test_display_labels_and_units() -> None:
@@ -238,7 +231,7 @@ def test_display_labels_and_units() -> None:
 
 
 def test_profile_and_comparison_views_are_readable() -> None:
-    from styleprofile import format_summary
+    from styleprofile.display import format_summary
 
     author = [
         Chunk("a1", "src", AUTHOR),
@@ -270,8 +263,7 @@ def test_profile_and_comparison_views_are_readable() -> None:
 
 
 def test_distance_colors_only_mark_what_is_far(monkeypatch: pytest.MonkeyPatch) -> None:
-    from styleprofile import format_summary
-    from styleprofile.display import delta_level, z_level
+    from styleprofile.display import delta_level, format_summary, z_level
 
     assert [delta_level(d) for d in (0.75, 1.2, 1.74, 6.9)] == [0, 1, 2, 3]
     assert [z_level(z) for z in (0.4, -1.5, 2.2, -8.0)] == [0, 1, 2, 3]
@@ -435,7 +427,7 @@ def test_never_varying_metrics_count_toward_delta() -> None:
 
 def test_reference_syntax_mismatch_is_warned() -> None:
     reference = build_reference([Chunk("a", "s", AUTHOR)] * 2, parser=None)
-    reference["settings"]["syntax"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    reference["settings"]["syntax_used"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
     report = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
 
     assert any("this run does not" in warning for warning in report["warnings"])
@@ -494,7 +486,7 @@ def test_min_words_and_rounded_references() -> None:
 
 
 def test_all_metrics_table_marks_never_varying_metrics() -> None:
-    from styleprofile import format_summary
+    from styleprofile.display import format_summary
 
     report, reference = _handmade_comparison()
     full = format_summary(report, reference, full=True)
@@ -553,7 +545,7 @@ def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
 
 
 def test_never_varying_differences_do_not_cancel() -> None:
-    from styleprofile import format_summary
+    from styleprofile.display import format_summary
 
     report, reference = _handmade_comparison()
     report["chunk_count"] = 2
@@ -1013,7 +1005,7 @@ def test_computed_metrics_match_the_registry() -> None:
         grouped(values, syntax=False)
 
     pytest.importorskip("spacy")
-    from styleprofile import SyntaxUnavailableError, load_parser
+    from styleprofile.syntax import SyntaxUnavailableError, load_parser
 
     try:
         parser = load_parser()
@@ -1106,7 +1098,7 @@ def test_build_and_score_split_the_workflow(
     # Inherited from the reference: 100-word windows, min words and no syntax.
     assert report["settings"]["window_words"] == 100
     assert report["settings"]["min_words"] == 1
-    assert report["settings"]["syntax"] is None
+    assert report["settings"]["syntax_used"] is None
     assert not any("window sizes differ" in warning for warning in report["warnings"])
     assert f"wrote {output}" in capsys.readouterr().out
 
@@ -1117,8 +1109,8 @@ def test_build_and_score_split_the_workflow(
         ([], None, None, 100, 1),
         (["--window-words", "100"], None, None, 100, 1),
         (["--window-words", "50"], None, "(50 vs 100)", 50, 1),
-        (["--no-window"], None, "(off vs 100)", None, 1),
-        (["--window-words", "0"], None, "(off vs 100)", None, 1),
+        (["--no-window"], None, "(off vs 100)", 0, 1),
+        (["--window-words", "0"], None, "(off vs 100)", 0, 1),
         (["--min-words", "5"], "--min-words 5 overrides the reference's 1", None, 100, 5),
     ],
 )
@@ -1128,7 +1120,7 @@ def test_score_overrides_win_and_are_reported_once(
     flags: list[str],
     note: str | None,
     warning: str | None,
-    window_words: int | None,
+    window_words: int,
     min_words: int,
 ) -> None:
     reference = _built(tmp_path)
@@ -1300,10 +1292,10 @@ def test_missing_spacy_falls_back_with_a_note(
     assert main(["build", str(posts), "-o", str(reference)]) == 0
     assert "surface metrics only" in capsys.readouterr().err
     report = json.loads(reference.read_text(encoding="utf-8"))
-    assert report["settings"]["syntax"] is None
+    assert report["settings"]["syntax_used"] is None
 
     # A reference with syntax: score follows it, and leaves syntax out when spaCy is missing.
-    report["settings"]["syntax"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    report["settings"]["syntax_used"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
     reference.write_text(json.dumps(report), encoding="utf-8")
     sample = str(_sample(tmp_path))
     assert main(["score", sample, str(reference)]) == 0
@@ -1427,7 +1419,7 @@ def test_color_honors_no_color_and_force_color(
 
 
 def test_reports_carry_their_kind_and_scores_a_baseline() -> None:
-    from styleprofile import report_kind
+    from styleprofile.profile import report_kind
 
     reference = build_reference(_author_docs(), parser=None)
     assert report_kind(reference) == "reference"

@@ -16,15 +16,19 @@ the sample corpus in [`examples/`](../examples/).
 >>> draft = Path("examples/draft.md").read_text(encoding="utf-8")
 >>> result = profile.score(sp.Text(draft))
 >>> result.verdict
-'close'
->>> print(f"Delta {result.delta:.2f}, LLM-likeness {result.likeness_verdict}")
-Delta 0..., LLM-likeness like the reference
+<Verdict.CLOSE: 'close'>
+>>> print(f"Delta {result.delta:.2f}, {result.likeness_verdict.words('LLM')}")
+Delta 0..., like the reference
 
 ```
 
-`result.verdict` and `result.likeness_verdict` use the same words as the CLI (see
-[Reading the output](../README.md#reading-the-output)). `result.to_text()` is what
-`styleprofile score` prints, and `result.report` is the full JSON report.
+`result.verdict` is a `Verdict` and `result.likeness_verdict` a `LikenessVerdict`
+(`.words(label)` names the contrast set). Both are string enums with the same words as the
+CLI (see [Reading the output](../README.md#reading-the-output)). A score with no metric in
+common with the profile is `Verdict.NOT_COMPARABLE`. Delta and the verdicts are pooled over
+every input you score at once; per-document results arrive with plan PR 7.
+`result.to_text()` is what `styleprofile score` prints, and `result.report` is the full JSON
+report: the live dict, not a copy.
 
 ## Inputs
 
@@ -32,12 +36,14 @@ Delta 0..., LLM-likeness like the reference
 
 - **a path**, as a `str` or `Path`: a Markdown, text or JSONL file, a folder of them, or
   `"-"` for stdin, exactly as on the command line;
-- **`sp.Text("...")`** for raw text. Its optional `name` identifies it in reports;
-- **`sp.Chunk(id, source, text)`**, used as given.
+- **`sp.Text("...")`** for raw text. Its optional `name` identifies it in reports and
+  pairs an edited text with its original in `evaluate`. Unnamed texts are `text1`,
+  `text2`, ... in order, and two texts with the same name are an error;
+- **`sp.Chunk(id, source, text)`**.
 
 A plain `str` is always a path, never text, so a typo in a folder name fails instead of
-being profiled as a two-word text. A `str` that can't be a path (it spans lines, say)
-fails with a message pointing to `Text`.
+being profiled as a two-word text. A missing `str` that reads like text (it has spaces,
+say) fails with a message pointing to `Text`.
 
 Every input is cut into windows, `Chunk`s included. Re-windowing chunks you already cut
 is harmless (they keep their documents); pass `Settings(window_words=0)` to use them as
@@ -52,16 +58,19 @@ they are.
 300
 >>> small.score(Path("examples/draft.md")).report["settings"]["window_words"]
 300
->>> small.score(Path("examples/draft.md"), window_words=0).warnings[0]
-'window sizes differ from the reference (off vs 300); z-scores assume equal-sized chunks'
+>>> small.score(Path("examples/draft.md"), window_words=0).warnings
+('window sizes differ from the reference (off vs 300); z-scores assume equal-sized chunks',)
 
 ```
 
 `Settings` holds `window_words` (0 turns windowing off), `min_words`, `text_field` for
-JSONL, `syntax`, `top_k` and `input_format`. `Profile.score` inherits all of them except
-`input_format` from the profile, and takes keyword overrides, as `styleprofile score` takes
-flags. A different window size or syntax setting is warned about in the report, and a
-different `min_words` gets a note.
+JSONL, `syntax`, `top_k` and `input_format`. A profile records them verbatim, and
+`profile.settings` reads them back. `Profile.score(inputs, settings=None, **overrides)`
+inherits them, except that it uses spaCy only when the profile has syntax metrics and
+reads drafts with `input_format="auto"`. Pass whole `Settings` to replace them, or keyword
+overrides (`window_words=0`) to change single fields, as `styleprofile score` takes flags.
+A different window size or syntax setting is warned about in the report, and a different
+`min_words` gets a note.
 
 `syntax="auto"`, the default, uses spaCy when it's installed. Without spaCy, it runs with
 the surface metrics only and adds a note. `syntax=True` raises `SyntaxUnavailableError`
@@ -71,24 +80,30 @@ instead, and `syntax=False` skips spaCy.
 
 The library never prints.
 
-- **`notes`**: `Note(message, code)` objects on `Profile`, `ScoreResult` and `Evaluation`
-  that describe the run, such as syntax metrics left out or an input given twice. The CLI
-  prints them as `note:` lines. They aren't saved.
-- **`warnings`**: strings saved in the report, about the text itself, such as short chunks
-  or mismatched settings.
-- **Errors**: problems raise `StyleProfileError`, whose `code` names the kind of problem.
-  Messages never mention command-line flags. The notes collected before the error are in
-  its `notes`.
+- **`notes`**: a tuple of `Note(message, code, setting)` on `Profile`, `ScoreResult` and
+  `Evaluation`, describing the run. `code` is a `NoteCode`: syntax metrics left out, an
+  input given twice, an overridden setting, or a reference too thin to trust (one note per
+  reason). The CLI prints them as `note:` lines. They aren't saved.
+- **`warnings`**: a tuple of strings saved in the report, about the text itself, such as
+  short chunks or mismatched settings.
+- **Errors**: problems raise `StyleProfileError` (`SyntaxUnavailableError` is one), whose
+  `code` names the kind of problem. Messages never mention command-line flags; when one
+  is about a setting, `setting` names it. The notes collected before the error are in its
+  `notes`, and a file that can't be read is a `StyleProfileError` too, with the `OSError`
+  as its cause.
 
-A `progress` callback, if given, is called with a `Progress` at the start of each phase.
+A `progress` callback, if given, is called with a `Progress` at the start of each `Phase`:
+`READ`, `LOAD_PARSER` (only when spaCy is used), then `BUILD`, `SCORE` or `EVALUATE`, then
+`DONE`.
 
 ## Saving, loading and evaluating
 
 - `profile.save("writer.json")` and `sp.Profile.load("writer.json")` read and write the
-  same files as `styleprofile build` and `styleprofile score`. `result.save(path)` writes a
-  score report.
+  same files as `styleprofile build` and `styleprofile score`. `save` also sets
+  `profile.path`, which later scores record. `result.save(path)` writes a score report.
 - `sp.evaluate(inputs, contrast, {"light": Path("edits/light")})` runs the rewording stress
   test that `styleprofile evaluate` runs.
-- `sp.build_reference(chunks)` and `sp.score(chunks, reference)` are the lower-level steps.
-  They measure chunks exactly as given: no windowing, no inherited settings, and no syntax
-  metrics unless you pass `parser=sp.load_parser()`.
+- `build_reference(chunks)` and `score(chunks, reference)` in `styleprofile.profile` are
+  the lower-level steps. They measure chunks exactly as given: no windowing, no inherited
+  settings, and no syntax metrics unless you pass `parser=load_parser()` (from
+  `styleprofile.syntax`).

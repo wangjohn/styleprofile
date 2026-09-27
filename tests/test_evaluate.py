@@ -78,7 +78,7 @@ def _edit(drafts: Path, output: Path, edit: Callable[[str], str]) -> None:
 
 
 def _evaluate(author: Path, drafts: Path, edited: dict[str, Path], **options: Any) -> Any:
-    from styleprofile import load_chunks
+    from styleprofile.profile import load_chunks
 
     return evaluate_rewording(
         load_chunks([str(author)]),
@@ -204,7 +204,7 @@ def test_edited_drafts_are_matched_to_originals_by_name(tmp_path: Path) -> None:
     with pytest.raises(StyleProfileError, match="unedited"):
         _evaluate(author, drafts, {"original": drafts})
 
-    from styleprofile import load_chunks
+    from styleprofile.profile import load_chunks
 
     twice = [
         *load_chunks([str(drafts)]),
