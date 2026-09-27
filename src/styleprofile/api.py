@@ -24,6 +24,7 @@ exactly as given; use them to control windowing and parsing yourself.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -51,6 +52,7 @@ from styleprofile.display import (
     mean_ceiling,
 )
 from styleprofile.evaluate import evaluate_rewording
+from styleprofile.formats import INPUT_FORMATS
 from styleprofile.profile import (
     REFERENCE,
     TEXT_FIELDS,
@@ -58,6 +60,7 @@ from styleprofile.profile import (
     SourceNames,
     build_reference,
     check_version,
+    drop_duplicates,
     dumps_report,
     expand_path,
     load_chunks,
@@ -73,8 +76,6 @@ from styleprofile.weighting import likeness_level
 AUTO = "auto"
 DEFAULT_WINDOW_WORDS = 500
 DEFAULT_TOP_K = 300
-# How inputs are read. Only format detection by file extension exists so far.
-INPUT_FORMATS = (AUTO,)
 SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
 # A reference below these is usable but thin; ``build`` notes why and how to fix it.
 ENOUGH_DOCUMENTS = 2
@@ -114,7 +115,10 @@ class Settings:
       ``"auto"`` uses spaCy when it is installed and adds a note when it is not. A report
       records this as asked, and what was used as ``syntax_used``.
     - ``top_k``: distribution entries kept in a report.
-    - ``input_format``: how inputs are read; ``"auto"`` goes by file extension.
+    - ``input_format``: how inputs are read. ``"auto"`` goes by file extension, reads a
+      Markdown or text file that looks like HTML as HTML, and reads stdin as JSONL when
+      every line is a JSON object; ``"markdown"``, ``"html"`` or ``"jsonl"`` reads every
+      input that way, folder contents included.
 
     A new setting is one field here: recording, reading back, inheriting and overriding
     all go through the fields.
@@ -333,7 +337,9 @@ class Profile(_Result):
             items = _items(inputs)
             _stdin_once(items)
             names = SourceNames()
-            chunks = _read(items, fields, set(), notes, "<text>", names)
+            chunks = _read(
+                items, fields, set(), notes, "<text>", names, input_format=chosen.input_format
+            )
             parser = _parser(
                 chosen.syntax,
                 notes,
@@ -475,11 +481,19 @@ def build(
         _stdin_once([*items, *(contrast_items or [])])
         seen: set[str] = set()
         names = SourceNames()
-        chunks = _read(items, settings.text_field, seen, notes, "<text>", names)
+        texts: dict[str, str] = {}
+        read = functools.partial(
+            _read,
+            text_field=settings.text_field,
+            seen=seen,
+            notes=notes,
+            names=names,
+            input_format=settings.input_format,
+            known_texts=texts,
+        )
+        chunks = read(items, role="<text>")
         contrast_chunks = (
-            _read(contrast_items, settings.text_field, seen, notes, "<contrast>", names)
-            if contrast_items is not None
-            else None
+            read(contrast_items, role="<contrast>") if contrast_items is not None else None
         )
         parser = _parser(
             settings.syntax,
@@ -542,16 +556,21 @@ def evaluate(
         _stdin_once(every)
         seen: set[str] = set()
         names = SourceNames()
-        reference_chunks = _read(items, settings.text_field, seen, notes, "<text>", names)
-        contrast_chunks = _read(
-            contrast_items, settings.text_field, seen, notes, "<contrast>", names
+        texts: dict[str, str] = {}
+        read = functools.partial(
+            _read, text_field=settings.text_field, notes=notes, input_format=settings.input_format
+        )
+        reference_chunks = read(items, seen=seen, role="<text>", names=names, known_texts=texts)
+        contrast_chunks = read(
+            contrast_items, seen=seen, role="<contrast>", names=names, known_texts=texts
         )
         edited_chunks: dict[str, list[Chunk]] = {}
         # Each edited set is named on its own: its files carry the originals' names.
         edited_names = {label: SourceNames() for label in edited_items}
         for label, value in edited_items.items():
-            edited_chunks[label] = _read(
-                value, settings.text_field, set(), notes, f"<{label}>", edited_names[label]
+            # Edits are meant to resemble their originals, so they are not deduplicated.
+            edited_chunks[label] = read(
+                value, seen=set(), role=f"<{label}>", names=edited_names[label]
             )
             overlap = {chunk.path for chunk in edited_chunks[label] if chunk.path} & seen
             if overlap:
@@ -789,11 +808,18 @@ def _read(
     notes: list[Note],
     role: str,
     names: SourceNames,
+    input_format: str = AUTO,
+    known_texts: dict[str, str] | None = None,
 ) -> list[Chunk]:
     """Chunks from each input, in order, skipping files an earlier path (tracked in
     ``seen`` by real path) already gave. ``Text`` inputs get ``role`` as their source, so
     texts in different roles (writer, contrast) are never the same document. ``names`` is
-    shared across calls, so two inputs' files never get the same saved source."""
+    shared across calls, so two inputs' files never get the same saved source.
+
+    With ``known_texts`` (see ``drop_duplicates``), documents whose text repeats one read
+    before, here or in an earlier role, are dropped with a note: twins on both sides of
+    held-out calibration would make it look too tight. That is a separate check from a file
+    given twice, which is recognized by its path."""
     texts = iter(_text_chunks([item for item in items if isinstance(item, Text)], role))
     chunks: list[Chunk] = []
     for item in items:
@@ -806,7 +832,9 @@ def _read(
         value = os.fspath(item)
         require_path(value)
         contributed = value in names.roots
-        loaded = load_chunks([value], text_field, names=names)
+        loaded = load_chunks(
+            [value], text_field, names=names, input_format=input_format, notes=notes
+        )
         files = {chunk.path for chunk in loaded if chunk.path is not None}
         repeated = files & seen
         if repeated and repeated == files:
@@ -824,6 +852,10 @@ def _read(
             )
         chunks += [chunk for chunk in loaded if chunk.path not in repeated]
         seen |= files
+    if known_texts is not None:
+        chunks, note = drop_duplicates(chunks, known_texts)
+        if note:
+            notes.append(note)
     return chunks
 
 

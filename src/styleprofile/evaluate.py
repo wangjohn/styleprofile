@@ -14,6 +14,7 @@ text, and which of the strongest signals survive.
 
 from __future__ import annotations
 
+import os
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
@@ -22,6 +23,7 @@ from typing import Any
 from styleprofile.profile import (
     EVALUATION,
     EVALUATION_VERSION,
+    INPUT_SUFFIXES,
     Chunk,
     ContrastFit,
     StyleProfileError,
@@ -59,6 +61,28 @@ def match_key(chunk: Chunk) -> str:
     window suffix removed. Folders are compared by relative path, so ``a/x.md`` and
     ``b/x.md`` pair with each other and with nothing else."""
     return base_id(chunk.id)
+
+
+def _stem(key: str) -> str:
+    stem, suffix = os.path.splitext(key)
+    return stem if suffix.lower() in INPUT_SUFFIXES else key
+
+
+def _renamed(chunks: Sequence[Chunk], originals: set[str]) -> list[Chunk]:
+    """Edited chunks named like their original when only the extension differs: an edited
+    ``x.html`` pairs with the original ``x.md`` when no other original is ``x``."""
+    by_stem: dict[str, list[str]] = defaultdict(list)
+    for key in originals:
+        by_stem[_stem(key)].append(key)
+    renamed: list[Chunk] = []
+    for chunk in chunks:
+        key = match_key(chunk)
+        candidates = by_stem.get(_stem(key), [])
+        if key not in originals and len(candidates) == 1:
+            window_suffix = chunk.id[len(key) :]
+            chunk = Chunk(candidates[0] + window_suffix, chunk.source, chunk.text)
+        renamed.append(chunk)
+    return renamed
 
 
 def ngram_changed(before: str, after: str, n: int = NGRAM) -> float | None:
@@ -275,7 +299,9 @@ def evaluate_rewording(
     edited_z: dict[str, list[ZScores]] = {}
     edited_documents: dict[str, list[str]] = {}
     survival: dict[str, tuple[Sequence[ZScores], Sequence[ZScores]]] = {}
+    originals = {match_key(chunk) for chunk in contrast_chunks}
     for set_label, chunks in edited.items():
+        chunks = _renamed(chunks, originals)
         skipped = sorted({match_key(chunk) for chunk in chunks} & dropped)
         if skipped:
             warnings.append(
@@ -288,7 +314,7 @@ def evaluate_rewording(
         if unmatched:
             raise StyleProfileError(
                 f"{set_label}: {len(unmatched)} edited file(s) have no original among the "
-                f"contrast drafts (matched by name), e.g. {unmatched[0]!r}",
+                f"contrast drafts (matched by name, ignoring the extension), e.g. {unmatched[0]!r}",
                 code="unmatched_edits",
             )
         kept_chunks, z_rows = z_against_reference(profile, chunks, parser, min_words)

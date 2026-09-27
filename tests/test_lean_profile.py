@@ -130,7 +130,9 @@ def test_inputs_are_saved_by_their_final_name_however_typed(
 ) -> None:
     nested = corpus / "more" / "deeper"
     nested.mkdir(parents=True)
-    shutil.copy(corpus / "writer" / "old-maps.md", nested / "maps.md")
+    maps = (corpus / "writer" / "old-maps.md").read_text(encoding="utf-8")
+    # Its own last line, since build drops documents whose text repeats another's.
+    (nested / "maps.md").write_text(maps + "\nA copy kept deeper.\n", encoding="utf-8")
     (corpus / "sub").mkdir()
     monkeypatch.chdir(corpus / "sub")
     # A ..-relative path and a ./ path save the same names as a plain one would.
@@ -230,9 +232,12 @@ def test_symlinks_and_stdin(
 
 
 def _same_named_folders(tmp_path: Path) -> tuple[str, str]:
-    """Two folders both called posts, each with the 7 writer files."""
+    """Two folders both called posts, each with the 7 writer files. The second copies end
+    with a line of their own, since build drops documents whose text repeats another's."""
     for side in ("a", "b"):
         shutil.copytree(EXAMPLES / "writer", tmp_path / side / "posts")
+    for path in (tmp_path / "b" / "posts").glob("*.md"):
+        path.write_text(path.read_text(encoding="utf-8") + "\nA second copy.\n", "utf-8")
     return str(tmp_path / "a" / "posts"), str(tmp_path / "b" / "posts")
 
 

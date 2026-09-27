@@ -27,6 +27,7 @@ from styleprofile.api import (
     AUTO,
     DEFAULT_TOP_K,
     DEFAULT_WINDOW_WORDS,
+    INPUT_FORMATS,
     Profile,
     ScoreResult,
     Settings,
@@ -54,7 +55,17 @@ HINTS = {
     "score_as_reference": "score against the reference profile made by `styleprofile build`",
     "unmatched_edits": "give each edited file its original's name and relative path",
     "duplicate_names": "give each draft a distinct file name or JSONL id",
+    "forced_jsonl": "leave out --input-format jsonl to read each file by its extension",
     "outdated": f"run `{PROG} build` again for a reference, or `{PROG} score` for a score report",
+}
+# Advice for notes, by ``Note.code``.
+NOTE_HINTS = {
+    NoteCode.READ_AS_HTML: "pass --input-format markdown to read it as written",
+    NoteCode.READ_AS_HTML_IN_FOLDER: (
+        "if any are really Markdown, give them separately with --input-format markdown, which "
+        "would also apply to .html files in the folder"
+    ),
+    NoteCode.READ_AS_JSONL: "pass --input-format markdown to read it as prose",
 }
 # Library errors and notes name a setting (``setting``) as a whole word; the CLI prints the
 # flag that sets it instead.
@@ -129,6 +140,15 @@ def _add_input_flags(parser: argparse.ArgumentParser, *, inherited: bool) -> Non
         + (suffix or " (default: text, body_markdown, output, content, body)"),
     )
     parser.add_argument(
+        "--input-format",
+        choices=INPUT_FORMATS,
+        default=AUTO,
+        help="how to read inputs: auto picks each file's format from its extension and "
+        "content, and reads stdin as JSONL when every line is a JSON object; the others "
+        "read every input that way, directory contents included (default: auto"
+        + (", not the reference's: drafts are often in another format)" if inherited else ")"),
+    )
+    parser.add_argument(
         "--no-syntax",
         action="store_true",
         help="skip the spaCy parser and its metrics",
@@ -167,7 +187,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         "inputs",
         nargs="+",
         metavar="INPUT",
-        help="the writer's Markdown, text or JSONL files, directories of them, or - for stdin",
+        help="the writer's Markdown, text, HTML or JSONL files, folders of them, or - for stdin",
     )
     build.add_argument(
         "-o", "--output", required=True, metavar="PROFILE.json", help="where to save the profile"
@@ -277,7 +297,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         "inputs",
         nargs="+",
         metavar="INPUT",
-        help="the writer's Markdown, text or JSONL files, directories of them, or - for stdin",
+        help="the writer's Markdown, text, HTML or JSONL files, folders of them, or - for stdin",
     )
     evaluate.add_argument(
         "--contrast",
@@ -342,7 +362,9 @@ def _notes(notes: Sequence[Note]) -> None:
     as warnings after its summary."""
     for note in notes:
         if note.code != NoteCode.THIN_REFERENCE:
-            _note(_flagged(note.message, note.setting))
+            hint = NOTE_HINTS.get(note.code)
+            message = _flagged(note.message, note.setting)
+            _note(f"{message} ({hint})" if hint else message)
 
 
 def _inputs_exist(values: Sequence[str]) -> None:
@@ -373,6 +395,7 @@ def _settings(args: argparse.Namespace) -> Settings:
         text_field=args.text_field,
         syntax=False if args.no_syntax else AUTO,
         top_k=getattr(args, "top_k", DEFAULT_TOP_K),
+        input_format=args.input_format,
     )
 
 
@@ -475,6 +498,8 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["text_field"] = args.text_field
     if args.no_syntax:
         overrides["syntax"] = False
+    if args.input_format != AUTO:
+        overrides["input_format"] = args.input_format
     result = profile.score(samples, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
@@ -597,7 +622,14 @@ def _suggest_command(argv: Sequence[str]) -> str:
     guess.add_argument("inputs", nargs="*")
     guess.add_argument("-o", "--output")
     guess.add_argument("-r", "--reference")
-    for flag in ("--text-field", "--window-words", "--min-words", "--top-k", "--contrast-label"):
+    for flag in (
+        "--text-field",
+        "--window-words",
+        "--min-words",
+        "--input-format",
+        "--top-k",
+        "--contrast-label",
+    ):
         guess.add_argument(flag)
     guess.add_argument("--contrast", nargs="+")
     guess.add_argument("--no-syntax", action="store_true")
@@ -610,7 +642,7 @@ def _suggest_command(argv: Sequence[str]) -> str:
     if found is None or not (found.reference or found.output):
         rest = shlex.join(argv)
         return f"`{PROG} build {rest}` or `{PROG} score {rest}`"
-    kept = ["text_field", "window_words", "min_words"]
+    kept = ["text_field", "window_words", "min_words", "input_format"]
     if found.reference:
         # The reference moves to the last argument; score takes no contrast or --top-k.
         command = ["score", *found.inputs, found.reference]

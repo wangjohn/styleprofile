@@ -34,8 +34,9 @@ report: the live dict, not a copy.
 
 `build`, `Profile.score` and `evaluate` take one input or a list of them:
 
-- **a path**, as a `str` or `Path`: a Markdown, text or JSONL file, a folder of them, or
-  `"-"` for stdin, exactly as on the command line;
+- **a path**, as a `str` or `Path`: a Markdown, text, HTML or JSONL file, a folder of
+  them, or `"-"` for stdin, exactly as on the command line (see the README for how HTML is
+  converted, formats are detected with `input_format="auto"`, and folders are walked);
 - **`sp.Text("...")`** for raw text. Its optional `name` identifies it in reports and
   pairs an edited text with its original in `evaluate`. Unnamed texts are `text1`,
   `text2`, ... in order, and two texts with the same name are an error;
@@ -70,8 +71,8 @@ inherits them, except that it uses spaCy only when the profile has syntax metric
 reads drafts with `input_format="auto"`. Pass whole `Settings` to replace them, or keyword
 overrides (`window_words=0`) to change single fields, as `styleprofile score` takes flags.
 Leave a keyword out to inherit it; the keywords are typed (`api.SettingsOverrides`), so a
-type checker catches a misspelled one. A different window size or syntax setting is warned about in the report, and a different
-`min_words` gets a note.
+type checker catches a misspelled one. A different window size or syntax setting is warned
+about in the report, and a different `min_words` gets a note.
 
 `syntax="auto"`, the default, uses spaCy when it's installed. Without spaCy, it runs with
 the surface metrics only and adds a note. `syntax=True` raises `SyntaxUnavailableError`
@@ -83,8 +84,10 @@ The library never prints.
 
 - **`notes`**: a tuple of `Note(message, code, setting)` on `Profile`, `ScoreResult` and
   `Evaluation`, describing the run. `code` is a `NoteCode`: syntax metrics left out, an
-  input given twice, an overridden setting, or a reference too thin to trust (one note per
-  reason). The CLI prints them as `note:` lines. They aren't saved.
+  input given twice, an overridden setting, a reference too thin to trust (one note per
+  reason), how inputs were read (HTML or JSONL detected, HTML with no text, documents or
+  static-site folders a walk skipped), or duplicate documents dropped. The CLI prints
+  them as `note:` lines. They aren't saved.
 - **`warnings`**: a tuple of strings saved in the report, about the text itself, such as
   short chunks or mismatched settings.
 - **Errors**: problems raise `StyleProfileError` (`SyntaxUnavailableError` is one), whose

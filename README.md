@@ -30,10 +30,26 @@ styleprofile score draft.md writer.json
 
 To try it on the sample corpus in [`examples/`](examples/), run `make demo`.
 
-Inputs can be Markdown or text files, JSONL (`--text-field`, default
-`text`/`body_markdown`/`output`/...), directories of them, or `-` for stdin. `build` splits
-texts into ~500-word windows (`--window-words N`, or `--no-window`), and `score` uses whatever
-the reference used, so the two always match. `--contrast` can be repeated.
+Inputs can be Markdown or text files, HTML (`.html`/`.htm`), JSONL (`--text-field`, default
+`text`/`body_markdown`/`output`/...), directories of them, or `-` for stdin. HTML is converted
+to Markdown, keeping its paragraphs, lists, headings and inline formatting and dropping
+navigation, site headers and footers, scripts, form controls, comment sections and subscribe
+widgets; when a page has an `<article>` or `<main>`, the one holding the post is read. A `.md`
+or `.txt` file that is really HTML is read as HTML, stdin is read as JSONL when every line is
+a JSON object, and both are noted on stderr; `--input-format {auto,markdown,html,jsonl}`
+overrides the detection for every input, directory contents included. `build` records it in
+the reference, but `score` does not inherit it, since drafts are often in a different format
+from the writer's archive.
+
+A directory walk names the documents it skipped (Word, PDF, reStructuredText, ...); convert
+those first, for example with pandoc. It also leaves out static-site output and templates,
+which would repeat or wrap the posts: the built HTML in `_site` and `public`, and the template
+folders `_layouts`, `_includes`, `layouts`, `themes` and `resources`. Name such a folder
+directly to read it. `build` and `evaluate` keep only the first of documents with
+word-for-word the same text, so a post and its copy can't calibrate against each other.
+
+`build` splits texts into ~500-word windows (`--window-words N`, or `--no-window`), and `score`
+uses whatever the reference used, so the two always match. `--contrast` can be repeated.
 
 `build` prints a short summary: how the reference scores its own held-out writing, what
 separates it from the contrast drafts, and any warnings; pass `--all` to see every metric.

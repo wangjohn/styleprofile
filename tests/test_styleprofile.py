@@ -963,7 +963,7 @@ def test_directories_read_jsonl_and_skip_hidden_and_vendored_folders(tmp_path: P
     empty = tmp_path / "empty"
     (empty / ".git").mkdir(parents=True)
     (empty / ".git" / "HEAD.md").write_text(AUTHOR, encoding="utf-8")
-    with pytest.raises(StyleProfileError, match=r"\.txt, or \.jsonl files"):
+    with pytest.raises(StyleProfileError, match=r"\.htm, or \.jsonl files"):
         load_chunks([str(empty)])
 
 
@@ -1273,7 +1273,9 @@ def test_build_warns_about_thin_references_and_names_the_next_command(
     expected: list[str],
 ) -> None:
     text = "\n\n".join([AUTHOR] * repeats)
-    _write_docs(tmp_path / "posts", [Chunk(f"d{i}", "s", text) for i in range(documents)])
+    # Each document is distinct: build drops word-for-word duplicates.
+    docs = [Chunk(f"d{i}", "s", f"{text}\n\nThis is note number {i}.") for i in range(documents)]
+    _write_docs(tmp_path / "posts", docs)
     monkeypatch.chdir(tmp_path)
 
     command = ["build", "posts", "-o", "out/writer.json", "--no-syntax", "--window-words", window]

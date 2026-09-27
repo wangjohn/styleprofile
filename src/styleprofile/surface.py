@@ -112,7 +112,7 @@ def _strip_inline(line: str) -> str:
     return re.sub(r"\s+", " ", line).strip()
 
 
-def _strip_front_matter(text: str) -> str:
+def strip_front_matter(text: str) -> str:
     """Remove a leading ---/+++ block whose lines all look like YAML or TOML."""
     lines = text.split("\n")
     delimiter = lines[0].strip()
@@ -140,7 +140,7 @@ def markdown_blocks(markdown: str) -> list[str]:
     with a language (model output cut off mid-block) runs to the end of the text; a bare
     unclosed ``` or ~~~ line (often a section break) is dropped on its own.
     """
-    text = _strip_front_matter(markdown.replace("\r\n", "\n"))
+    text = strip_front_matter(markdown.replace("\r\n", "\n"))
     blocks: list[str] = []
     current: list[str] = []
     fence: str | None = None
