@@ -5,6 +5,8 @@ learn which habits separate that writer from LLM output.
 
 ## Install
 
+styleprofile supports Python 3.11, 3.12 and 3.13.
+
 ```bash
 pip install "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile"
 ```

@@ -7,7 +7,7 @@ name = "styleprofile"
 version = "0.1.0"
 description = "Stylometric profiles of a writer's texts: drift from a reference and LLM-likeness."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dependencies = []
 
@@ -39,12 +39,12 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pyright]
 include = ["src", "tests"]
-pythonVersion = "3.12"
+pythonVersion = "3.11"
 typeCheckingMode = "standard"
