@@ -914,6 +914,12 @@ def test_indented_prose_with_code_characters_is_kept() -> None:
     ]
     assert prose("Text.\n\n    if (ready) { start(); }").blocks == ["Text."]
     assert prose('Text.\n\n    greeting = "Hello there."').blocks == ["Text."]
+    # A sentence-like comment does not make code read as prose.
+    commented = "Text.\n\n    x = 1  # This is where we set the initial value for the counter."
+    assert prose(commented).blocks == ["Text."]
+    assert prose("Text.\n\n    import os\n    // Now we are done with the setup here.").blocks == [
+        "Text."
+    ]
 
 
 def test_unreadable_encodings_are_reported_and_a_bom_is_accepted(

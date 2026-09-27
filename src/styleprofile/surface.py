@@ -39,6 +39,8 @@ _PROSE_TOKEN = re.compile(
     r"^[^\w\s]*[^\W\d_]+(?:['\N{RIGHT SINGLE QUOTATION MARK}-][^\W\d_]+)*[^\w\s]*$"
 )
 _PROSE_TOKEN_SHARE = 0.8
+# A line comment ("# note", "// note"), which reads like prose inside code.
+_LINE_COMMENT = re.compile(r"(?:^|\s)(?:#|//)(?:\s.*)?$")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
@@ -203,8 +205,11 @@ def markdown_blocks(markdown: str) -> list[str]:
 
 
 def _reads_like_prose(lines: Sequence[str]) -> bool:
-    """Mostly plain words and ending in sentence punctuation, as prose does and code rarely."""
-    text = " ".join(line.strip() for line in lines)
+    """Mostly plain words and ending in sentence punctuation, as prose does and code rarely.
+
+    Line comments are left out, so code ending in a sentence-like comment stays code.
+    """
+    text = " ".join(_LINE_COMMENT.sub("", line).strip() for line in lines)
     tokens = text.split()
     prose_tokens = sum(bool(_PROSE_TOKEN.match(token)) for token in tokens)
     ends_sentence = text.rstrip(_CLOSERS).endswith((".", "!", "?"))
