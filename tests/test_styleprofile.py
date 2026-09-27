@@ -1207,7 +1207,7 @@ def test_json_output_is_the_only_thing_on_stdout(
 
 
 def test_score_reports_cannot_be_used_as_references(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reference = _built(tmp_path)
     scored = tmp_path / "draft.json"
@@ -1218,6 +1218,14 @@ def test_score_reports_cannot_be_used_as_references(
     assert main(["score", sample, str(scored)]) == 1
     err = capsys.readouterr().err
     assert "is a score report" in err and "hint: score against the reference profile" in err
+
+    # Errors name the paths as typed, not resolved.
+    monkeypatch.chdir(tmp_path)
+    assert main(["score", sample, "draft.json"]) == 1
+    assert capsys.readouterr().err.startswith("error: draft.json is a score report")
+    Path("empty.json").write_text("{}", encoding="utf-8")
+    assert main(["show", "empty.json"]) == 1
+    assert capsys.readouterr().err.startswith("error: empty.json is not a style profile")
 
     # Reports written before `kind` existed are recognized by their reference section.
     legacy = json.loads(scored.read_text(encoding="utf-8"))

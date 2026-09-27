@@ -369,7 +369,7 @@ def _split_score_paths(args: argparse.Namespace) -> tuple[list[str], str]:
 
 def _load_score_reference(samples: Sequence[str], reference_arg: str) -> dict[str, Any]:
     try:
-        return load_reference(_path(reference_arg))
+        return load_reference(Path(reference_arg).expanduser())
     except StyleProfileError as error:
         if error.code is None and any(Path(path).suffix.lower() == ".json" for path in samples):
             raise StyleProfileError(
@@ -468,7 +468,7 @@ def _run_score(args: argparse.Namespace) -> int:
 
 
 def _run_show(args: argparse.Namespace) -> int:
-    report = load_report(_path(args.report))
+    report = load_report(Path(args.report).expanduser())
     color = _color()
     if report_kind(report) == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
