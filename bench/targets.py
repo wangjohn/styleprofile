@@ -92,9 +92,11 @@ CASES = {
                 "profile_mb": PROFILE_MB,
                 "score_s": SCORE_S,
             },
-            # Only the unmet target needs a baseline; the met ones fall back to 2x target.
-            # PR 14 (no per-chunk rows in the profile) should let this baseline go.
-            baseline={"profile_mb": 2.22},
+            # Only values over 2x target need a baseline; the rest fall back to 2x target.
+            # build_s meets its target on a laptop (1.3s) but the shared runner is about 2.8x
+            # slower; PRs 13 and 14 should bring it under 3.2s there and let the baseline go.
+            # profile_mb goes with PR 14, which drops per-chunk rows from the profile.
+            baseline={"build_s": 3.72, "profile_mb": 2.21},
             ci=True,
         ),
         Case(
