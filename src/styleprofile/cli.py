@@ -711,6 +711,43 @@ RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
 }
 
 
+def _suggest_command(argv: Sequence[str]) -> str:
+    """What to run instead of a command-less line: ``score`` when it names a reference with
+    --reference, ``build`` when it has --output, otherwise either."""
+    guess = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+    guess.add_argument("inputs", nargs="*")
+    guess.add_argument("-o", "--output")
+    guess.add_argument("-r", "--reference")
+    for flag in ("--text-field", "--window-words", "--min-words", "--top-k", "--contrast-label"):
+        guess.add_argument(flag)
+    guess.add_argument("--contrast", nargs="+")
+    guess.add_argument("--no-syntax", action="store_true")
+    guess.add_argument("--all", action="store_true")
+    try:
+        # Unknown flags are dropped: the suggestion keeps only what the command accepts.
+        found, _ = guess.parse_known_intermixed_args(argv)
+    except argparse.ArgumentError:
+        found = None
+    if found is None or not (found.reference or found.output):
+        rest = shlex.join(argv)
+        return f"`{PROG} build {rest}` or `{PROG} score {rest}`"
+    kept = ["text_field", "window_words", "min_words"]
+    if found.reference:
+        # The reference moves to the last argument; score takes no contrast or --top-k.
+        command = ["score", *found.inputs, found.reference]
+    else:
+        command = ["build", *found.inputs]
+        command += [item for path in found.contrast or [] for item in ("--contrast", path)]
+        kept += ["top_k", "contrast_label"]
+    if found.output:
+        command += ["-o", found.output]
+    for name in kept:
+        if getattr(found, name) is not None:
+            command += ["--" + name.replace("_", "-"), getattr(found, name)]
+    command += ["--no-syntax"] * found.no_syntax + ["--all"] * found.all
+    return f"`{PROG} {shlex.join(command)}`"
+
+
 def _dispatch(argv: Sequence[str]) -> int:
     parser, commands = _subparsers()
     if not argv:
@@ -719,10 +756,9 @@ def _dispatch(argv: Sequence[str]) -> int:
     if argv[0] not in commands:
         if not argv[0].startswith("-") and Path(argv[0]).expanduser().exists():
             parser.print_usage(sys.stderr)
-            rest = shlex.join(argv)
             print(
                 f"{PROG}: error: {argv[0]} is not a command; did you mean "
-                f"`{PROG} build {rest}` or `{PROG} score {rest}`?",
+                f"{_suggest_command(argv)}?",
                 file=sys.stderr,
             )
             return 2
