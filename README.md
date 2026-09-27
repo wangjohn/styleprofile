@@ -81,7 +81,7 @@ the metrics, the weighting math, the reliability checks and the resolution floor
 - **One genre per profile.** Blog posts, fiction and email have different habits; mixing
   them widens every spread and blurs every score.
 - **Enough text.** Aim for 15 or more documents and 20,000 or more words in the reference.
-  `build` warns when a reference is thinner than that.
+  `build` warns when a reference has fewer than 2 documents, 15 chunks or 20,000 words.
 - **Contrast drafts from the writer's own briefs.** Have LLMs write from the same briefs or
   outlines the writer worked from, and use several models; the weights only know the drafts
   they were learned from.
