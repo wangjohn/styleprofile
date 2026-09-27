@@ -90,6 +90,20 @@ class StyleProfileError(ValueError):
 
 
 @dataclass(frozen=True)
+class Note:
+    """Something a front end should tell the user about a run that is not an error: an input
+    given twice, or syntax metrics left out because spaCy is missing.
+
+    ``code`` names the kind of note, as ``StyleProfileError.code`` does, and ``message``
+    never mentions flags. Notes describe the run, not the text, so they are not saved in
+    reports; warnings about the text are (``report["warnings"]``).
+    """
+
+    message: str
+    code: str
+
+
+@dataclass(frozen=True)
 class Chunk:
     id: str
     source: str
@@ -640,7 +654,7 @@ def _base_report(
 def build_reference(
     chunks: Sequence[Chunk],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
     settings: dict[str, Any] | None = None,
@@ -649,7 +663,12 @@ def build_reference(
 ) -> dict[str, Any]:
     """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
     reliability when the chunks span two or more documents and, given ``contrast`` chunks
-    (for example LLM drafts), the weights that score likeness to them."""
+    (for example LLM drafts), the weights that score likeness to them.
+
+    This is the lower-level step under ``styleprofile.build``: the chunks are measured as
+    given, not cut into windows, and syntax metrics are left out unless ``parser`` (from
+    ``load_parser``) is passed. Use ``styleprofile.build`` to get the same profile as
+    ``styleprofile build``."""
     return _build_reference(
         chunks,
         parser=parser,
@@ -665,7 +684,7 @@ def build_contrast_reference(
     chunks: Sequence[Chunk],
     contrast: Sequence[Chunk],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
     settings: dict[str, Any] | None = None,
@@ -753,14 +772,18 @@ def score(
     chunks: Sequence[Chunk],
     reference: dict[str, Any],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
     settings: dict[str, Any] | None = None,
     reference_path: Path | None = None,
 ) -> dict[str, Any]:
     """Profile sample chunks and score each against ``reference``: z-scores, Delta, pattern
-    divergence and, when the reference learned a contrast, likeness to the contrast set."""
+    divergence and, when the reference learned a contrast, likeness to the contrast set.
+
+    This is the lower-level step under ``Profile.score``: nothing is inherited from the
+    reference, so pass chunks cut into the reference's windows, its ``min_words`` and a
+    ``parser`` when it has syntax metrics, or use ``Profile.score``, which does all that."""
     measured = _measure(chunks, parser, min_words)
     report, totals = _base_report(
         measured,

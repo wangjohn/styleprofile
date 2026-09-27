@@ -157,6 +157,21 @@ Verdicts on edited text are weaker evidence than verdicts on raw drafts. If the 
 after editing, a "like the reference" reading only shows that the edits removed the habits
 the score measures, not that a person wrote the text.
 
+## Using it from Python
+
+The library runs the same pipeline as the CLI, so it gives the same numbers:
+
+```python
+from pathlib import Path
+import styleprofile as sp
+
+profile = sp.build(Path("posts/"), contrast=Path("llm-drafts/"))
+result = profile.score(sp.Text("A draft to check against the writer."))
+print(result.verdict, result.delta, result.likeness_verdict)
+```
+
+See [docs/library.md](docs/library.md) for inputs, settings, notes and saving.
+
 ## Development
 
 ```bash

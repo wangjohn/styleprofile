@@ -212,7 +212,7 @@ def evaluate_rewording(
     contrast_chunks: Sequence[Chunk],
     edited: Mapping[str, Sequence[Chunk]],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     min_words: int = 1,
     contrast_label: str = "LLM",
     retrain: bool = False,

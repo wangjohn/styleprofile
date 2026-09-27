@@ -1288,12 +1288,12 @@ def test_build_warns_about_thin_references_and_names_the_next_command(
 def test_missing_spacy_falls_back_with_a_note(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from styleprofile import SyntaxUnavailableError, cli
+    from styleprofile import SyntaxUnavailableError, api
 
     def unavailable() -> None:
         raise SyntaxUnavailableError("no spaCy")
 
-    monkeypatch.setattr(cli, "load_parser", unavailable)
+    monkeypatch.setattr(api, "_default_parser", unavailable)
     posts = _write_docs(tmp_path / "posts", _author_docs())
     reference = tmp_path / "writer.json"
 
