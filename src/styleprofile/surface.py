@@ -1,0 +1,537 @@
+"""Parser-free stylometric metrics: sentence shape, rhythm, vocabulary, punctuation, voice.
+
+Every rate is per 1,000 words and every share is a percentage, so chunks of different
+lengths are comparable. Metrics that are undefined for a chunk (too short, no apostrophes)
+are ``None`` rather than a misleading zero.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import statistics
+from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass
+from itertools import pairwise
+
+Metrics = dict[str, dict[str, float | None]]
+
+WORD = re.compile(r"[\w]+(?:['\N{RIGHT SINGLE QUOTATION MARK}-][\w]+)*", re.UNICODE)
+
+# Front matter: lines that look like YAML or TOML (keys, list items, comments, tables).
+_FRONT_MATTER_LINE = re.compile(r"^(?:[\w-]+[ \t]*[:=]|\s|-\s|#|\[)")
+_FRONT_MATTER_LINES = 100
+# Indented blocks count as code only with code-like signals, so plain text that indents
+# its paragraphs with a tab is still read as prose.
+_CODE_SIGNAL = re.compile(
+    r"[{};=<>]|\(\)|^\s*(?:def|class|import|from|return|if|for|while|const|let|var|"
+    r"function|fn|pub|func|package|#include|\$)\b"
+)
+# A backtick fence's info string cannot contain backticks (CommonMark), so a line such as
+# "```npm i``` is all you need" is inline code, not a fence.
+_FENCE_OPEN = re.compile(r"^\s*(?:(`{3,})[^`]*|(~{3,}).*)$")
+_FENCE_CLOSE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
+_INDENTED_CODE = re.compile(r"^(?: {4}|\t)")
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_LINK = re.compile(r"(?<!!)\[([^\]]+)\]\([^)]*\)")
+_BOLD = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1")
+_INLINE_CODE = re.compile(r"(`+)(?!`)[^\n]+?(?<!`)\1(?!`)")
+_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
+_URL = re.compile(r"https?://\S+")
+_EMPHASIS = re.compile(r"(?<![\w*])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*])")
+_BLOCKQUOTE = re.compile(r"^\s*>\s?", re.MULTILINE)
+_CLOSERS = "\"'\N{RIGHT DOUBLE QUOTATION MARK}\N{RIGHT SINGLE QUOTATION MARK})\\]"
+_SENTENCE_BREAK = re.compile(
+    rf"(?:(?<=[.!?])|(?<=[.!?][{_CLOSERS}]))"
+    r"\s+(?=[\"\N{LEFT DOUBLE QUOTATION MARK}'\N{LEFT SINGLE QUOTATION MARK}(\[]?[A-Z0-9])"
+)
+_ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|vs|mr|mrs|ms|dr|st|jr|sr|fig|approx)\.$", re.I)
+# Abbreviations that are also ordinary words, only before a number ("No. 5", not "said no.").
+_NUMBER_ABBREVIATION = re.compile(r"\b(?:No|Nos|[Vv]ol|pp|[Cc]h)\.$")
+_EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
+_ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
+_HEDGE = re.compile(
+    r"\b(?:i think|i suspect|i guess|i'm not sure|maybe|perhaps|probably|likely|seems?|"
+    r"arguably|somewhat|roughly|generally|usually|tends? to|kind of|sort of|"
+    r"in my experience)\b",
+    re.I,
+)
+_BOOSTER = re.compile(
+    r"\b(?:clearly|definitely|obviously|certainly|really|very|extremely|incredibly|"
+    r"absolutely|totally|always|never|undoubtedly)\b",
+    re.I,
+)
+# Words and constructions that are markedly more frequent in LLM prose than in human blogs.
+# Several are ordinary words, so read this as a drift signal, not a detector.
+_LLM_MARKER = re.compile(
+    r"\b(?:delve[sd]?|delving|crucial|pivotal|tapestry|testament|realm|landscape|"
+    r"multifaceted|holistic|paramount|seamless(?:ly)?|robust|leverag(?:e|es|ed|ing)|"
+    r"foster(?:s|ed|ing)?|underscor(?:e|es|ed|ing)|intricate|vibrant|streamlin(?:e|es|ed|ing)|"
+    r"navigat(?:e|es|ing) the|moreover|furthermore|additionally|"
+    r"it(?:'s| is) worth noting|in today's|in conclusion|ever-evolving|game-changer)\b",
+    re.I,
+)
+_NOT_JUST_BUT = re.compile(r"\bnot (?:just|only|merely|simply)\b[^.?!]{0,80}?\bbut\b", re.I)
+_TRANSITION_OPENER = re.compile(
+    r"^(?:however|moreover|furthermore|additionally|overall|ultimately|importantly|notably|"
+    r"in fact|that said|in short|in conclusion|as a result|consequently|thus|therefore)\b",
+    re.I,
+)
+_AND_BUT_SO_OPENER = re.compile(r"^(?:and|but|so)\b", re.I)
+
+_CONTRACTION_SUFFIX = re.compile(r"(?:n't|'re|'ve|'ll|'d|'m)$")
+# "'s" is usually a possessive, so only these pronoun and adverb forms count as contractions.
+_S_CONTRACTIONS = frozenset(
+    {"it's", "that's", "there's", "here's", "what's", "who's", "he's", "she's", "let's",
+     "where's", "how's", "when's", "why's"}
+)  # fmt: skip
+_NEGATIONS = frozenset({"not", "no", "never", "nothing", "nobody", "none", "neither", "nor"})
+_FIRST_SINGULAR = frozenset({"i", "i'm", "i've", "i'd", "i'll", "me", "my", "mine", "myself"})
+_FIRST_PLURAL = frozenset({"we", "we're", "we've", "we'd", "we'll", "us", "our", "ours"})
+_SECOND = frozenset({"you", "you're", "you've", "you'd", "you'll", "your", "yours", "yourself"})
+
+FUNCTION_WORDS: tuple[str, ...] = (
+    "the", "a", "an", "and", "but", "or", "so", "because", "if", "when", "while", "that",
+    "which", "who", "this", "these", "those", "it", "its", "of", "to", "in", "on", "for",
+    "with", "at", "by", "from", "as", "into", "about", "than", "then", "there", "here",
+    "just", "really", "very", "much", "more", "most", "also", "even", "still", "only",
+    "actually", "though", "although", "however", "instead", "rather", "where", "how", "what",
+    "why", "not", "no", "all", "some", "any", "every", "both", "each", "other", "is", "are",
+    "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "can", "could",
+    "will", "would", "should", "might", "may", "i", "you", "we", "they", "he", "she", "my",
+    "your", "our", "their",
+)  # fmt: skip
+_FUNCTION_SET = frozenset(FUNCTION_WORDS)
+MASK = "\N{MIDDLE DOT}"
+
+SHORT_SENTENCE_WORDS = 8
+LONG_SENTENCE_WORDS = 30
+LONG_WORD_CHARS = 7
+
+
+@dataclass(frozen=True)
+class Prose:
+    """Markdown reduced to prose blocks, with the markup counts measured before stripping."""
+
+    blocks: list[str]
+    paragraphs: list[str]
+    headings: int
+    list_items: int
+    links: int
+    bold: int
+    code_spans: int
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(self.blocks)
+
+
+def _strip_inline(line: str) -> str:
+    line = _IMAGE.sub(r"\1", line)
+    line = _LINK.sub(r"\1", line)
+    line = _INLINE_CODE.sub("", line)
+    line = _HTML_TAG.sub("", line)
+    line = _URL.sub("", line)
+    line = _EMPHASIS.sub("", line)
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _strip_front_matter(text: str) -> str:
+    """Remove a leading ---/+++ block whose lines all look like YAML or TOML."""
+    lines = text.split("\n")
+    delimiter = lines[0].strip()
+    if delimiter not in ("---", "+++"):
+        return text
+    for index in range(1, min(len(lines), _FRONT_MATTER_LINES + 1)):
+        if lines[index].strip() == delimiter:
+            body = [line for line in lines[1:index] if line.strip()]
+            if body and all(_FRONT_MATTER_LINE.match(line) for line in body):
+                return "\n".join(lines[index + 1 :])
+            return text
+    return text
+
+
+def _fence(line: str) -> str | None:
+    opening = _FENCE_OPEN.match(line)
+    return (opening.group(1) or opening.group(2)) if opening else None
+
+
+def markdown_blocks(markdown: str) -> list[str]:
+    """Split Markdown at blank lines, keeping each fenced code block whole.
+
+    Front matter is dropped. Blockquote markers do not hide a blank line ("> " alone ends
+    a quoted paragraph). A fence may be indented (inside a list item). An unclosed fence
+    with a language (model output cut off mid-block) runs to the end of the text; a bare
+    unclosed ``` or ~~~ line (often a section break) is dropped on its own.
+    """
+    text = _strip_front_matter(markdown.replace("\r\n", "\n"))
+    blocks: list[str] = []
+    current: list[str] = []
+    fence: str | None = None
+    for line in text.split("\n"):
+        opening = _fence(line) if fence is None else None
+        if opening:
+            if current:
+                blocks.append("\n".join(current))
+            current, fence = [line], opening
+        elif fence is not None:
+            current.append(line)
+            closing = _FENCE_CLOSE.match(line)
+            if closing and closing.group(1)[0] == fence[0] and len(closing.group(1)) >= len(fence):
+                blocks.append("\n".join(current))
+                current, fence = [], None
+        elif _BLOCKQUOTE.sub("", line).strip():
+            current.append(line)
+        elif current:
+            blocks.append("\n".join(current))
+            current = []
+    if fence is not None and not current[0].strip().lstrip("`~").strip():
+        # A bare opener that never closes: drop that line and read the rest as usual.
+        return blocks + markdown_blocks("\n".join(current[1:]))
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+@dataclass(frozen=True)
+class Block:
+    """One Markdown block and how it reads in context."""
+
+    raw: str
+    code: bool
+    continues_list: bool
+
+
+def classify(markdown: str) -> list[Block]:
+    """Mark code blocks, using list context to tell indented code from list continuations."""
+    classified: list[Block] = []
+    after_list = False
+    for raw in markdown_blocks(markdown):
+        lines = [line for line in raw.split("\n") if line.strip()]
+        indented = all(_INDENTED_CODE.match(line) for line in lines)
+        code_like = indented and any(_CODE_SIGNAL.search(line) for line in lines)
+        if _fence(lines[0]):
+            classified.append(Block(raw, code=True, continues_list=False))
+            continue
+        if code_like and not after_list:
+            classified.append(Block(raw, code=True, continues_list=False))
+            after_list = False
+            continue
+        continues = indented and after_list
+        has_items = any(_LIST_ITEM.match(_BLOCKQUOTE.sub("", line)) for line in lines)
+        after_list = has_items or continues
+        classified.append(Block(raw, code=False, continues_list=continues))
+    return classified
+
+
+@dataclass
+class _Tally:
+    blocks: list[str]
+    paragraphs: list[str]
+    headings: int = 0
+    list_items: int = 0
+    links: int = 0
+    bold: int = 0
+    code_spans: int = 0
+
+
+def _read_block(raw: str, tally: _Tally, continues_list: bool = False) -> None:
+    """Add one block's prose to the tally, in reading order.
+
+    A block that continues a list item (indented under it after a blank line) extends that
+    item rather than starting a paragraph.
+    """
+    source = _BLOCKQUOTE.sub("", raw)
+    tally.links += len(_LINK.findall(source))
+    tally.bold += len(_BOLD.findall(source))
+    tally.code_spans += len(_INLINE_CODE.findall(source))
+    paragraph_lines: list[str] = []
+    in_list = False
+
+    def flush() -> None:
+        paragraph = _strip_inline(" ".join(paragraph_lines))
+        paragraph_lines.clear()
+        if not WORD.search(paragraph):
+            return
+        if continues_list and tally.blocks:
+            tally.blocks[-1] = f"{tally.blocks[-1]} {paragraph}"
+            return
+        tally.blocks.append(paragraph)
+        if not continues_list:
+            tally.paragraphs.append(paragraph)
+
+    for line in (line for line in source.split("\n") if line.strip()):
+        if _HEADING.match(line):
+            tally.headings += 1
+            in_list = False
+        elif line.lstrip().startswith("|"):
+            continue
+        elif _LIST_ITEM.match(line):
+            flush()  # an intro line directly above a list comes before its items
+            tally.list_items += 1
+            in_list = True
+            tally.blocks.append(_strip_inline(_LIST_ITEM.sub("", line)))
+        elif in_list:
+            tally.blocks[-1] = f"{tally.blocks[-1]} {_strip_inline(line)}".strip()
+        else:
+            paragraph_lines.append(line)
+    flush()
+
+
+def prose(markdown: str) -> Prose:
+    """Drop front matter, code, headings, tables, and markup; keep paragraphs and list items."""
+    tally = _Tally(blocks=[], paragraphs=[])
+    for block in classify(markdown):
+        if not block.code:
+            _read_block(block.raw, tally, block.continues_list)
+    return Prose(
+        blocks=[text for text in tally.blocks if WORD.search(text)],
+        paragraphs=tally.paragraphs,
+        headings=tally.headings,
+        list_items=tally.list_items,
+        links=tally.links,
+        bold=tally.bold,
+        code_spans=tally.code_spans,
+    )
+
+
+def block_word_count(block: Block) -> int:
+    """Prose words in one classified block (0 for code), as prose() would count them."""
+    if block.code:
+        return 0
+    tally = _Tally(blocks=[], paragraphs=[])
+    _read_block(block.raw, tally, block.continues_list)
+    return sum(len(words(text)) for text in tally.blocks)
+
+
+def words(text: str) -> list[str]:
+    return [
+        token.casefold().replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
+        for token in WORD.findall(text)
+    ]
+
+
+def sentences(block: str) -> list[str]:
+    parts: list[str] = []
+    for piece in _SENTENCE_BREAK.split(block.strip()):
+        if parts and (
+            _ABBREVIATION.search(parts[-1])
+            or (_NUMBER_ABBREVIATION.search(parts[-1]) and piece[:1].isdigit())
+        ):
+            parts[-1] = f"{parts[-1]} {piece}"
+        else:
+            parts.append(piece)
+    return [part for part in parts if WORD.search(part)]
+
+
+def _mean(values: Sequence[float]) -> float | None:
+    return statistics.fmean(values) if values else None
+
+
+def _pct(part: int, whole: int) -> float | None:
+    return 100 * part / whole if whole else None
+
+
+def mattr(tokens: Sequence[str], window: int = 100) -> float | None:
+    """Moving-average type/token ratio, which does not shrink as texts get longer."""
+    if len(tokens) < window:
+        return None
+    counts: Counter[str] = Counter(tokens[:window])
+    total = len(counts)
+    for index in range(window, len(tokens)):
+        leaving = tokens[index - window]
+        counts[leaving] -= 1
+        if not counts[leaving]:
+            del counts[leaving]
+        counts[tokens[index]] += 1
+        total += len(counts)
+    return total / (len(tokens) - window + 1) / window
+
+
+def mtld(tokens: Sequence[str], threshold: float = 0.72) -> float | None:
+    """Measure of textual lexical diversity (McCarthy & Jarvis 2010), averaged both ways."""
+    if len(tokens) < 50:
+        return None
+
+    def one_pass(sequence: Sequence[str]) -> float:
+        factors = 0.0
+        types: set[str] = set()
+        count = 0
+        for token in sequence:
+            count += 1
+            types.add(token)
+            if len(types) / count <= threshold:
+                factors += 1
+                types, count = set(), 0
+        if count:
+            factors += (1 - len(types) / count) / (1 - threshold)
+        return len(sequence) / factors if factors else float(len(sequence))
+
+    return (one_pass(tokens) + one_pass(tokens[::-1])) / 2
+
+
+def hapax_share(tokens: Sequence[str], block: int = 100) -> float | None:
+    """Percent of word types used once, averaged over consecutive fixed-size blocks."""
+    shares = []
+    for start in range(0, len(tokens) - block + 1, block):
+        counts = Counter(tokens[start : start + block])
+        shares.append(100 * sum(value == 1 for value in counts.values()) / len(counts))
+    return _mean(shares)
+
+
+def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
+    """All parser-free metrics for one chunk, grouped by stylistic level.
+
+    Pass ``parsed`` when the chunk's ``prose()`` is already at hand, to avoid re-parsing.
+    """
+    parsed = parsed or prose(markdown)
+    text = parsed.text
+    tokens = words(text)
+    word_count = len(tokens)
+    per_1k = 1000 / word_count if word_count else None
+    # Phrase patterns are written with straight apostrophes; curly ones must match too.
+    plain = text.replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
+
+    sentence_texts = [sentence for block in parsed.blocks for sentence in sentences(block)]
+    lengths = [len(words(sentence)) for sentence in sentence_texts]
+    paragraph_sentence_counts = [len(sentences(paragraph)) for paragraph in parsed.paragraphs]
+    mean_length = _mean(lengths)
+    length_sd = statistics.pstdev(lengths) if lengths else None
+
+    apostrophes = text.count("'") + text.count("\N{RIGHT SINGLE QUOTATION MARK}")
+    straight_double = text.count('"')
+    function_counts = Counter(token for token in tokens if token in _FUNCTION_SET)
+
+    def rate(count: int) -> float | None:
+        return count * per_1k if per_1k is not None else None
+
+    return {
+        "size": {
+            "words": float(word_count),
+            "sentences": float(len(lengths)),
+            "paragraphs": float(len(parsed.paragraphs)),
+            "apostrophes": float(apostrophes),
+        },
+        "sentence_shape": {
+            "sentence_words_mean": mean_length,
+            "sentence_words_median": float(statistics.median(lengths)) if lengths else None,
+            "sentence_words_sd": length_sd,
+            "short_sentences_pct": _pct(
+                sum(n <= SHORT_SENTENCE_WORDS for n in lengths), len(lengths)
+            ),
+            "long_sentences_pct": _pct(
+                sum(n >= LONG_SENTENCE_WORDS for n in lengths), len(lengths)
+            ),
+            "paragraph_sentences_mean": _mean(paragraph_sentence_counts),
+            "paragraph_words_mean": _mean([len(words(p)) for p in parsed.paragraphs]),
+            "one_sentence_paragraphs_pct": _pct(
+                sum(count == 1 for count in paragraph_sentence_counts),
+                len(paragraph_sentence_counts),
+            ),
+        },
+        "rhythm": {
+            "sentence_length_cv": (
+                length_sd / mean_length if mean_length and length_sd is not None else None
+            ),
+            "sentence_length_change_mean": _mean(
+                [abs(left - right) for left, right in pairwise(lengths)]
+            ),
+        },
+        "vocabulary": {
+            "word_chars_mean": _mean([len(token) for token in tokens]),
+            "long_words_pct": _pct(
+                sum(len(token) >= LONG_WORD_CHARS for token in tokens), word_count
+            ),
+            "mattr_100": mattr(tokens),
+            "mtld": mtld(tokens),
+            "hapax_share_100": hapax_share(tokens),
+        },
+        "punctuation": {
+            "commas_per_1k": rate(text.count(",")),
+            "semicolons_per_1k": rate(text.count(";")),
+            "colons_per_1k": rate(text.count(":")),
+            "em_dashes_per_1k": rate(len(_EM_DASH.findall(text))),
+            "parentheses_per_1k": rate(text.count("(")),
+            "questions_per_1k": rate(text.count("?")),
+            "exclamations_per_1k": rate(text.count("!")),
+            "ellipses_per_1k": rate(len(_ELLIPSIS.findall(text))),
+            "quotations_per_1k": rate(
+                text.count("\N{LEFT DOUBLE QUOTATION MARK}") + straight_double // 2
+            ),
+            "curly_apostrophe_pct": _pct(
+                text.count("\N{RIGHT SINGLE QUOTATION MARK}"), apostrophes
+            ),
+        },
+        "voice": {
+            "contractions_per_1k": rate(
+                sum(
+                    token in _S_CONTRACTIONS or bool(_CONTRACTION_SUFFIX.search(token))
+                    for token in tokens
+                )
+            ),
+            "first_singular_per_1k": rate(sum(token in _FIRST_SINGULAR for token in tokens)),
+            "first_plural_per_1k": rate(sum(token in _FIRST_PLURAL for token in tokens)),
+            "second_person_per_1k": rate(sum(token in _SECOND for token in tokens)),
+            "negations_per_1k": rate(
+                sum(token in _NEGATIONS or token.endswith("n't") for token in tokens)
+            ),
+            "hedges_per_1k": rate(len(_HEDGE.findall(plain))),
+            "boosters_per_1k": rate(len(_BOOSTER.findall(plain))),
+            "and_but_so_openers_pct": _pct(
+                sum(bool(_AND_BUT_SO_OPENER.match(s)) for s in sentence_texts),
+                len(sentence_texts),
+            ),
+            "transition_openers_pct": _pct(
+                sum(bool(_TRANSITION_OPENER.match(s)) for s in sentence_texts),
+                len(sentence_texts),
+            ),
+            "llm_markers_per_1k": rate(len(_LLM_MARKER.findall(plain))),
+            "not_just_but_per_1k": rate(len(_NOT_JUST_BUT.findall(plain))),
+        },
+        "markdown": {
+            "headings_per_1k": rate(parsed.headings),
+            "list_items_per_1k": rate(parsed.list_items),
+            "links_per_1k": rate(parsed.links),
+            "bold_per_1k": rate(parsed.bold),
+            "code_spans_per_1k": rate(parsed.code_spans),
+        },
+        "function_words": {
+            f"fw_{word}_per_1k": rate(function_counts[word]) for word in FUNCTION_WORDS
+        },
+    }
+
+
+def masked_bigrams(text: str) -> Counter[str]:
+    """Transitions between function words, with every content word masked to one symbol.
+
+    ``text`` is prose, as ``prose(markdown).text`` returns it.
+    """
+    tokens = [token if token in _FUNCTION_SET else MASK for token in words(text)]
+    return Counter(
+        f"{left} {right}" for left, right in pairwise(tokens) if (left, right) != (MASK, MASK)
+    )
+
+
+def char_trigrams(text: str) -> Counter[str]:
+    """Character trigrams of prose text (``prose(markdown).text``), case-folded."""
+    text = re.sub(r"\s+", " ", text.casefold())
+    return Counter(text[index : index + 3] for index in range(len(text) - 2))
+
+
+def jensen_shannon(sample: dict[str, float], reference: dict[str, float]) -> float | None:
+    """Jensen-Shannon divergence in bits (0 identical, 1 disjoint) between two distributions."""
+    if not sample or not reference:
+        return None
+    total = 0.0
+    for key in sample.keys() | reference.keys():
+        p = sample.get(key, 0.0)
+        q = reference.get(key, 0.0)
+        m = (p + q) / 2
+        if p:
+            total += p * math.log2(p / m)
+        if q:
+            total += q * math.log2(q / m)
+    return max(0.0, total / 2)
