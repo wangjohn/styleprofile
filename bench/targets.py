@@ -33,7 +33,8 @@ The ratchet is enforced: ``run.py --check`` also fails when a baseline is *stale
 the metric is back within 2x its target (the baseline is no longer needed) or below
 ``baseline / NOISE`` (it improved by more than noise). The PR that made the improvement must
 then lower or delete the baseline, so the budget tightens towards 2x the target and the gain
-can't quietly be lost again.
+can't quietly be lost again. Time and memory baselines are only judged stale on the CI runner
+(in GitHub Actions), where they were measured; profile size is judged on any machine.
 
 Peak memory is the main ``styleprofile`` process's alone (``ru_maxrss`` from ``os.wait4``),
 not its process tree. That is exact while styleprofile runs in one process; PR 13, which adds

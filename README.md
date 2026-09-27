@@ -173,14 +173,15 @@ each case in `bench/targets.py`. It prints a table beside the targets and saves
 `bench/results.json`. Pick cases with `make bench BENCH="--case big --repeat 3"`. CI runs the
 medium case without spaCy and fails when a value is over its regression budget, as explained in
 `bench/targets.py`. A PR that improves a metric must lower or delete its baseline in
-`bench/targets.py` in the same PR, so the budget ratchets down.
+`bench/targets.py` in the same PR, so the budget ratchets down; CI's `--check` fails on a
+stale baseline until it does.
 
 ### Changing CLI output
 
 `tests/test_snapshots.py` compares the exact output of `build`, `score`, `show`, `metrics` and
 `evaluate` on `examples/` with the files in `tests/snapshots/`. When you change what the CLI
-prints, or rebase onto a change that did, run `make snapshots` with spaCy installed (`make
-sync`), so the syntax snapshots refresh too. Review the diff in `tests/snapshots/` and commit it
+prints, or rebase onto a change that did, run `make snapshots`. It installs spaCy (the
+`syntax` extra) first, so the syntax snapshots refresh too. Review the diff in `tests/snapshots/` and commit it
 with the change, so reviewers see the output change.
 
 The package began as the stylometry module of GoodProse.
