@@ -1,5 +1,7 @@
 """Benchmark cases and their performance targets: the one place both live.
 
+Rule: a PR that improves a metric must lower or delete its baseline here in the same PR.
+
 The targets come from the "Performance targets" table of the engineering plan (measured on a
 4-core laptop):
 
