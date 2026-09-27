@@ -9,7 +9,7 @@ import pytest
 from styleprofile import Chunk, StyleProfileError
 from styleprofile.cli import main
 from styleprofile.display import describe_delta, label, value
-from styleprofile.profile import _prepare, build_reference, load_chunks, score, window
+from styleprofile.profile import VERSION, _prepare, build_reference, load_chunks, score, window
 from styleprofile.profile import _score as _score_with
 from styleprofile.surface import (
     Metrics,
@@ -516,7 +516,7 @@ def test_front_matter_indented_blocks_and_unclosed_fences() -> None:
 
 def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
     reference = {
-        "version": 1,
+        "version": VERSION,
         "chunk_count": 5,
         "summary": {
             "punctuation": {
@@ -540,8 +540,10 @@ def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
     assert scored["delta"] == pytest.approx((0.1 / 1.01 + 1.0) / 2)
     assert "likeness" not in scored
 
-    report = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
-    assert any("report version 1" in warning for warning in report["warnings"])
+    assert score([Chunk("a", "s", AUTHOR)], reference, parser=None)["reference"]["delta_mean"]
+    with pytest.raises(StyleProfileError, match="report version 1; this one reads") as error:
+        score([Chunk("a", "s", AUTHOR)], {**reference, "version": 1}, parser=None)
+    assert error.value.code == "outdated"
 
 
 def test_never_varying_differences_do_not_cancel() -> None:
@@ -1377,7 +1379,6 @@ def test_each_command_has_short_help_with_an_example(
 
 def test_version_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> None:
     from styleprofile import __version__
-    from styleprofile.profile import VERSION
 
     with pytest.raises(SystemExit) as exit_:
         main(["--version"])

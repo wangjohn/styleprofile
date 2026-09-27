@@ -62,7 +62,13 @@ from styleprofile.weighting import (
 # 5: the contrast AUC has a document-bootstrap 95% interval and a length-only baseline.
 # Every report carries ``kind`` (see ``KINDS``), and score reports a ``baseline`` copy of what
 # rendering needs from their reference.
-VERSION = 5
+# 6: settings are recorded verbatim, every field of ``api.Settings``: ``syntax`` is what was
+# asked ("auto", true or false) and ``syntax_used`` the parser that ran; ``window_words`` 0
+# is no windowing; ``inputs`` is always a list.
+# Reports of any other version are refused (``check_version``): rebuild them.
+VERSION = 6
+# The version of evaluation reports (``styleprofile evaluate``), counted separately.
+EVALUATION_VERSION = 2
 REFERENCE = "reference"
 SCORE = "score"
 # Written by ``styleprofile evaluate`` (see the evaluate module); shown, never scored against.
@@ -402,7 +408,28 @@ def load_report(path: Path) -> dict[str, Any]:
     if kind not in KINDS or (kind != EVALUATION and "summary" not in report):
         # A pre-release report without ``kind``, or a kind this version does not know.
         raise StyleProfileError(f"{path} is {UNREADABLE}", code="outdated")
+    check_version(report, str(path))
     return report
+
+
+def check_version(report: dict[str, Any], name: str = "the report") -> None:
+    """Refuse a report of another version than this styleprofile writes, saying how to
+    make it again: its settings and metrics would be misread rather than migrated."""
+    kind = report.get("kind")
+    expected = EVALUATION_VERSION if kind == EVALUATION else VERSION
+    version = report.get("version")
+    if version == expected:
+        return
+    again = {
+        SCORE: "score it again with `styleprofile score`",
+        EVALUATION: "run `styleprofile evaluate` again",
+    }.get(kind or "", "rebuild it with `styleprofile build`")
+    age = "a newer" if isinstance(version, int) and version > expected else "an older"
+    raise StyleProfileError(
+        f"{name} was made by {age} styleprofile (report version {version}; this one reads "
+        f"{expected}); {again}",
+        code="outdated",
+    )
 
 
 def load_reference(path: Path) -> dict[str, Any]:
@@ -646,13 +673,14 @@ def build_reference(
     This is the lower-level step under ``styleprofile.build``: the chunks are measured as
     given, not cut into windows, and syntax metrics are left out unless ``parser`` (from
     ``load_parser``) is passed. Use ``styleprofile.build`` to get the same profile as
-    ``styleprofile build``."""
+    ``styleprofile build``. Unless ``settings`` says otherwise, the profile records
+    ``window_words`` 0, since these chunks were not windowed here."""
     return _build_reference(
         chunks,
         parser=parser,
         top_k=top_k,
         min_words=min_words,
-        settings=settings,
+        settings={"window_words": 0, **(settings or {})},
         contrast=contrast,
         contrast_label=contrast_label,
     )[0]
@@ -761,7 +789,9 @@ def score(
 
     This is the lower-level step under ``Profile.score``: nothing is inherited from the
     reference, so pass chunks cut into the reference's windows, its ``min_words`` and a
-    ``parser`` when it has syntax metrics, or use ``Profile.score``, which does all that."""
+    ``parser`` when it has syntax metrics, or use ``Profile.score``, which does all that.
+    A reference of another report version is refused (``check_version``)."""
+    check_version(reference, "the reference")
     measured = _measure(chunks, parser, min_words)
     report, totals = _base_report(
         measured,
@@ -782,11 +812,6 @@ def score(
     scored = [row["reference"] for row in rows]
     groups = sorted({group for scores in scored for group in scores["delta_by_group"]})
     reference_settings = reference.get("settings", {})
-    if reference.get("version") != VERSION:
-        warnings.append(
-            f"the reference was built by report version {reference.get('version')} "
-            f"(this is {VERSION}); rebuild it so Delta is comparable"
-        )
     if not reference.get("reliability"):
         warnings.append(
             "the reference has no held-out reliability (it needs chunks from at least two "

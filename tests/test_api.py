@@ -17,12 +17,14 @@ from styleprofile import api
 from styleprofile.cli import _flagged, main
 from styleprofile.display import format_evaluation
 from styleprofile.profile import (
+    EVALUATION_VERSION,
     Chunk,
     base_id,
     build_reference,
     document_of,
     dumps_report,
     load_chunks,
+    load_report,
     score,
     window,
 )
@@ -222,7 +224,10 @@ def test_settings_round_trip_through_a_report() -> None:
         assert recorded == chosen
         assert sp.Settings.from_report(recorded) == settings
         assert sp.Settings.from_report({**recorded, "inputs": [], "syntax_used": None}) == settings
-    assert sp.Settings.from_report({}) == sp.Settings()
+    # A report made without settings (by the lower-level functions) was not windowed.
+    assert sp.Settings.from_report({}) == sp.Settings(window_words=0)
+    # Overrides are typed with the same fields.
+    assert set(api.SettingsOverrides.__annotations__) == set(samples)
 
 
 def test_profiles_record_settings_verbatim(examples: Path) -> None:
@@ -260,7 +265,7 @@ def test_score_inherits_the_profile_settings(examples: Path) -> None:
     replaced = profile.score(DRAFT, dataclasses.replace(settings, window_words=100), min_words=3)
     assert replaced.report["settings"]["window_words"] == 100 and replaced.notes == ()
     with pytest.raises(TypeError, match="unknown setting"):
-        profile.score(DRAFT, window=100)
+        profile.score(DRAFT, window=100)  # pyright: ignore[reportCallIssue]
 
 
 def test_settings_are_checked_strictly_without_naming_flags() -> None:
@@ -448,3 +453,71 @@ def test_rewindowing_chunks_keeps_their_documents() -> None:
     assert {document_of(chunk.source, chunk.id) for chunk in twice} == {
         document_of("post.md", "post")
     }
+
+
+def _as_main_saved_it(report: dict[str, Any]) -> dict[str, Any]:
+    """A report shaped as main (report version 5) saved it: syntax is the parser that ran,
+    no windowing is null, and one input is recorded bare."""
+    settings = {
+        key: value
+        for key, value in report["settings"].items()
+        if key not in ("syntax", "syntax_used", "input_format")
+    }
+    settings["syntax"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    settings["window_words"] = settings["window_words"] or None
+    return {**report, "version": 5, "settings": settings}
+
+
+def test_reports_from_older_versions_are_refused_with_rebuild_it(
+    examples: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    profile = sp.build(WRITER, sp.Settings(syntax=False, window_words=0))
+    old_profile, old_score = tmp_path / "old.json", tmp_path / "old-score.json"
+    old_profile.write_text(json.dumps(_as_main_saved_it(profile.report)), encoding="utf-8")
+    score_report = profile.score(DRAFT).report
+    old_score.write_text(json.dumps({**score_report, "version": 5}), encoding="utf-8")
+
+    with pytest.raises(sp.StyleProfileError, match="rebuild it with `styleprofile build`") as error:
+        sp.Profile.load(old_profile)
+    assert error.value.code == "outdated" and "report version 5; this one reads 6" in str(
+        error.value
+    )
+    with pytest.raises(sp.StyleProfileError, match="an older styleprofile") as error:
+        sp.Profile(_as_main_saved_it(profile.report))
+    with pytest.raises(sp.StyleProfileError, match="score it again") as error:
+        load_report(old_score)
+    assert error.value.code == "outdated"
+
+    # The command line says the same for both, with its hint, and never blames a flag.
+    for command in (["score", DRAFT, str(old_profile)], ["show", str(old_score)]):
+        assert main(command) == 1
+        err = capsys.readouterr().err
+        assert "not a style profile this version of styleprofile can read; rebuild it" in err
+        assert "hint: run `styleprofile build` again" in err and "--" not in err.split("\n")[0]
+
+
+def test_evaluation_reports_have_their_own_version(examples: Path, tmp_path: Path) -> None:
+    drafts = [path.read_text(encoding="utf-8") for path in sorted((ROOT / CONTRAST).glob("*.md"))]
+    result = sp.evaluate(
+        WRITER,
+        [sp.Text(d) for d in drafts],
+        {"plain": [sp.Text(d.replace(" — ", ", ")) for d in drafts]},
+        sp.Settings(syntax=False),
+    )
+    assert result.report["version"] == EVALUATION_VERSION
+    assert "top_k" not in result.report["settings"], "evaluate never uses top_k"
+    path = tmp_path / "evaluation.json"
+    result.save(path)
+    assert load_report(path)["kind"] == "evaluation"
+    path.write_text(json.dumps({**result.report, "version": 1}), encoding="utf-8")
+    with pytest.raises(sp.StyleProfileError, match="run `styleprofile evaluate` again"):
+        load_report(path)
+
+
+def test_lower_level_profiles_are_read_as_not_windowed() -> None:
+    chunks = [Chunk(f"post{index}", f"post{index}.md", text) for index, text in enumerate(POSTS)]
+    profile = sp.Profile(build_reference(chunks))
+    assert profile.report["settings"]["window_words"] == 0
+    assert profile.settings.window_words == 0
+    result = profile.score(sp.Text(POSTS[0] * 30))
+    assert not any("window sizes differ" in warning for warning in result.warnings)

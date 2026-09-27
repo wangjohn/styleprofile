@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict, Unpack
 
 from styleprofile.core import (
     LIKENESSES,
@@ -56,6 +56,7 @@ from styleprofile.profile import (
     TEXT_FIELDS,
     Chunk,
     build_reference,
+    check_version,
     document_of,
     dumps_report,
     load_chunks,
@@ -149,10 +150,25 @@ class Settings:
     @classmethod
     def from_report(cls, recorded: Mapping[str, Any]) -> Settings:
         """Settings read back from a report's ``settings``. A field the report lacks (it was
-        made with the lower-level functions, say) takes its default; other keys (``inputs``,
-        ``syntax_used``) are ignored."""
+        made with the lower-level functions, say) takes its default, except that a missing
+        ``window_words`` is 0: nothing says those chunks were windowed. Other keys
+        (``inputs``, ``syntax_used``) are ignored."""
         names = {field.name for field in dataclasses.fields(cls)}
-        return cls(**{name: value for name, value in recorded.items() if name in names})
+        known = {name: value for name, value in recorded.items() if name in names}
+        return cls(**{"window_words": 0, **known})
+
+
+class SettingsOverrides(TypedDict, total=False):
+    """Keyword overrides for ``Profile.score``: any ``Settings`` field, by name. Leave a
+    keyword out to inherit it; a value given (``None`` included, for ``text_field``) is used
+    as is, and ``None`` for a number or ``syntax`` is refused like any invalid setting."""
+
+    window_words: int
+    min_words: int
+    text_field: str | None
+    syntax: Literal["auto"] | bool
+    top_k: int
+    input_format: str
 
 
 def _invalid(name: str, message: str) -> None:
@@ -227,6 +243,7 @@ class Profile(_Result):
                 "reference from the writer's own texts",
                 code="score_as_reference",
             )
+        check_version(report, "the profile")
         super().__init__(report, notes=notes, sources=sources)
         self._path = _resolved(path) if path is not None else None
 
@@ -266,14 +283,15 @@ class Profile(_Result):
         settings: Settings | None = None,
         *,
         progress: ProgressCallback | None = None,
-        **overrides: Any,
+        **overrides: Unpack[SettingsOverrides],
     ) -> ScoreResult:
         """Score drafts against this profile.
 
         By default the settings are the profile's, except that syntax is used (``"auto"``)
         only when the profile has it, and ``input_format`` is ``"auto"``: drafts are often
         in another format than the writer's corpus. ``settings`` replaces them, and keyword
-        ``overrides`` (``window_words=0``, ``min_words=5``) change single fields.
+        overrides (``window_words=0``, ``min_words=5``; see ``SettingsOverrides``) change
+        single fields: leave one out to inherit it.
 
         A window size or syntax setting unlike the profile's is warned about in the report,
         since z-scores assume chunks like the reference's; another ``min_words`` gets a
@@ -287,11 +305,10 @@ class Profile(_Result):
                 base = dataclasses.replace(
                     self.settings, syntax=AUTO if self.has_syntax else False, input_format=AUTO
                 )
-            try:
-                chosen = dataclasses.replace(base, **overrides)
-            except TypeError:
-                unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
-                raise TypeError(f"unknown setting(s): {', '.join(unknown)}") from None
+            unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
+            if unknown:
+                raise TypeError(f"unknown setting(s): {', '.join(unknown)}")
+            chosen = dataclasses.replace(base, **overrides)
             recorded = self.settings
             if chosen.min_words != recorded.min_words:
                 notes.append(
@@ -553,7 +570,8 @@ def evaluate(
                 "inputs": _described(items),
                 "contrast": _described(contrast_items),
                 "edited": {label: _described(value) for label, value in edited_items.items()},
-                **settings.to_report(),
+                # top_k shapes only a reference's saved distributions, which this never saves.
+                **{name: value for name, value in settings.to_report().items() if name != "top_k"},
             },
         )
         step(Phase.DONE)
@@ -673,14 +691,22 @@ def _exists(value: str) -> bool:
         return False
 
 
-def _missing(value: str) -> StyleProfileError:
+def require_path(value: str, *, suggest_text: bool = True) -> None:
+    """Refuse a path input that does not exist (``"-"``, stdin, always does). With
+    ``suggest_text``, a value that reads like text points to ``Text``; a command line, whose
+    arguments are paths by construction, passes False."""
+    if value != "-" and not _exists(value):
+        raise _missing(value, suggest_text)
+
+
+def _missing(value: str, suggest_text: bool) -> StyleProfileError:
     """An error for a path that does not exist, pointing to ``Text`` when the value reads
     like text: it has whitespace, or no folder separator and no file suffix."""
     path = Path(value)
     looks_like_text = any(char.isspace() for char in value) or (
         os.sep not in value and "/" not in value and not path.suffix
     )
-    if not looks_like_text:
+    if not (suggest_text and looks_like_text):
         return StyleProfileError(f"{value} not found", code="input_not_found")
     shown = value.strip().split("\n")[0]
     shown = shown if len(shown) <= 40 else shown[:40] + "..."
@@ -734,8 +760,7 @@ def _read(
             chunks.append(next(texts))
             continue
         value = os.fspath(item)
-        if value != "-" and not _exists(value):
-            raise _missing(value)
+        require_path(value)
         loaded = load_chunks([value], text_field)
         sources = {chunk.source for chunk in loaded if value != "-"}
         repeated = sources & seen

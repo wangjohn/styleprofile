@@ -167,7 +167,7 @@ import styleprofile as sp
 
 profile = sp.build(Path("posts/"), contrast=Path("llm-drafts/"))
 result = profile.score(sp.Text("A draft to check against the writer."))
-print(result.verdict, result.delta, result.likeness_verdict)
+print(result.verdict, result.delta, result.likeness_verdict.words(result.contrast_label))
 ```
 
 See [docs/library.md](docs/library.md) for inputs, settings, notes and saving.

@@ -21,6 +21,7 @@ from typing import Any
 
 from styleprofile.profile import (
     EVALUATION,
+    EVALUATION_VERSION,
     Chunk,
     ContrastFit,
     StyleProfileError,
@@ -43,7 +44,7 @@ from styleprofile.weighting import (
     likeness_words,
 )
 
-VERSION = 1
+VERSION = EVALUATION_VERSION
 ORIGINAL = "original"
 SIGNALS_TRACKED = 10
 # Likeness levels at or above this read "leans <label>" or "like the <label> drafts".

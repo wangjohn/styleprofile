@@ -69,7 +69,8 @@ JSONL, `syntax`, `top_k` and `input_format`. A profile records them verbatim, an
 inherits them, except that it uses spaCy only when the profile has syntax metrics and
 reads drafts with `input_format="auto"`. Pass whole `Settings` to replace them, or keyword
 overrides (`window_words=0`) to change single fields, as `styleprofile score` takes flags.
-A different window size or syntax setting is warned about in the report, and a different
+Leave a keyword out to inherit it; the keywords are typed (`api.SettingsOverrides`), so a
+type checker catches a misspelled one. A different window size or syntax setting is warned about in the report, and a different
 `min_words` gets a note.
 
 `syntax="auto"`, the default, uses spaCy when it's installed. Without spaCy, it runs with
@@ -101,6 +102,8 @@ A `progress` callback, if given, is called with a `Progress` at the start of eac
 - `profile.save("writer.json")` and `sp.Profile.load("writer.json")` read and write the
   same files as `styleprofile build` and `styleprofile score`. `save` also sets
   `profile.path`, which later scores record. `result.save(path)` writes a score report.
+  A report saved by another version of styleprofile is refused with a message saying to
+  build (or score) it again; nothing is migrated before 0.2.0.
 - `sp.evaluate(inputs, contrast, {"light": Path("edits/light")})` runs the rewording stress
   test that `styleprofile evaluate` runs.
 - `build_reference(chunks)` and `score(chunks, reference)` in `styleprofile.profile` are

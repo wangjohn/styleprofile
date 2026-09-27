@@ -30,6 +30,7 @@ from styleprofile.api import (
     Profile,
     ScoreResult,
     Settings,
+    SettingsOverrides,
 )
 from styleprofile.core import Note, NoteCode, StyleProfileError
 from styleprofile.display import format_evaluation, format_summary
@@ -339,10 +340,9 @@ def _notes(notes: Sequence[Note]) -> None:
 
 
 def _inputs_exist(values: Sequence[str]) -> None:
-    """Refuse a typed input that does not exist, naming it as typed."""
+    """Refuse a typed input that does not exist, naming it as typed (never as text)."""
     for value in values:
-        if value != "-" and not Path(value).expanduser().exists():
-            raise StyleProfileError(f"{value} not found", code="input_not_found")
+        api.require_path(value, suggest_text=False)
 
 
 def _plural(count: int, word: str) -> str:
@@ -455,15 +455,17 @@ def _run_score(args: argparse.Namespace) -> int:
     if args.output:
         _refuse_overwrite(args.output, samples)
     profile = _load_score_reference(reference_arg)
-    overrides = {
-        "window_words": args.window_words,
-        "min_words": args.min_words,
-        "text_field": args.text_field,
-        "syntax": False if args.no_syntax else None,
-    }
-    result = profile.score(
-        samples, **{name: value for name, value in overrides.items() if value is not None}
-    )
+    # Flags left out are inherited from the profile.
+    overrides: SettingsOverrides = {}
+    if args.window_words is not None:
+        overrides["window_words"] = args.window_words
+    if args.min_words is not None:
+        overrides["min_words"] = args.min_words
+    if args.text_field:
+        overrides["text_field"] = args.text_field
+    if args.no_syntax:
+        overrides["syntax"] = False
+    result = profile.score(samples, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     if args.output:
