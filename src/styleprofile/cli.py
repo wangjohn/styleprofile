@@ -32,8 +32,10 @@ from styleprofile.display import (
     likeness_words,
     mean_ceiling,
 )
+from styleprofile.evaluate import evaluate_rewording
 from styleprofile.metrics import describe
 from styleprofile.profile import (
+    EVALUATION,
     REFERENCE,
     TEXT_FIELDS,
     VERSION,
@@ -50,7 +52,6 @@ from styleprofile.profile import (
     window,
     write_report,
 )
-from styleprofile.stress import evaluate_rewording
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
 
 PROG = "styleprofile"
@@ -242,11 +243,14 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     show = commands.add_parser(
         "show",
         **_help_parser(
-            "Show a saved reference profile or score report without recomputing it.",
+            "Show a saved reference profile, score report or evaluation report without "
+            "recomputing it.",
             f"{PROG} show writer.json --all",
         ),
     )
-    show.add_argument("report", metavar="REPORT.json", help="a report written by build or score")
+    show.add_argument(
+        "report", metavar="REPORT.json", help="a report written by build, score or evaluate"
+    )
     show.add_argument("--all", action="store_true", help="show every metric, not just key ones")
 
     metrics = commands.add_parser(
@@ -602,6 +606,9 @@ def _run_show(args: argparse.Namespace) -> int:
             raise StyleProfileError(f"{args.report} {problems[error.code]}") from error
         raise
     color = _color()
+    if report_kind(report) == EVALUATION:
+        print(format_evaluation(report, color=color))
+        return 0
     if report_kind(report) == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
         return 0
@@ -659,6 +666,13 @@ def _run_evaluate(args: argparse.Namespace) -> int:
     reference = _read(args.inputs, args.text_field, seen)
     contrast = _read(args.contrast, args.text_field, seen)
     edited = {label: load_chunks([folder], args.text_field) for label, folder in args.edited}
+    for label, folder in args.edited:
+        overlap = {chunk.source for chunk in edited[label]} & seen
+        if overlap:
+            _note(
+                f"{label}: {_plural(len(overlap), 'file')} in {folder} are also given as the "
+                "writer's texts or the original drafts, so that set is not an edit of them"
+            )
     if args.output:
         loaded = [*reference, *contrast, *(chunk for chunks in edited.values() for chunk in chunks)]
         _refuse_overwrite(args.output, [*typed, *folders], loaded)

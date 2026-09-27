@@ -1,4 +1,4 @@
-"""Rewording stress test: does contrast likeness survive editing of the contrast drafts?
+"""``styleprofile evaluate``: does contrast likeness survive editing of the contrast drafts?
 
 A reference built with contrast drafts learns which metrics separate the writer from them.
 The strongest tells (em dashes, sentence length) are exactly what light editing or a
@@ -19,8 +19,8 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from styleprofile.display import likeness_level, likeness_words
 from styleprofile.profile import (
+    EVALUATION,
     Chunk,
     ContrastFit,
     StyleProfileError,
@@ -39,6 +39,8 @@ from styleprofile.weighting import (
     by_document,
     cross_validate,
     fold_scores,
+    likeness_level,
+    likeness_words,
 )
 
 VERSION = 1
@@ -132,7 +134,8 @@ def _set_summary(
             by_document(learned.reference_scores, reference_documents),
             list(per_draft.values()),
         ),
-        "likeness_median": statistics.median(scores),
+        # Over chunks, like the reference's stored likeness range it is compared with.
+        "likeness_median_chunks": statistics.median(scores) if scores else None,
         "flagged": sum(draft["level"] >= FLAGGED_LEVEL for draft in drafts),
         "verdicts": {
             likeness_words(level, label): verdicts[likeness_words(level, label)]
@@ -250,6 +253,8 @@ def evaluate_rewording(
         for chunk, document in zip(fit.contrast_chunks, fit.contrast_documents, strict=True)
     }
     names = {document: key for key, document in documents_by_key.items()}
+    # Originals dropped for having too little prose have no fold; their edits are skipped.
+    dropped = {match_key(chunk) for chunk in contrast_chunks} - set(documents_by_key)
     original_texts = _texts(contrast_chunks)
     calibration = profile["contrast"]["calibration"]
     label = contrast_label
@@ -270,6 +275,13 @@ def evaluate_rewording(
     edited_documents: dict[str, list[str]] = {}
     survival: dict[str, tuple[Sequence[ZScores], Sequence[ZScores]]] = {}
     for set_label, chunks in edited.items():
+        skipped = sorted({match_key(chunk) for chunk in chunks} & dropped)
+        if skipped:
+            warnings.append(
+                f"{set_label}: skipped {len(skipped)} edited draft(s) whose original has too "
+                f"little prose to score (e.g. {skipped[0]!r})"
+            )
+            chunks = [chunk for chunk in chunks if match_key(chunk) not in dropped]
         loaded = {match_key(chunk) for chunk in chunks}
         unmatched = sorted(loaded - set(documents_by_key))
         if unmatched:
@@ -290,6 +302,7 @@ def evaluate_rewording(
         too_short = sorted(loaded - {match_key(chunk) for chunk in kept_chunks})
         result["missing"] = missing
         result["too_short"] = too_short
+        result["skipped"] = skipped
         if missing:
             warnings.append(
                 f"{set_label}: {len(missing)} of {len(names)} drafts have no edited copy "
@@ -303,7 +316,8 @@ def evaluate_rewording(
             )
         present = set(documents)
         covered = [index for index, doc in enumerate(fit.contrast_documents) if doc in present]
-        if len(present) < len(names):
+        result["partial"] = len(present) < len(names)
+        if result["partial"]:
             result["original_auc_same_drafts"] = auc(
                 [learned.contrast_scores[index] for index in covered], learned.reference_scores
             )
@@ -312,6 +326,7 @@ def evaluate_rewording(
         sets[set_label] = result
 
     return {
+        "kind": EVALUATION,
         "version": VERSION,
         "settings": {
             **(settings or {}),

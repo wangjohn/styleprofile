@@ -132,7 +132,8 @@ is judged by weights its own original shaped. It reports:
 
 - the AUC against the reference's held-out chunks, with a 95% document-bootstrap interval,
   for the original drafts and for each edited set;
-- the median likeness, and how many drafts still read "leans LLM" or "like the LLM drafts";
+- the median likeness over chunks (as in the reference's stored range), and how many
+  drafts still read "leans LLM" or "like the LLM drafts";
 - **signal survival**: for the ten strongest contrast metrics, the drafts' mean z before
   and after editing, next to the reference's. "Em dashes: +22.5 → +0.0, 100% gone" means
   the edit closed the whole gap to the writer on that habit, and "0% gone" means the habit
@@ -142,7 +143,12 @@ is judged by weights its own original shaped. It reports:
   no longer appear verbatim, and the change in length;
 - with `--retrain`, the cross-validated AUC with the edited drafts added to the contrast
   set. Each original and its edits are held out together. The result shows whether weights
-  that have seen edited drafts recover the separation.
+  that have seen edited drafts recover the separation. Every edited set adds a full copy of
+  the drafts, so with two sets the retrained weights lean two to one toward edited text.
+
+Drafts too short to score (under `--min-words`) are reported and skipped rather than
+failing the run. Pass `-o report.json` to save the full report, and `styleprofile show
+report.json` to see it again.
 
 Verdicts on edited text are weaker evidence than verdicts on raw drafts. If the AUC falls
 after editing, a "like the reference" reading only shows that the edits removed the habits

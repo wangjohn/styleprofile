@@ -1,4 +1,4 @@
-"""The rewording stress test, with deterministic fake editors in place of a model."""
+"""``styleprofile evaluate``, with deterministic fake editors in place of a model."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 from styleprofile import Chunk, StyleProfileError
 from styleprofile.cli import main
-from styleprofile.stress import evaluate_rewording, match_key, ngram_changed
+from styleprofile.evaluate import evaluate_rewording, match_key, ngram_changed
 from styleprofile.weighting import ZScores, cross_validate, fold_scores
 
 POOL = [
@@ -169,10 +169,19 @@ def test_removing_the_top_signal_lowers_the_auc_and_shows_it_removed(
     assert dashes["edited"]["humanize"]["remaining"] < 0.1
     assert humanized["edits"]["ngram13_changed_median"] > 0.5
 
-    shown = capsys.readouterr().out
-    assert "REWORDING STRESS TEST" in shown
-    assert "Em dashes" in shown and "% gone" in shown
-    assert "weaker evidence" in shown and "Retrained" in shown
+    shown = capsys.readouterr()
+    assert "REWORDING STRESS TEST" in shown.out
+    assert "Em dashes" in shown.out and "% gone" in shown.out
+    assert "weaker evidence" in shown.out and "Retrained" in shown.out
+    # The "same" set is the drafts folder itself, which is worth a note.
+    assert "same: 5 files" in shown.err and "not an edit of them" in shown.err
+
+    # The saved report is its own kind: show renders it, and it is no reference.
+    assert result["kind"] == "evaluation"
+    assert main(["show", str(output)]) == 0
+    assert "REWORDING STRESS TEST" in capsys.readouterr().out
+    assert main(["score", str(author / "post0.md"), str(output)]) == 1
+    assert "evaluation report" in capsys.readouterr().err
     # evaluate is one command among the others; build still runs on its own.
     assert main(["build", str(author), "--no-syntax", "-o", str(tmp_path / "p.json")]) == 0
 
@@ -228,6 +237,12 @@ def test_partial_sets_are_compared_with_the_drafts_they_cover(tmp_path: Path) ->
         (subset / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
     result = _evaluate(author, drafts, {"subset": subset})
+    assert result["sets"]["subset"]["partial"] is True
+    from styleprofile.display import format_evaluation
+
+    assert "subset*" in format_evaluation(result) and "* subset edited only" in format_evaluation(
+        result
+    )
 
     dashes = next(s for s in result["signals"] if s["metric"] == "punctuation.em_dashes_per_1k")
     entry = dashes["edited"]["subset"]
@@ -249,6 +264,43 @@ def test_short_edits_are_not_reported_missing(tmp_path: Path) -> None:
     assert any("not scored" in warning for warning in result["warnings"])
 
 
+def test_short_originals_skip_their_edits(tmp_path: Path) -> None:
+    """An original under --min-words has no fold; its edit is skipped, not "unmatched"."""
+    author, drafts = _corpus(tmp_path)
+    (drafts / "draft9.md").write_text("Too short.", encoding="utf-8")
+    edited = tmp_path / "edited"
+    _edit(drafts, edited, _identity)
+
+    result = _evaluate(author, drafts, {"edited": edited}, min_words=20)
+
+    assert result["sets"]["edited"]["skipped"] == ["draft9.md"]
+    assert result["sets"]["edited"]["auc"] == result["sets"]["original"]["auc"]
+    assert any("too little prose" in warning for warning in result["warnings"])
+
+
+def test_an_unscorable_set_does_not_stop_the_others(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    author, drafts = _corpus(tmp_path)
+    _edit(drafts, tmp_path / "empty", lambda text: "Too short.")
+    _edit(drafts, tmp_path / "same", _identity)
+
+    result = _evaluate(
+        author, drafts, {"empty": tmp_path / "empty", "same": tmp_path / "same"}, min_words=20
+    )
+
+    empty = result["sets"]["empty"]
+    assert empty["drafts"] == 0 and empty["auc"] is None
+    assert empty["likeness_median_chunks"] is None and len(empty["too_short"]) == 5
+    assert result["sets"]["same"]["auc"] == result["sets"]["original"]["auc"]
+    output = tmp_path / "report.json"
+    from styleprofile.profile import write_report
+
+    write_report(result, output)
+    assert main(["show", str(output)]) == 0
+    assert "empty" in capsys.readouterr().out
+
+
 def test_contrast_is_measured_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from styleprofile import profile
 
@@ -257,9 +309,9 @@ def test_contrast_is_measured_once(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     measured: list[int] = []
     original = profile._measure
 
-    def counting(chunks: Any, parser: Any, min_words: int) -> Any:
+    def counting(chunks: Any, parser: Any, min_words: int, **options: Any) -> Any:
         measured.append(len(chunks))
-        return original(chunks, parser, min_words)
+        return original(chunks, parser, min_words, **options)
 
     monkeypatch.setattr(profile, "_measure", counting)
     result = _evaluate(author, drafts, {"same": tmp_path / "same"})

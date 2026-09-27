@@ -65,6 +65,8 @@ from styleprofile.weighting import (
 VERSION = 5
 REFERENCE = "reference"
 SCORE = "score"
+# Written by ``styleprofile evaluate`` (see the evaluate module); shown, never scored against.
+EVALUATION = "evaluation"
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 # Directory walks skip dot-directories (.git, .venv) and these vendored ones.
@@ -384,16 +386,17 @@ def _mean_of(values: Sequence[float | None]) -> float | None:
 
 
 def report_kind(report: dict[str, Any]) -> str:
-    """``"reference"`` or ``"score"``. Reports written before ``kind`` existed are inferred:
-    a report scored against a reference carries a ``reference`` section."""
+    """``"reference"``, ``"score"`` or ``"evaluation"``. Reports written before ``kind``
+    existed are inferred: a report scored against a reference carries a ``reference``
+    section."""
     kind = report.get("kind")
-    if kind in (REFERENCE, SCORE):
+    if kind in (REFERENCE, SCORE, EVALUATION):
         return kind
     return SCORE if isinstance(report.get("reference"), dict) else REFERENCE
 
 
 def load_report(path: Path) -> dict[str, Any]:
-    """Read any styleprofile report, reference or score."""
+    """Read any styleprofile report: reference, score or evaluation."""
     if path.is_dir():
         raise StyleProfileError(f"{path} is a directory, not a profile", code="directory")
     if not path.exists():
@@ -402,7 +405,8 @@ def load_report(path: Path) -> dict[str, Any]:
         report = json.loads(_read_text(path))
     except (json.JSONDecodeError, StyleProfileError):
         report = None
-    if not isinstance(report, dict) or "summary" not in report:
+    evaluation = isinstance(report, dict) and report.get("kind") == EVALUATION
+    if not isinstance(report, dict) or ("summary" not in report and not evaluation):
         raise StyleProfileError(f"{path} is not a style profile", code="not_a_profile")
     return report
 
@@ -410,6 +414,12 @@ def load_report(path: Path) -> dict[str, Any]:
 def load_reference(path: Path) -> dict[str, Any]:
     """Read a reference profile, refusing a score report (a sample scored against one)."""
     reference = load_report(path)
+    if report_kind(reference) == EVALUATION:
+        raise StyleProfileError(
+            f"{path} is an evaluation report, not a reference profile; build a reference "
+            "from the writer's own texts",
+            code="score_as_reference",
+        )
     if report_kind(reference) == SCORE:
         raise StyleProfileError(
             f"{path} is a score report (a sample scored against a reference), not a "
@@ -428,8 +438,12 @@ class _Measured:
     below: int
 
 
-def _measure(chunks: Sequence[Chunk], parser: Parser | None, min_words: int) -> _Measured:
-    """Parse each chunk once, drop chunks without enough prose, and compute every metric."""
+def _measure(
+    chunks: Sequence[Chunk], parser: Parser | None, min_words: int, *, allow_empty: bool = False
+) -> _Measured:
+    """Parse each chunk once, drop chunks without enough prose, and compute every metric.
+
+    With no chunk left this is an error, unless ``allow_empty``."""
     parsed_all = [prose(chunk.text) for chunk in chunks]
     sizes = [len(words(parsed.text)) for parsed in parsed_all]
     empty = sum(not size for size in sizes)
@@ -440,6 +454,8 @@ def _measure(chunks: Sequence[Chunk], parser: Parser | None, min_words: int) -> 
         if size and size >= min_words
     ]
     texts = [parsed.text for _, parsed in kept]
+    if not kept and allow_empty:
+        return _Measured([], [], [], empty, below)
     if not kept:
         raise StyleProfileError(
             f"no chunks with at least {max(min_words, 1)} prose word(s) to profile "
@@ -670,8 +686,8 @@ def z_against_reference(
     report: dict[str, Any], chunks: Sequence[Chunk], parser: Parser | None, min_words: int
 ) -> tuple[list[Chunk], list[ZScores]]:
     """Measure chunks and take their z-scores against a reference report, as the contrast
-    drafts are; returns the chunks kept (enough prose) and their z-scores."""
-    measured = _measure(chunks, parser, min_words)
+    drafts are; returns the chunks kept (enough prose), possibly none, and their z-scores."""
+    measured = _measure(chunks, parser, min_words, allow_empty=True)
     floor = floors(report["summary"])
     return measured.chunks, [
         _z_against(metrics, report["summary"], floor) for metrics in measured.metrics

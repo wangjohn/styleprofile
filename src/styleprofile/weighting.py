@@ -39,6 +39,16 @@ ZScores = dict[Key, float]
 # a matching chunk 0. Metrics without a measured reliability are capped at it in Delta.
 UNSEEN_Z = 3.0
 SIGNALS_SHOWN = 5
+# The narrowest "close" band a calibrated Delta verdict uses, in mean |z|: half a standard
+# deviation per metric, half the uncalibrated close threshold of 1.0. Without it an area the
+# writer never varies in (Markdown in plain essays) has a held-out range near zero, and any
+# trace of it would read as very different.
+MIN_CEILING = 0.5
+# The same guard for the likeness score. Likeness averages only the part of each z that
+# points toward the contrast set, and for noise that one-sided part is on average half of
+# |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
+# the reference's own held-out likeness is near zero or averaged over very many chunks.
+LIKENESS_MIN_CEILING = MIN_CEILING / 2
 # The contrast AUC's confidence interval resamples whole documents this many times.
 BOOTSTRAP_RESAMPLES = 2000
 # Word count alone separating the contrast set this well means likeness may be partly length.
@@ -387,7 +397,14 @@ def cross_validate(
     contrast_z: Sequence[ZScores],
     contrast_sources: Sequence[str],
 ) -> CrossValidated:
-    """Leave-one-document-out likeness scores for the reference and the contrast chunks."""
+    """Leave-one-document-out likeness scores for the reference and the contrast chunks.
+
+    Each reference chunk is scored with weights learned without its own source, and each
+    contrast chunk with weights learned without its own source, so calibration shows how the
+    score behaves on text the weights have not seen. (Contrast z-scores are measured against
+    the full reference, so a held-out reference source still shapes them slightly; with many
+    sources the effect is negligible.)
+    """
     reference_total, reference_parts = _sums(reference_held, reference_sources)
     contrast_total, contrast_parts = _sums(contrast_z, contrast_sources)
     effects, rms = _fold(reference_total, contrast_total)
@@ -435,28 +452,6 @@ def fold_scores(
     return scores
 
 
-def learn_contrast(
-    reference_held: Sequence[ZScores],
-    reference_sources: Sequence[str],
-    contrast_z: Sequence[ZScores],
-    contrast_sources: Sequence[str],
-    reference_words: Sequence[float],
-    contrast_words: Sequence[float],
-) -> dict[str, Any]:
-    """Learn effect-size weights and calibrate the likeness score by cross-validation.
-
-    Each reference chunk is scored with weights learned without its own source, and each
-    contrast chunk with weights learned without its own source, so the calibration ranges
-    show how the score behaves on text the weights have not seen. (Contrast z-scores are
-    measured against the full reference, so a held-out reference source still shapes them
-    slightly; with many sources the effect is negligible.)
-    """
-    learned = cross_validate(reference_held, reference_sources, contrast_z, contrast_sources)
-    return summarize_contrast(
-        learned, reference_sources, contrast_sources, reference_words, contrast_words
-    )
-
-
 def summarize_contrast(
     learned: CrossValidated,
     reference_sources: Sequence[str],
@@ -492,6 +487,47 @@ def summarize_contrast(
             "cross_validated": learned.cross_validated,
         },
     }
+
+
+# Verdicts: where a Delta or likeness score sits relative to the reference's own range.
+
+
+def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
+    """The usual upper bound for an average over ``count`` chunks.
+
+    A single chunk is unusual above the held-out 95th percentile; an average over n chunks
+    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median. The
+    bound is never below ``floor``, so a near-zero held-out range cannot make a negligible
+    deviation look large.
+    """
+    if stats.get("p95") is None:
+        return None
+    median = stats.get("median", stats["p95"])
+    return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
+
+
+def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
+    """0-3 from the reference's own held-out range up to the contrast set's typical score."""
+    ceiling = (
+        mean_ceiling(calibration["reference"], count, LIKENESS_MIN_CEILING) or LIKENESS_MIN_CEILING
+    )
+    target = calibration["contrast"]["median"]
+    if score <= ceiling:
+        return 0
+    if target <= ceiling:
+        # The contrast drafts score no higher than the reference: the score cannot tell
+        # them apart, so it never claims more than a few traits.
+        return 1
+    return 1 if score < (ceiling + target) / 2 else 2 if score < target else 3
+
+
+def likeness_words(level: int, label: str) -> str:
+    return (
+        "like the reference",
+        f"a few {label} traits",
+        f"leans {label}",
+        f"like the {label} drafts",
+    )[level]
 
 
 def flatten(nested: Mapping[str, Mapping[str, float]]) -> dict[Key, float]:
