@@ -607,13 +607,15 @@ def _legacy(argv: Sequence[str]) -> int:
     return runner(args)
 
 
+def _is_output_flag(arg: str) -> bool:
+    """--output, or an abbreviation argparse accepted for it in the flat form (--out)."""
+    name = arg.split("=", 1)[0]
+    return len(name) >= len("--o") and "--output".startswith(name)
+
+
 def _is_legacy(argv: Sequence[str]) -> bool:
     """The flat form always had --output and never starts with a command name."""
-    return (
-        bool(argv)
-        and argv[0] not in COMMANDS
-        and any(arg == "--output" or arg.startswith("--output=") for arg in argv)
-    )
+    return bool(argv) and argv[0] not in COMMANDS and any(_is_output_flag(arg) for arg in argv)
 
 
 def _dispatch(argv: Sequence[str]) -> int:

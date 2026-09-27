@@ -236,6 +236,12 @@ def test_legacy_flat_form_still_works_with_a_deprecation_note(
     assert "--no-window" in capsys.readouterr().err
     assert json.loads(reference.read_text(encoding="utf-8"))["chunk_count"] == 1
 
+    # The flat form's parser accepted abbreviations of --output, and so does its detection.
+    assert main([str(source), "--no-syntax", f"--out={reference}"]) == 0
+    assert "deprecated" in capsys.readouterr().err
+    assert main([str(source), "--no-syntax", "--outp", str(reference)]) == 0
+    assert "deprecated" in capsys.readouterr().err
+
 
 def test_syntax_metrics_when_spacy_is_installed() -> None:
     pytest.importorskip("spacy")
