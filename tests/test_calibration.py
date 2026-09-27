@@ -154,6 +154,9 @@ def test_reference_stores_calibration_by_length() -> None:
         assert entry["words"] == pytest.approx(int(length), rel=0.15)
         if entry["pieces"] >= MIN_CALIBRATION_PIECES:
             assert set(entry) >= {"reliability", "delta", "likeness", "contrast_pieces"}
+            delta = entry["delta"]
+            assert delta["median"] <= delta["p95"] <= delta["p99"]
+            assert "max" not in delta and "p99" not in delta["by_group"]["voice"]
             # Shorter texts vary more by chance than whole windows do.
             assert entry["delta"]["p95"] > calibration["delta"]["p95"]
         else:

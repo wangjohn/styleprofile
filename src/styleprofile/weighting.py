@@ -525,8 +525,11 @@ def by_document(scores: Sequence[float], sources: Sequence[str]) -> list[list[fl
     return list(grouped.values())
 
 
-def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str, Any] | None:
-    """The reference's own Delta range on held-out chunks, overall and per area.
+def calibrate_delta(
+    held: Sequence[ZScores], sources: Sequence[str], *, p99: bool = False
+) -> dict[str, Any] | None:
+    """The reference's own Delta range on held-out chunks, overall and per area, and with
+    ``p99`` the overall 99th percentile too.
 
     Each source is scored with reliability weights learned without it, so the range shows
     how Delta behaves on the writer's new text rather than on text the weights have seen.
@@ -559,6 +562,7 @@ def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str
     return {
         "median": statistics.median(overall),
         "p95": quantile(overall, 0.95),
+        **({"p99": quantile(overall, 0.99)} if p99 else {}),
         "max": max(overall),
         "by_group": {
             group: {"median": statistics.median(values), "p95": quantile(values, 0.95)}

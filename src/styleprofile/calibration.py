@@ -195,7 +195,9 @@ def calibrate_length(
     }
     if not enough(entry):
         return entry
-    delta = calibrate_delta(held, piece_documents)
+    # The 99th percentile is for flagging one passage among many (plan PR 12's drift
+    # localization); with fewer than 100 pieces it is the largest or second largest.
+    delta = calibrate_delta(held, piece_documents, p99=True)
     if delta is None:
         return entry
     delta.pop("max", None)

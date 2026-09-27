@@ -100,8 +100,9 @@ different". So every verdict is read against the writer's own range *at the text
   document, exactly as a draft of that length is scored against the whole reference. Per
   length the profile stores (`calibration.by_length`, about 20 KB): each metric's rms, the
   Delta range (median and 95th percentile) overall and per area, with each document's
-  pieces weighted by reliabilities learned without that document, and the likeness range of
-  reference and contrast pieces cut the same way. Likeness keeps the effects learned on
+  pieces weighted by reliabilities learned without that document; the overall 99th
+  percentile, for picking out one passage among many; and the likeness range of reference
+  and contrast pieces cut the same way. Likeness keeps the effects learned on
   whole windows (each piece scored with the fold that left its document out), and scales
   each z by the pieces' own rms. Every entry records how many pieces and documents it
   rests on.
