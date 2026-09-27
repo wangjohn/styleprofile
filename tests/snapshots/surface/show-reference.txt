@@ -1,0 +1,41 @@
+$ styleprofile show '<tmp>/writer.json'
+[exit 0]
+--- stdout
+STYLE PROFILE   7 chunks, 4,496 words
+
+                                                 typical   usual range
+
+Sentences
+  Average sentence length                     14.2 words   12.9 - 15.4 words
+  Short sentences (8 words or fewer)                 41%   34% - 47%
+  Long sentences (30+ words)                         12%   6.2% - 17%
+  Sentence length variation (0 = uniform)           0.75   0.67 - 0.83
+  Words per paragraph                         86.9 words   80.0 - 93.8 words
+  One-sentence paragraphs                           0.0%   0.0% - 0.0%
+
+Vocabulary
+  Long words (7+ letters)                            11%   9.9% - 11%
+  Vocabulary variety (MATTR, 0-1)                   0.72   0.70 - 0.75
+
+Punctuation
+  Commas                                        54.0 /1k   46.1 - 61.8 /1k
+  Em dashes                                      0.0 /1k   0.0 - 0.0 /1k
+  Parentheses                                    1.3 /1k   0.0 - 2.7 /1k
+  Colons                                         1.6 /1k   0.7 - 2.5 /1k
+
+Voice
+  Contractions                                  34.6 /1k   26.6 - 42.5 /1k
+  I / me / my                                   49.2 /1k   38.8 - 59.7 /1k
+  You / your                                    18.5 /1k   13.2 - 23.8 /1k
+  Hedges (maybe, I think)                        3.6 /1k   0.7 - 6.4 /1k
+  Sentences starting However / Moreover             0.0%   0.0% - 0.0%
+  LLM marker words (delve, crucial)              0.0 /1k   0.0 - 0.0 /1k
+
+As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
+
+Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (95% CI 1.00–1.00, resampling whole documents)
+  LLM-likeness on held-out text: reference 0.20 typically (95% under 0.82), LLM drafts 14.23
+  Length alone: AUC 0.73 (reference 640 words per chunk, LLM drafts 624): some length difference
+  Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, Headings ▲
+
+Pass --all to see every metric.

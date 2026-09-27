@@ -1,0 +1,30 @@
+$ styleprofile evaluate examples/writer --contrast examples/llm-drafts --edited 'plain=<tmp>/plain' --no-syntax -o '<tmp>/evaluation.json'
+[exit 0]
+--- stdout
+REWORDING STRESS TEST   5 LLM drafts vs 7 reference documents
+  Each draft is scored with LLM-likeness weights learned without it, and each edited draft with the weights that left out its original.
+
+                      AUC (95% CI)   median likeness   drafts still flagged
+  original        1.00 (1.00-1.00)             14.23   5 of 5
+  plain           1.00 (1.00-1.00)              6.07   0 of 5
+  AUC 1.0 separates every draft from the reference, 0.5 is chance. The median is over chunks; flagged drafts read "leans LLM" or "like the LLM drafts".
+
+How much the edits changed
+  plain       14% of 13-word sequences rewritten, length x1.05
+
+Signal survival   mean z of the strongest LLM signals; how much of the original gap from the reference each edit removed (or added)
+                                           reference  original               plain
+  Long words (7+ letters)                       +0.1     +26.4   +26.5 0% stronger
+  List items                                    +0.0     +19.7      +0.0 100% gone
+  Bold phrases                                  +0.0     +19.7      +0.0 100% gone
+  Headings                                      +0.0     +14.8      -2.0 114% gone
+  "these"                                       +0.0      +8.6        +8.2 5% gone
+  Em dashes                                     +0.0      +7.7        +7.4 5% gone
+  Sentences per paragraph                       -0.0      -8.0   -9.2 14% stronger
+  Average word length (letters)                 +0.0      +6.6    +6.7 1% stronger
+  LLM marker words (delve, crucial)             +0.0      +5.7    +5.8 2% stronger
+  Lexical diversity (MTLD)                      -0.0      +6.3       +5.4 15% gone
+
+Verdicts on edited text are weaker evidence: editing removes the LLM habits the score relies on, so a draft that reads like the reference may still be a lightly edited LLM draft.
+
+wrote <tmp>/evaluation.json

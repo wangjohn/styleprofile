@@ -39,3 +39,24 @@ jobs:
       - name: Confirm spaCy is absent
         run: uv run python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('spacy') is not None)"
       - run: make test
+
+  bench:
+    # A separate job so the benchmark neither slows nor is slowed by the test matrix. It runs
+    # the medium corpus without spaCy and fails when a value is over its regression budget in
+    # bench/targets.py: max(2x the plan's target, 1.5x the baseline measured on this runner).
+    # Wall time is the fastest of three runs, to damp the noise of shared runners.
+    name: benchmark (medium corpus, without spaCy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run python bench/run.py --quick --repeat 3 --check
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results.json
+          if-no-files-found: ignore

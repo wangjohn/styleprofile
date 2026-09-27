@@ -162,7 +162,22 @@ the score measures, not that a person wrote the text.
 make sync
 make check   # pytest, ruff check, ruff format --check, pyright
 make demo    # build, score and show on the sample corpus
+make bench          # time build and score on generated corpora; compare with the targets
+make bench-quick    # only the case CI runs: 200k words without spaCy
+make snapshots      # regenerate tests/snapshots/ after an intended change to CLI output
 ```
+
+`make bench` generates seeded synthetic corpora from `examples/` (`bench/gen.py`, written to
+the git-ignored `bench/corpora/`), then measures wall time, peak memory and profile size for
+each case in `bench/targets.py`. It prints a table beside the targets and saves
+`bench/results.json`. Pick cases with `make bench BENCH="--case big --repeat 3"`. CI runs the
+medium case without spaCy and fails when a value is over its regression budget, as explained in
+`bench/targets.py`.
+
+`tests/test_snapshots.py` compares the exact output of `build`, `score`, `show`, `metrics` and
+`evaluate` on `examples/` with the files in `tests/snapshots/`. When you change what the CLI
+prints, run `make snapshots` (with spaCy installed, so the syntax snapshots refresh too) and
+commit the updated files with the change, so reviewers see the output diff.
 
 The package began as the stylometry module of GoodProse.
 
