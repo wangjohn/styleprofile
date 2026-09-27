@@ -21,6 +21,7 @@ from typing import Any
 
 from styleprofile.profile import (
     EVALUATION,
+    EVALUATION_VERSION,
     Chunk,
     ContrastFit,
     StyleProfileError,
@@ -43,7 +44,7 @@ from styleprofile.weighting import (
     likeness_words,
 )
 
-VERSION = 1
+VERSION = EVALUATION_VERSION
 ORIGINAL = "original"
 SIGNALS_TRACKED = 10
 # Likeness levels at or above this read "leans <label>" or "like the <label> drafts".
@@ -212,7 +213,7 @@ def evaluate_rewording(
     contrast_chunks: Sequence[Chunk],
     edited: Mapping[str, Sequence[Chunk]],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     min_words: int = 1,
     contrast_label: str = "LLM",
     retrain: bool = False,
@@ -332,7 +333,7 @@ def evaluate_rewording(
             **(settings or {}),
             "min_words": min_words,
             "retrain": retrain,
-            "syntax": profile["settings"]["syntax"],
+            "syntax_used": profile["settings"]["syntax_used"],
         },
         "label": label,
         "reference": {

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from styleprofile.core import DISTANCES, Verdict
 from styleprofile.metrics import (
     DISTRIBUTION_LABELS,
     KEY_VIEW,
@@ -48,12 +49,7 @@ BAR_SCALE = 3.0
 # color is paired with a word or arrows, so the report reads the same without color.
 DISTANCE_RGB: tuple[tuple[int, int, int], ...] = ((217, 149, 106), (220, 111, 52), (184, 70, 26))
 DISTANCE_256: tuple[int, ...] = (173, 166, 130)
-DISTANCE_WORDS: tuple[str, ...] = (
-    "close",
-    "somewhat different",
-    "clearly different",
-    "very different",
-)
+DISTANCE_WORDS: tuple[Verdict, ...] = DISTANCES
 
 
 def delta_level(delta: float, ceiling: float | None = None) -> int:
@@ -146,7 +142,7 @@ def _bar(amount: float, style: _Style, level: int) -> str:
     return style.distance("█" * filled, level) + style.dim("░" * (BAR_WIDTH - filled))
 
 
-def describe_delta(delta: float, ceiling: float | None = None) -> str:
+def describe_delta(delta: float, ceiling: float | None = None) -> Verdict:
     """A reading of Delta; see ``delta_level``."""
     return DISTANCE_WORDS[delta_level(delta, ceiling)]
 

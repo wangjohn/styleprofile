@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from styleprofile.core import StyleProfileError
 from styleprofile.surface import (
     Metrics,
     block_word_count,
@@ -61,7 +62,13 @@ from styleprofile.weighting import (
 # 5: the contrast AUC has a document-bootstrap 95% interval and a length-only baseline.
 # Every report carries ``kind`` (see ``KINDS``), and score reports a ``baseline`` copy of what
 # rendering needs from their reference.
-VERSION = 5
+# 6: settings are recorded verbatim, every field of ``api.Settings``: ``syntax`` is what was
+# asked ("auto", true or false) and ``syntax_used`` the parser that ran; ``window_words`` 0
+# is no windowing; ``inputs`` is always a list.
+# Reports of any other version are refused (``check_version``): rebuild them.
+VERSION = 6
+# The version of evaluation reports (``styleprofile evaluate``), counted separately.
+EVALUATION_VERSION = 2
 REFERENCE = "reference"
 SCORE = "score"
 # Written by ``styleprofile evaluate`` (see the evaluate module); shown, never scored against.
@@ -75,18 +82,6 @@ SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "site-packages"})
 OTHER = "<other>"
 DEVIATIONS_SHOWN = 8
 SHORT_CHUNK_WORDS = 150
-
-
-class StyleProfileError(ValueError):
-    """Style profile inputs or a reference profile are unusable.
-
-    ``code`` names the kind of problem so a front end can add its own advice (such as the
-    command-line flag that fixes it); the messages themselves never mention flags.
-    """
-
-    def __init__(self, message: str, *, code: str | None = None) -> None:
-        super().__init__(message)
-        self.code = code
 
 
 @dataclass(frozen=True)
@@ -277,7 +272,8 @@ def summarize(chunk_metrics: Sequence[Metrics]) -> dict[str, dict[str, dict[str,
     return summary
 
 
-_WINDOW_SUFFIX = re.compile(r"#w\d+$")
+# Windowing already-windowed chunks stacks suffixes (``post#w1#w2``); all of them go.
+_WINDOW_SUFFIX = re.compile(r"(?:#w\d+)+$")
 
 
 def document_of(source: str, chunk_id: str) -> str:
@@ -290,7 +286,7 @@ def document_of(source: str, chunk_id: str) -> str:
 
 
 def base_id(chunk_id: str) -> str:
-    """A chunk's id without the ``#wN`` suffix that windowing adds."""
+    """A chunk's id without the ``#wN`` suffixes that windowing adds."""
     return _WINDOW_SUFFIX.sub("", chunk_id)
 
 
@@ -412,7 +408,28 @@ def load_report(path: Path) -> dict[str, Any]:
     if kind not in KINDS or (kind != EVALUATION and "summary" not in report):
         # A pre-release report without ``kind``, or a kind this version does not know.
         raise StyleProfileError(f"{path} is {UNREADABLE}", code="outdated")
+    check_version(report, str(path))
     return report
+
+
+def check_version(report: dict[str, Any], name: str = "the report") -> None:
+    """Refuse a report of another version than this styleprofile writes, saying how to
+    make it again: its settings and metrics would be misread rather than migrated."""
+    kind = report.get("kind")
+    expected = EVALUATION_VERSION if kind == EVALUATION else VERSION
+    version = report.get("version")
+    if version == expected:
+        return
+    again = {
+        SCORE: "score it again with `styleprofile score`",
+        EVALUATION: "run `styleprofile evaluate` again",
+    }.get(kind or "", "rebuild it with `styleprofile build`")
+    age = "a newer" if isinstance(version, int) and version > expected else "an older"
+    raise StyleProfileError(
+        f"{name} was made by {age} styleprofile (report version {version}; this one reads "
+        f"{expected}); {again}",
+        code="outdated",
+    )
 
 
 def load_reference(path: Path) -> dict[str, Any]:
@@ -463,7 +480,8 @@ def _measure(
     if not kept:
         raise StyleProfileError(
             f"no chunks with at least {max(min_words, 1)} prose word(s) to profile "
-            f"({empty} had no prose, {below} were shorter)"
+            f"({empty} had no prose, {below} were shorter)",
+            code="no_chunks",
         )
     chunk_metrics = [surface_metrics(chunk.text, parsed) for chunk, parsed in kept]
     chunk_distributions: list[dict[str, Counter[str]]] = [
@@ -614,7 +632,8 @@ def _base_report(
         "settings": {
             **(settings or {}),
             "top_k": top_k,
-            "syntax": (
+            # What was used, as opposed to the ``syntax`` setting, which is what was asked.
+            "syntax_used": (
                 {
                     "model": parser.model,
                     "model_version": parser.model_version,
@@ -640,7 +659,7 @@ def _base_report(
 def build_reference(
     chunks: Sequence[Chunk],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
     settings: dict[str, Any] | None = None,
@@ -649,13 +668,19 @@ def build_reference(
 ) -> dict[str, Any]:
     """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
     reliability when the chunks span two or more documents and, given ``contrast`` chunks
-    (for example LLM drafts), the weights that score likeness to them."""
+    (for example LLM drafts), the weights that score likeness to them.
+
+    This is the lower-level step under ``styleprofile.build``: the chunks are measured as
+    given, not cut into windows, and syntax metrics are left out unless ``parser`` (from
+    ``load_parser``) is passed. Use ``styleprofile.build`` to get the same profile as
+    ``styleprofile build``. Unless ``settings`` says otherwise, the profile records
+    ``window_words`` 0, since these chunks were not windowed here."""
     return _build_reference(
         chunks,
         parser=parser,
         top_k=top_k,
         min_words=min_words,
-        settings=settings,
+        settings={"window_words": 0, **(settings or {})},
         contrast=contrast,
         contrast_label=contrast_label,
     )[0]
@@ -665,7 +690,7 @@ def build_contrast_reference(
     chunks: Sequence[Chunk],
     contrast: Sequence[Chunk],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
     settings: dict[str, Any] | None = None,
@@ -753,14 +778,20 @@ def score(
     chunks: Sequence[Chunk],
     reference: dict[str, Any],
     *,
-    parser: Parser | None,
+    parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
     settings: dict[str, Any] | None = None,
     reference_path: Path | None = None,
 ) -> dict[str, Any]:
     """Profile sample chunks and score each against ``reference``: z-scores, Delta, pattern
-    divergence and, when the reference learned a contrast, likeness to the contrast set."""
+    divergence and, when the reference learned a contrast, likeness to the contrast set.
+
+    This is the lower-level step under ``Profile.score``: nothing is inherited from the
+    reference, so pass chunks cut into the reference's windows, its ``min_words`` and a
+    ``parser`` when it has syntax metrics, or use ``Profile.score``, which does all that.
+    A reference of another report version is refused (``check_version``)."""
+    check_version(reference, "the reference")
     measured = _measure(chunks, parser, min_words)
     report, totals = _base_report(
         measured,
@@ -781,11 +812,6 @@ def score(
     scored = [row["reference"] for row in rows]
     groups = sorted({group for scores in scored for group in scores["delta_by_group"]})
     reference_settings = reference.get("settings", {})
-    if reference.get("version") != VERSION:
-        warnings.append(
-            f"the reference was built by report version {reference.get('version')} "
-            f"(this is {VERSION}); rebuild it so Delta is comparable"
-        )
     if not reference.get("reliability"):
         warnings.append(
             "the reference has no held-out reliability (it needs chunks from at least two "
@@ -810,15 +836,17 @@ def score(
             )
     if reference.get("chunk_count", 0) < 2:
         warnings.append("the reference has one chunk, so it has no spread; split it into windows")
-    if reference_settings.get("window_words") != report["settings"].get("window_words"):
+    # 0 and None both mean no windowing.
+    own_window = report["settings"].get("window_words") or None
+    reference_window = reference_settings.get("window_words") or None
+    if own_window != reference_window:
         warnings.append(
             "window sizes differ from the reference "
-            f"({report['settings'].get('window_words') or 'off'} vs "
-            f"{reference_settings.get('window_words') or 'off'}); "
+            f"({own_window or 'off'} vs {reference_window or 'off'}); "
             "z-scores assume equal-sized chunks"
         )
-    own_syntax = report["settings"]["syntax"]
-    reference_syntax = reference_settings.get("syntax")
+    own_syntax = report["settings"]["syntax_used"]
+    reference_syntax = reference_settings.get("syntax_used")
     if own_syntax and not reference_syntax:
         warnings.append("the reference has no syntax metrics, so syntax is not scored")
     elif reference_syntax and not own_syntax:
