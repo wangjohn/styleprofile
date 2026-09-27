@@ -1,13 +1,12 @@
 """Command-line entry point: build a writer's reference profile once, then score drafts.
 
+Commands:
+
     styleprofile build posts/ --contrast llm-drafts/ -o writer.json
     styleprofile score draft.md writer.json
     styleprofile show writer.json
     styleprofile metrics
     styleprofile evaluate posts/ --contrast llm-drafts/ --edited light=edits/
-
-The flat form of earlier releases (``styleprofile INPUT... --output X [--reference R]``)
-still runs for one release, with a deprecation note naming the equivalent new command.
 """
 
 from __future__ import annotations
@@ -38,6 +37,7 @@ from styleprofile.profile import (
     EVALUATION,
     REFERENCE,
     TEXT_FIELDS,
+    UNREADABLE,
     VERSION,
     Chunk,
     StyleProfileError,
@@ -55,7 +55,6 @@ from styleprofile.profile import (
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
 
 PROG = "styleprofile"
-COMMANDS = ("build", "score", "show", "metrics", "evaluate")
 DEFAULT_WINDOW_WORDS = 500
 DEFAULT_TOP_K = 300
 # A reference below these is usable but thin; `build` says so and how to fix it.
@@ -69,6 +68,7 @@ HINTS = {
     "score_as_reference": "score against the reference profile made by `styleprofile build`",
     "unmatched_edits": "give each edited file its original's name and relative path",
     "duplicate_names": "give each draft a distinct file name or JSONL id",
+    "outdated": f"run `{PROG} build` again for a reference, or `{PROG} score` for a score report",
 }
 SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
 
@@ -236,8 +236,6 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         "--all", action="store_true", help="show every metric, not just key ones"
     )
     _add_input_flags(score_parser, inherited=True)
-    # The flat form took the reference as --reference; point anyone who reaches for it here.
-    score_parser.add_argument("-r", "--reference", help=argparse.SUPPRESS)
     score_parser.set_defaults(top_k=None)
 
     show = commands.add_parser(
@@ -465,10 +463,6 @@ def _run_build(args: argparse.Namespace) -> int:
 
 def _split_score_paths(args: argparse.Namespace) -> tuple[list[str], str]:
     usage = f"{PROG} score DRAFT [DRAFT ...] REFERENCE.json"
-    if args.reference:
-        raise StyleProfileError(
-            f"score takes the reference profile as its last argument, not --reference: {usage}"
-        )
     if len(args.paths) < 2:
         raise StyleProfileError(f"score needs a sample and then a reference profile: {usage}")
     *samples, reference = args.paths
@@ -494,6 +488,9 @@ def _load_score_reference(reference_arg: str) -> dict[str, Any]:
                 f"{reference_arg} is not a style profile; the reference profile goes last: "
                 f"{PROG} score DRAFT [DRAFT ...] REFERENCE.json"
             ) from error
+        if error.code == "outdated":
+            message = f"{reference_arg} is {UNREADABLE}"
+            raise StyleProfileError(message, code=error.code) from error
         raise
 
 
@@ -601,9 +598,11 @@ def _run_show(args: argparse.Namespace) -> int:
             "not_found": "not found",
             "directory": "is a directory, not a profile",
             "not_a_profile": "is not a style profile",
+            "outdated": f"is {UNREADABLE}",
         }
         if error.code in problems:
-            raise StyleProfileError(f"{args.report} {problems[error.code]}") from error
+            message = f"{args.report} {problems[error.code]}"
+            raise StyleProfileError(message, code=error.code) from error
         raise
     color = _color()
     if report_kind(report) == EVALUATION:
@@ -612,18 +611,7 @@ def _run_show(args: argparse.Namespace) -> int:
     if report_kind(report) == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
         return 0
-    baseline = report["reference"].get("baseline")
-    if baseline is None:
-        # Score reports from before baselines were saved: fall back to the reference file.
-        saved = report["reference"].get("path")
-        if not saved or not Path(saved).is_file():
-            raise StyleProfileError(
-                f"{args.report} was scored before reports kept a copy of their reference, and "
-                f"its reference ({saved or 'unknown'}) is not available; score the sample again"
-            )
-        _note(f"this report has no saved copy of its reference; showing it against {saved}")
-        baseline = load_reference(Path(saved))
-    print(format_summary(report, baseline, color=color, full=args.all))
+    print(format_summary(report, report["reference"]["baseline"], color=color, full=args.all))
     return 0
 
 
@@ -723,114 +711,44 @@ RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
 }
 
 
-def _legacy_parser() -> argparse.ArgumentParser:
-    """The flat form of earlier releases. Defaults are None so explicit flags can be told
-    apart from omitted ones when writing the equivalent new command."""
-    parser = argparse.ArgumentParser(
-        prog=PROG, description="Deprecated flat form; see `styleprofile --help`."
-    )
-    parser.add_argument("inputs", nargs="+")
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--text-field")
-    parser.add_argument("--window-words", type=int)
-    parser.add_argument("--min-words", type=int)
-    parser.add_argument("--reference")
-    parser.add_argument("--no-syntax", action="store_true")
-    parser.add_argument("--top-k", type=int)
-    parser.add_argument("--contrast", nargs="+")
-    parser.add_argument("--contrast-label")
-    parser.add_argument("--all", action="store_true")
-    return parser
-
-
-def _legacy(argv: Sequence[str]) -> int:
-    old = _legacy_parser().parse_args(argv)
-    if old.window_words is not None and old.window_words < 1:
-        raise StyleProfileError("--window-words must be positive")
-    if old.reference and old.contrast:
-        raise StyleProfileError(
-            "--contrast builds a reference; score samples against it in a separate run"
-        )
-    flags: list[str] = []
-    for flag, given in (
-        ("--min-words", old.min_words),
-        ("--text-field", old.text_field),
-    ):
-        if given is not None:
-            flags += [flag, str(given)]
-    if old.no_syntax:
-        flags.append("--no-syntax")
-    if old.all:
-        flags.append("--all")
-    shared = {
-        "output": old.output,
-        "text_field": old.text_field,
-        "no_syntax": old.no_syntax,
-        "all": old.all,
-    }
-    if old.reference:
-        if old.window_words is not None:
-            flags += ["--window-words", str(old.window_words)]
-        command = [PROG, "score", *old.inputs, old.reference, "-o", old.output, *flags]
-        args = argparse.Namespace(
-            **shared,
-            paths=[*old.inputs, old.reference],
-            reference=None,
-            json=False,
-            quiet=False,
-            window_words=old.window_words,
-            min_words=old.min_words,
-            top_k=old.top_k,
-        )
-        runner = _run_score
+def _suggest_command(argv: Sequence[str]) -> str:
+    """What to run instead of a command-less line: ``score`` when it names a reference with
+    --reference, ``build`` when it has --output, otherwise either."""
+    guess = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+    guess.add_argument("inputs", nargs="*")
+    guess.add_argument("-o", "--output")
+    guess.add_argument("-r", "--reference")
+    for flag in ("--text-field", "--window-words", "--min-words", "--top-k", "--contrast-label"):
+        guess.add_argument(flag)
+    guess.add_argument("--contrast", nargs="+")
+    guess.add_argument("--no-syntax", action="store_true")
+    guess.add_argument("--all", action="store_true")
+    try:
+        # Unknown flags are dropped: the suggestion keeps only what the command accepts.
+        found, _ = guess.parse_known_intermixed_args(argv)
+    except argparse.ArgumentError:
+        found = None
+    if found is None or not (found.reference or found.output):
+        rest = shlex.join(argv)
+        return f"`{PROG} build {rest}` or `{PROG} score {rest}`"
+    kept = ["text_field", "window_words", "min_words"]
+    if found.reference:
+        # The reference moves to the last argument; score takes no contrast or --top-k.
+        command = ["score", *found.inputs, found.reference]
     else:
-        # The flat form did not window unless asked; build does by default.
-        flags += ["--window-words", str(old.window_words)] if old.window_words else ["--no-window"]
-        for path in old.contrast or []:
-            flags += ["--contrast", path]
-        if old.contrast_label is not None:
-            flags += ["--contrast-label", old.contrast_label]
-        if old.top_k is not None:
-            flags += ["--top-k", str(old.top_k)]
-        command = [PROG, "build", *old.inputs, "-o", old.output, *flags]
-        args = argparse.Namespace(
-            **shared,
-            inputs=old.inputs,
-            contrast=old.contrast,
-            contrast_label=old.contrast_label or "LLM",
-            window_words=old.window_words or 0,
-            min_words=1 if old.min_words is None else old.min_words,
-            top_k=DEFAULT_TOP_K if old.top_k is None else old.top_k,
-        )
-        runner = _run_build
-    change = ""
-    if old.reference and old.window_words is None:
-        change = (
-            "; unlike before, the samples are split into windows the same size as the "
-            "reference's (pass --no-window to turn that off)"
-        )
-    print(
-        "note: this form of the command is deprecated and will be removed in the next release; "
-        f"use: {shlex.join(command)}{change}",
-        file=sys.stderr,
-    )
-    return runner(args)
-
-
-def _is_output_flag(arg: str) -> bool:
-    """--output, or an abbreviation argparse accepted for it in the flat form (--out)."""
-    name = arg.split("=", 1)[0]
-    return len(name) >= len("--o") and "--output".startswith(name)
-
-
-def _is_legacy(argv: Sequence[str]) -> bool:
-    """The flat form always had --output and never starts with a command name."""
-    return bool(argv) and argv[0] not in COMMANDS and any(_is_output_flag(arg) for arg in argv)
+        command = ["build", *found.inputs]
+        command += [item for path in found.contrast or [] for item in ("--contrast", path)]
+        kept += ["top_k", "contrast_label"]
+    if found.output:
+        command += ["-o", found.output]
+    for name in kept:
+        if getattr(found, name) is not None:
+            command += ["--" + name.replace("_", "-"), getattr(found, name)]
+    command += ["--no-syntax"] * found.no_syntax + ["--all"] * found.all
+    return f"`{PROG} {shlex.join(command)}`"
 
 
 def _dispatch(argv: Sequence[str]) -> int:
-    if _is_legacy(argv):
-        return _legacy(argv)
     parser, commands = _subparsers()
     if not argv:
         parser.print_help(sys.stderr)
@@ -838,10 +756,9 @@ def _dispatch(argv: Sequence[str]) -> int:
     if argv[0] not in commands:
         if not argv[0].startswith("-") and Path(argv[0]).expanduser().exists():
             parser.print_usage(sys.stderr)
-            rest = shlex.join(argv)
             print(
                 f"{PROG}: error: {argv[0]} is not a command; did you mean "
-                f"`{PROG} build {rest}` or `{PROG} score {rest}`?",
+                f"{_suggest_command(argv)}?",
                 file=sys.stderr,
             )
             return 2

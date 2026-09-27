@@ -12,7 +12,6 @@ from styleprofile.display import format_summary
 from styleprofile.profile import (
     Chunk,
     StyleProfileError,
-    build_profile,
     build_reference,
     load_chunks,
     load_reference,
@@ -35,7 +34,6 @@ __all__ = [
     "StyleProfileError",
     "SyntaxUnavailableError",
     "__version__",
-    "build_profile",
     "build_reference",
     "format_summary",
     "load_chunks",
