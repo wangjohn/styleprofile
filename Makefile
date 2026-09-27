@@ -39,6 +39,6 @@ bench-quick:
 	$(UV) run python bench/run.py --quick $(BENCH)
 
 # Regenerate the CLI output snapshots in tests/snapshots/ after an intended output change.
-# Run it with spaCy installed (make sync), so the syntax snapshots are refreshed too.
+# It installs the syntax extra first, so the syntax snapshots are refreshed too.
 snapshots:
-	UPDATE_SNAPSHOTS=1 $(UV) run pytest tests/test_snapshots.py
+	UPDATE_SNAPSHOTS=1 $(UV) run --extra syntax pytest tests/test_snapshots.py

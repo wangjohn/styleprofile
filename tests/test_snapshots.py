@@ -6,12 +6,15 @@ After an intended change, regenerate the files with ``make snapshots`` (or run t
 ``UPDATE_SNAPSHOTS=1``) and commit them with the change.
 
 There are two modes. ``surface`` builds with ``--no-syntax`` and runs everywhere; ``syntax``
-uses the spaCy parser and is skipped when spaCy is not installed.
+uses the spaCy parser and is skipped when spaCy is not installed. Updating fails instead of
+skipping without spaCy, so the syntax snapshots can't silently go stale, and refuses to run
+under CI (``CI`` set), where snapshots are only ever checked.
 """
 
 from __future__ import annotations
 
 import contextlib
+import difflib
 import importlib.util
 import io
 import os
@@ -108,7 +111,11 @@ def outputs(
 ) -> Iterator[tuple[str, dict[str, str]]]:
     """Run every command of one mode, in order, from the repository root."""
     mode: str = request.param
+    if UPDATE and os.environ.get("CI"):
+        pytest.fail("UPDATE_SNAPSHOTS is set under CI; snapshots are only updated locally")
     if mode == "syntax" and not HAS_SPACY:
+        if UPDATE:
+            pytest.fail("updating snapshots needs spaCy for the syntax mode; run `make snapshots`")
         pytest.skip("spaCy is not installed")
     tmp = tmp_path_factory.mktemp(mode)
     plain = tmp / "plain"
@@ -142,19 +149,29 @@ def test_snapshot(outputs: tuple[str, dict[str, str]], name: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(results[name], encoding="utf-8")
         return
-    assert path.exists(), f"{path.relative_to(ROOT)} is missing; run `make snapshots`"
+    relative = path.relative_to(ROOT)
+    if not path.exists():
+        pytest.fail(f"{relative} is missing; run `make snapshots`", pytrace=False)
     expected = path.read_text(encoding="utf-8")
-    assert results[name] == expected, (
-        f"output differs from {path.relative_to(ROOT)}; if the change is intended, run "
-        "`make snapshots` and commit the result"
-    )
+    if results[name] != expected:
+        diff = difflib.unified_diff(
+            expected.splitlines(keepends=True),
+            results[name].splitlines(keepends=True),
+            fromfile=f"{relative} (snapshot)",
+            tofile=f"{relative} (actual)",
+        )
+        pytest.fail(
+            f"output differs from {relative}; if the change is intended, run `make snapshots` "
+            "and commit the result\n\n" + "".join(diff),
+            pytrace=False,
+        )
 
 
 def test_no_stale_snapshots() -> None:
     """Every snapshot file belongs to a command; `make snapshots` deletes those that don't."""
     known = {_snapshot(mode, name) for mode, cases in MODES.items() for name, _ in cases}
     stale = sorted(path for path in SNAPSHOTS.rglob("*.txt") if path not in known)
-    if UPDATE:
+    if UPDATE and not os.environ.get("CI"):
         for path in stale:
             path.unlink()
         for folder in SNAPSHOTS.iterdir():

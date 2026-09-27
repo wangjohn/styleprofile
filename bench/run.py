@@ -4,10 +4,16 @@
 
 Each case generates its corpus if needed (``bench/gen.py``), builds a reference from it with
 ``styleprofile build`` and scores ``examples/draft.md`` against that reference, each in a fresh
-Python process. For both steps it records wall time and the child's peak resident memory (from
-``os.wait4``, which works on macOS and Linux); for the build it also records the profile's size.
+Python process with its own empty cache and home directories, so no run is timed off a cache
+another run filled. For both steps it records wall time and the child's peak resident memory
+(from ``os.wait4``, which works on macOS and Linux); for the build it also records the profile's
+size. Peak memory covers the main process only, not any workers it starts: PR 13, which adds
+spaCy's ``n_process``, is responsible for measuring the whole process tree.
+
 Results go to ``bench/results.json`` and a table is printed beside the targets in
-``bench/targets.py``. ``--check`` exits 1 when a value is over its CI regression budget.
+``bench/targets.py`` (and appended to ``$GITHUB_STEP_SUMMARY`` in GitHub Actions). ``--check``
+exits 1 when a value is over its CI regression budget, when a baseline is stale (see
+``bench/targets.py``), or when the run checked no budgeted metric at all.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,8 +48,21 @@ def _peak_bytes(maxrss: int) -> int:
 
 def measure(command: list[str], log: Path) -> tuple[float, float]:
     """Run ``command`` to completion; return its wall time (s) and peak memory (MB)."""
-    env = {**os.environ, "NO_COLOR": "1"}
-    with log.open("w", encoding="utf-8") as out:
+    with (
+        tempfile.TemporaryDirectory(prefix="styleprofile-bench-") as fresh,
+        log.open("w", encoding="utf-8") as out,
+    ):
+        # A fresh home and cache for every run: a cache (PR 13) must never give cache-hit timings.
+        home = Path(fresh) / "home"
+        home.mkdir()
+        env = {
+            **os.environ,
+            "NO_COLOR": "1",
+            "HOME": str(home),
+            "XDG_CACHE_HOME": str(Path(fresh) / "cache"),
+            "XDG_DATA_HOME": str(Path(fresh) / "data"),
+            "XDG_STATE_HOME": str(Path(fresh) / "state"),
+        }
         start = time.perf_counter()
         process = subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, cwd=ROOT, env=env)
         # wait4 reaps this one child and returns its own resource usage, where getrusage
@@ -100,19 +120,28 @@ def _cell(value: float | None, unit: str) -> str:
     return f"{value:,.2f} {unit}" if value < 100 else f"{value:,.0f} {unit}"
 
 
-def table(results: dict[str, dict[str, float]]) -> tuple[str, list[str]]:
-    """A Markdown table of every measured metric, and the metrics over their CI budget."""
+def table(
+    results: dict[str, dict[str, float]], on_runner: bool = False
+) -> tuple[str, list[str], list[str], int]:
+    """A Markdown table of every measured metric; the metrics over their CI budget; the stale
+    baselines; and how many metrics had a budget to check."""
     lines = [
         "| Case | Metric | Measured | Target | CI budget | Status |",
         "|---|---|---|---|---|---|",
     ]
     over: list[str] = []
+    stale: list[str] = []
+    checked = 0
     for name, measured in results.items():
         case = CASES[name]
         for metric, (unit, label) in METRICS.items():
             value = measured[metric]
             target = case.targets.get(metric)
             budget = case.budget(metric)
+            checked += budget is not None
+            why = case.stale(metric, value, on_runner)
+            if why:
+                stale.append(f"{name} {label} ({_cell(value, unit)}) {why}")
             if target is None:
                 status = ""
             elif value <= target:
@@ -122,9 +151,11 @@ def table(results: dict[str, dict[str, float]]) -> tuple[str, list[str]]:
             else:
                 status = f"{value / target:.1f}x target, OVER BUDGET"
                 over.append(f"{name} {label}: {_cell(value, unit)} > {_cell(budget, unit)}")
+            if why:
+                status += ", STALE BASELINE"
             cells = [name, label, _cell(value, unit), _cell(target, unit), _cell(budget, unit)]
             lines.append("| " + " | ".join([*cells, status]) + " |")
-    return "\n".join(lines), over
+    return "\n".join(lines), over, stale, checked
 
 
 def _spacy_available() -> bool:
@@ -170,13 +201,31 @@ def main() -> int:
         "cases": results,
     }
     RESULTS.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    text, over = table(results)
+    # Time and memory baselines were measured in GitHub Actions; only there can they go stale.
+    on_runner = os.environ.get("GITHUB_ACTIONS") == "true"
+    text, over, stale, checked = table(results, on_runner)
     print(text)
     print(f"\nwrote {RESULTS.relative_to(ROOT)}")
-    if args.check and over:
-        print("\nOver the CI regression budget:\n  " + "\n  ".join(over), file=sys.stderr)
-        return 1
-    return 0
+    problems: list[str] = []
+    if args.check:
+        if over:
+            problems.append("Over the CI regression budget:\n  " + "\n  ".join(over))
+        if stale:
+            problems.append(
+                "Baseline is stale; lower or delete it in bench/targets.py:\n  "
+                + "\n  ".join(stale)
+            )
+        if not checked:
+            problems.append("Nothing checked: no metric that ran has a CI budget (try --quick).")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as out:
+            out.write("## Benchmark\n\n" + text + "\n")
+            out.writelines(f"\n```\n{problem}\n```\n" for problem in problems)
+    sys.stdout.flush()  # keep the problems after the table when both go to one pipe
+    for problem in problems:
+        print("\n" + problem, file=sys.stderr)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

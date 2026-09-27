@@ -43,10 +43,13 @@ jobs:
   bench:
     # A separate job so the benchmark neither slows nor is slowed by the test matrix. It runs
     # the medium corpus without spaCy and fails when a value is over its regression budget in
-    # bench/targets.py: max(2x the plan's target, 1.5x the baseline measured on this runner).
-    # Wall time is the fastest of three runs, to damp the noise of shared runners.
+    # bench/targets.py (max(2x the plan's target, a noise margin x the baseline measured on this
+    # runner)), or when a baseline is stale and must be lowered. Wall time is the fastest of
+    # three runs, to damp the noise of shared runners. The runner image is pinned, because the
+    # baselines were measured on it; re-measure them if you change it. The results table goes
+    # to the job summary.
     name: benchmark (medium corpus, without spaCy)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

@@ -21,14 +21,23 @@ but follow from it; see the comments beside them.
 CI enforces a *regression budget* rather than the target itself, because several targets are
 aspirational and are met only by later PRs (13 and 14):
 
-    budget = max(CI_MARGIN x target, BASELINE_MARGIN x baseline)
+    budget = max(CI_MARGIN x target, NOISE[metric] x baseline)
 
-where ``baseline`` is what the metric measured on GitHub's ``ubuntu-latest`` runner when the
-budget was last set. The first term is the plan's "fail above 2x the target", which a met
-target falls back to; the second keeps an unmet target from failing CI while still catching a
-regression of more than 50%. When a PR makes a metric faster or smaller, it lowers (or
-deletes) that baseline in the same PR, so the budget tightens towards 2x the target and the
-gain can't quietly be lost again.
+where ``baseline`` is what the metric measured on the CI runner (GitHub's ``ubuntu-24.04``)
+when the budget was last set, and ``NOISE`` is the metric's noise margin: 1.5 for wall time
+and memory, 1.05 for the deterministic profile size. The first term is the plan's "fail above
+2x the target", which a met target falls back to; the second keeps an unmet target from
+failing CI while still catching a regression.
+
+The ratchet is enforced: ``run.py --check`` also fails when a baseline is *stale*, that is when
+the metric is back within 2x its target (the baseline is no longer needed) or below
+``baseline / NOISE`` (it improved by more than noise). The PR that made the improvement must
+then lower or delete the baseline, so the budget tightens towards 2x the target and the gain
+can't quietly be lost again.
+
+Peak memory is the main ``styleprofile`` process's alone (``ru_maxrss`` from ``os.wait4``),
+not its process tree. That is exact while styleprofile runs in one process; PR 13, which adds
+spaCy's ``n_process`` workers, is responsible for measuring the whole tree.
 """
 
 from __future__ import annotations
@@ -36,7 +45,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 CI_MARGIN = 2.0
-BASELINE_MARGIN = 1.5
+# How far a metric may drift from its baseline through noise alone, per metric.
+NOISE = {
+    "build_s": 1.5,
+    "build_mb": 1.5,
+    "profile_mb": 1.05,  # deterministic but for path lengths in the stored sources
+    "score_s": 1.5,
+    "score_mb": 1.5,
+}
+# Metrics that don't depend on the machine, so any run can judge their baselines.
+DETERMINISTIC = {"profile_mb"}
 
 # Metric keys, their units, and how to label them in the results table.
 METRICS = {
@@ -55,8 +73,8 @@ class Case:
     syntax: bool  # build (and so score) with the spaCy parser
     about: str
     targets: dict[str, float]
-    # Measured on GitHub's ubuntu-latest runner; only for cases that CI runs. Lower a value
-    # (or delete it once the target is met) whenever a PR improves on it.
+    # Measured on the CI runner; only for cases that CI runs. Lower a value (or delete it once
+    # the metric is within 2x its target) whenever a PR improves on it; --check insists.
     baseline: dict[str, float] = field(default_factory=dict)
     ci: bool = False  # run by the CI benchmark job and `--quick`
 
@@ -64,7 +82,24 @@ class Case:
         """The most CI accepts for ``metric``; None when CI doesn't run the case or no target."""
         if not self.ci or metric not in self.targets:
             return None
-        return max(CI_MARGIN * self.targets[metric], BASELINE_MARGIN * self.baseline.get(metric, 0))
+        return max(CI_MARGIN * self.targets[metric], NOISE[metric] * self.baseline.get(metric, 0))
+
+    def stale(self, metric: str, value: float, on_runner: bool) -> str | None:
+        """Why ``metric``'s baseline should be lowered or deleted, or None if it shouldn't.
+
+        Time and memory baselines belong to the CI runner, so only a run there (``on_runner``)
+        can find them stale; a faster laptop would always look like an improvement.
+        """
+        if not self.ci or metric not in self.baseline or metric not in self.targets:
+            return None
+        if metric not in DETERMINISTIC and not on_runner:
+            return None
+        baseline = self.baseline[metric]
+        if value <= CI_MARGIN * self.targets[metric]:
+            return "is within 2x its target, so its baseline is no longer needed; delete it"
+        if value < baseline / NOISE[metric]:
+            return f"improved on its baseline ({baseline:g}) by more than noise; lower it"
+        return None
 
 
 PROFILE_MB = 1.0  # "< 1 MB regardless of corpus size"
