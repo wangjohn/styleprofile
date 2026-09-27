@@ -147,7 +147,6 @@ def test_removing_the_top_signal_lowers_the_auc_and_shows_it_removed(
 
     arguments = [
         "evaluate",
-        "--reference-inputs",
         str(author),
         "--contrast",
         str(drafts),
@@ -279,16 +278,21 @@ def test_evaluate_rejects_stdin_twice_and_overwriting_an_input(
 ) -> None:
     author, drafts = _corpus(tmp_path)
     base = ["evaluate", "--no-syntax", "--edited", f"x={drafts}"]
-    stdin_twice = [*base, "--reference-inputs", "-", "--contrast", "-", "--output", "o.json"]
+    stdin_twice = ["evaluate", "-", "--no-syntax", "--contrast", "-", "--edited", f"x={drafts}"]
+    stdin_twice += ["--output", "o.json"]
     assert main(stdin_twice) == 1
     assert "only once" in capsys.readouterr().err
-    stdin_edits = [*base, "y=-", "--reference-inputs", str(author), "--contrast", str(drafts)]
+    stdin_edits = [*base, "y=-", "--contrast", str(drafts), str(author)]
     assert main([*stdin_edits, "--output", str(tmp_path / "o.json")]) == 1
     assert "not - (stdin)" in capsys.readouterr().err
     target = drafts / "draft0.md"
-    clobber = [*base, "--reference-inputs", str(author), "--contrast", str(target)]
+    clobber = [*base, "--contrast", str(target), str(author)]
     assert main([*clobber, "--output", str(target)]) == 1
     assert "would overwrite input" in capsys.readouterr().err
+    # A writer's input after --edited is taken as an edited set; say where inputs go.
+    with pytest.raises(SystemExit):
+        main(["evaluate", "--contrast", str(drafts), "--edited", f"x={drafts}", str(author)])
+    assert "before --edited" in capsys.readouterr().err
 
 
 def test_ngram_changed_counts_verbatim_sequences() -> None:

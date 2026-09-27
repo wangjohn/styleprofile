@@ -116,7 +116,7 @@ file given directly matches by its bare file name. A set may leave out some draf
 then compared only with the drafts it covers.
 
 ```bash
-styleprofile evaluate --reference-inputs posts/ --contrast llm-drafts/ \
+styleprofile evaluate posts/ --contrast llm-drafts/ \
   --edited light=edits/light humanize=edits/humanize --retrain -o stress.json
 ```
 

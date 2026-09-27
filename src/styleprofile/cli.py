@@ -4,7 +4,7 @@
     styleprofile score draft.md writer.json
     styleprofile show writer.json
     styleprofile metrics
-    styleprofile evaluate --reference-inputs posts/ --contrast llm-drafts/ --edited light=edits/
+    styleprofile evaluate posts/ --contrast llm-drafts/ --edited light=edits/
 
 The flat form of earlier releases (``styleprofile INPUT... --output X [--reference R]``)
 still runs for one release, with a deprecation note naming the equivalent new command.
@@ -268,14 +268,15 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
             "Stress-test LLM-likeness against edited drafts. Builds a reference with the "
             "original drafts as contrast, then scores edited copies of those drafts (matched "
             "to their originals by file name) with the weights learned without their original.",
-            f"{PROG} evaluate --reference-inputs posts/ --contrast llm-drafts/ "
+            f"{PROG} evaluate posts/ --contrast llm-drafts/ "
             "--edited light=edits/light humanize=edits/humanize",
+            usage=f"{PROG} evaluate [options] INPUT [INPUT ...] --contrast PATH "
+            "--edited LABEL=DIR [LABEL=DIR ...]",
         ),
     )
     evaluate.add_argument(
-        "--reference-inputs",
+        "inputs",
         nargs="+",
-        required=True,
         metavar="INPUT",
         help="the writer's Markdown, text or JSONL files, directories of them, or - for stdin",
     )
@@ -319,7 +320,9 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
 def _edited(value: str) -> tuple[str, str]:
     label, separator, folder = value.partition("=")
     if not separator or not label or not folder:
-        raise argparse.ArgumentTypeError(f"expected LABEL=DIR, got {value!r}")
+        raise argparse.ArgumentTypeError(
+            f"expected LABEL=DIR, got {value!r}; put the writer's INPUTs before --edited"
+        )
     return label, folder
 
 
@@ -650,10 +653,10 @@ def _run_evaluate(args: argparse.Namespace) -> int:
     folders = [folder for _, folder in args.edited]
     if "-" in folders:
         raise StyleProfileError("--edited takes folders of files, not - (stdin)")
-    typed = [*args.reference_inputs, *args.contrast]
+    typed = [*args.inputs, *args.contrast]
     _stdin_once(typed)
     seen: set[str] = set()
-    reference = _read(args.reference_inputs, args.text_field, seen)
+    reference = _read(args.inputs, args.text_field, seen)
     contrast = _read(args.contrast, args.text_field, seen)
     edited = {label: load_chunks([folder], args.text_field) for label, folder in args.edited}
     if args.output:
@@ -677,7 +680,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         contrast_label=args.contrast_label,
         retrain=args.retrain,
         settings={
-            "reference_inputs": args.reference_inputs,
+            "inputs": args.inputs,
             "contrast": args.contrast,
             "edited": dict(args.edited),
             "text_field": args.text_field,
