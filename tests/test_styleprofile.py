@@ -775,3 +775,108 @@ def test_pr_review_fixes(tmp_path: Path) -> None:
     records = tmp_path / "posts.JSONL"
     records.write_text(json.dumps({"id": "p", "text": AUTHOR}) + "\n", encoding="utf-8")
     assert [chunk.id for chunk in load_chunks([str(records)])] == ["p"]
+
+
+def _words(count: int) -> str:
+    return " ".join(["word"] * (count - 1)) + " end."
+
+
+def test_contrast_auc_has_a_document_bootstrap_interval() -> None:
+    first = build_profile(_author_docs(), parser=None, contrast=_llm_docs())
+    second = build_profile(_author_docs(), parser=None, contrast=_llm_docs())
+    calibration = first["contrast"]["calibration"]
+
+    low, high = calibration["auc_ci"]
+    assert low <= calibration["auc"] <= high
+    assert calibration["bootstrap"] == {"resamples": 2000, "unit": "document"}
+    assert second["contrast"]["calibration"]["auc_ci"] == [low, high]
+
+    single = build_profile(_author_docs(), parser=None, contrast=_llm_docs()[:1])
+    assert single["contrast"]["calibration"]["auc_ci"] is None
+    assert any("no confidence interval" in warning for warning in single["warnings"])
+
+
+def test_bootstrap_resamples_whole_documents() -> None:
+    from styleprofile.weighting import _auc, bootstrap_auc
+
+    # One contrast document contributes 100 high chunks, the other a single low one. By
+    # chunk, the AUC would stay near 0.99; by document, drawing the low one twice gives 0.
+    reference = [[0.0], [1.0]]
+    contrast = [[2.0] * 100, [-1.0]]
+    aucs = bootstrap_auc(reference, contrast, resamples=400)
+    possible = set()
+    for draws in ([0, 0], [0, 1], [1, 1]):
+        for ref_draws in ([0, 0], [0, 1], [1, 1]):
+            positives = [s for d in draws for s in contrast[d]]
+            negatives = [s for d in ref_draws for s in reference[d]]
+            possible.add(round(_auc(positives, negatives) or 0.0, 9))
+    assert {round(auc, 9) for auc in aucs} <= possible
+    assert 0.0 in aucs and 1.0 in aucs
+    assert bootstrap_auc(reference, contrast, resamples=50) == aucs[:50]
+
+    # With every document drawn once, the reweighted pass equals the plain rank AUC.
+    uneven = [[0.3, 0.5, 0.5], [0.1], [0.9, 0.2]]
+    drafts = [[0.5, 0.8], [0.4]]
+    flat = [s for scores in uneven for s in scores]
+    flat_drafts = [s for scores in drafts for s in scores]
+    assert _auc(flat_drafts, flat) in bootstrap_auc(uneven, drafts, resamples=200)
+
+
+def test_length_baseline_detects_length_differences() -> None:
+    from styleprofile.weighting import length_baseline
+
+    matched = length_baseline([100, 120, 140, 160], [110, 130, 150, 170])
+    assert matched is not None and matched["auc"] <= 0.65
+
+    short = length_baseline([400, 420, 440], [100, 120, 140])
+    assert short == {
+        "auc": 1.0,
+        "direction": "contrast shorter",
+        "reference_median_words": 420,
+        "contrast_median_words": 120,
+    }
+
+    reference = [Chunk(f"r{i}", "s", _words(30 + i)) for i in range(4)]
+    long_drafts = [Chunk(f"l{i}", "s", GENERIC + " " + _words(200 + i)) for i in range(3)]
+    report = build_profile(reference, parser=None, contrast=long_drafts, min_words=1)
+    length = report["contrast"]["calibration"]["length_baseline"]
+    assert length["auc"] >= 0.75 and length["direction"] == "contrast longer"
+    assert any("differs strongly in length" in warning for warning in report["warnings"])
+
+    # Word counts 43, 45, 47, 49 on both sides.
+    reference = [Chunk(f"r{i}", "s", _words(40 + 2 * i) + " I think so.") for i in range(4)]
+    matched_drafts = [
+        Chunk(f"m{i}", "s", _words(41 + 2 * i) + " Moreover, robust.") for i in range(4)
+    ]
+    report = build_profile(reference, parser=None, contrast=matched_drafts, min_words=1)
+    assert report["contrast"]["calibration"]["length_baseline"]["auc"] == 0.5
+    assert not any("differs strongly in length" in warning for warning in report["warnings"])
+
+
+def test_contrast_summary_shows_interval_and_length_baseline() -> None:
+    from styleprofile.display import _contrast_summary, _Style
+
+    contrast = {
+        "label": "LLM",
+        "chunk_count": 40,
+        "sources": 8,
+        "effects": {"voice": {"llm_markers_per_1k": 2.0}},
+        "calibration": {
+            "reference": {"median": 0.1, "p95": 0.4, "max": 0.6},
+            "contrast": {"median": 0.7, "min": 0.3},
+            "auc": 0.96,
+            "auc_ci": [0.9, 1.0],
+            "length_baseline": {
+                "auc": 0.54,
+                "direction": "contrast longer",
+                "reference_median_words": 525,
+                "contrast_median_words": 526,
+            },
+        },
+    }
+    text = "\n".join(_contrast_summary(contrast, _Style(False)))
+    assert "AUC 0.96 (95% CI 0.90–1.00, resampling whole documents)" in text  # noqa: RUF001
+    assert (
+        "Length alone: AUC 0.54 (reference 525 words per chunk, LLM drafts 526): "
+        "not a length effect"
+    ) in text
