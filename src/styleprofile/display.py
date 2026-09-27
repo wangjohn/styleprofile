@@ -32,6 +32,11 @@ NOTABLE_Z = 1.0
 CHUNKS_SHOWN = 3
 BAR_WIDTH = 20
 BAR_SCALE = 3.0
+# The narrowest "close" band a calibrated verdict uses, in mean |z|: half a standard
+# deviation per metric, half the uncalibrated close threshold of 1.0. Without it an area the
+# writer never varies in (Markdown in plain essays) has a held-out range near zero, and any
+# trace of it would read as very different.
+MIN_CEILING = 0.5
 
 
 # How far from the reference, as one orange ramp (pale -> deep). "Close" stays uncolored so
@@ -334,17 +339,19 @@ def mean_ceiling(stats: dict[str, Any], count: int) -> float | None:
     """The usual upper bound for an average over ``count`` chunks.
 
     A single chunk is unusual above the held-out 95th percentile; an average over n chunks
-    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median.
+    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median. The
+    bound is never below ``MIN_CEILING``, so a near-zero held-out range cannot make a
+    negligible deviation look large.
     """
-    if not stats.get("p95"):
+    if stats.get("p95") is None:
         return None
     median = stats.get("median", stats["p95"])
-    return median + (stats["p95"] - median) / math.sqrt(max(count, 1))
+    return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), MIN_CEILING)
 
 
 def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
     """0-3 from the reference's own held-out range up to the contrast set's typical score."""
-    ceiling = mean_ceiling(calibration["reference"], count) or calibration["reference"]["p95"]
+    ceiling = mean_ceiling(calibration["reference"], count) or MIN_CEILING
     target = calibration["contrast"]["median"]
     if score <= ceiling:
         return 0
@@ -453,7 +460,7 @@ def _comparison_view(
     held = reference.get("calibration", {}).get("delta", {})
     count = report["chunk_count"]
     ceiling = mean_ceiling(held, count)
-    chunk_ceiling = held.get("p95")
+    chunk_ceiling = mean_ceiling(held, 1)
     area_ceilings = {
         group: mean_ceiling(stats, count) for group, stats in held.get("by_group", {}).items()
     }
