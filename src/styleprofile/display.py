@@ -32,6 +32,16 @@ NOTABLE_Z = 1.0
 CHUNKS_SHOWN = 3
 BAR_WIDTH = 20
 BAR_SCALE = 3.0
+# The narrowest "close" band a calibrated Delta verdict uses, in mean |z|: half a standard
+# deviation per metric, half the uncalibrated close threshold of 1.0. Without it an area the
+# writer never varies in (Markdown in plain essays) has a held-out range near zero, and any
+# trace of it would read as very different.
+MIN_CEILING = 0.5
+# The same guard for the likeness score. Likeness averages only the part of each z that
+# points toward the contrast set, and for noise that one-sided part is on average half of
+# |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
+# the reference's own held-out likeness is near zero or averaged over very many chunks.
+LIKENESS_MIN_CEILING = MIN_CEILING / 2
 
 
 # How far from the reference, as one orange ramp (pale -> deep). "Close" stays uncolored so
@@ -49,10 +59,11 @@ DISTANCE_WORDS: tuple[str, ...] = (
 
 
 def delta_level(delta: float, ceiling: float | None = None) -> int:
-    """0-3 for Delta, relative to the reference's own held-out 95th percentile when known.
+    """0-3 for Delta, relative to a ceiling from the reference's held-out range when known.
 
-    Up to that ceiling reads as close; 1.5x and 2x mark the next steps. Without a
-    calibrated reference, fixed steps suit a writer whose own text scores about 0.8.
+    Up to that ceiling (see ``mean_ceiling``) reads as close; 1.5x and 2x mark the next
+    steps. Without a calibrated reference, fixed steps suit a writer whose own text scores
+    about 0.8.
     """
     if ceiling:
         return (
@@ -330,21 +341,25 @@ def _differences(report: dict[str, Any], reference: dict[str, Any], style: _Styl
     return lines
 
 
-def mean_ceiling(stats: dict[str, Any], count: int) -> float | None:
+def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
     """The usual upper bound for an average over ``count`` chunks.
 
     A single chunk is unusual above the held-out 95th percentile; an average over n chunks
-    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median.
+    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median. The
+    bound is never below ``floor``, so a near-zero held-out range cannot make a negligible
+    deviation look large.
     """
-    if not stats.get("p95"):
+    if stats.get("p95") is None:
         return None
     median = stats.get("median", stats["p95"])
-    return median + (stats["p95"] - median) / math.sqrt(max(count, 1))
+    return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
 
 
 def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
     """0-3 from the reference's own held-out range up to the contrast set's typical score."""
-    ceiling = mean_ceiling(calibration["reference"], count) or calibration["reference"]["p95"]
+    ceiling = (
+        mean_ceiling(calibration["reference"], count, LIKENESS_MIN_CEILING) or LIKENESS_MIN_CEILING
+    )
     target = calibration["contrast"]["median"]
     if score <= ceiling:
         return 0
@@ -453,7 +468,7 @@ def _comparison_view(
     held = reference.get("calibration", {}).get("delta", {})
     count = report["chunk_count"]
     ceiling = mean_ceiling(held, count)
-    chunk_ceiling = held.get("p95")
+    chunk_ceiling = mean_ceiling(held, 1)
     area_ceilings = {
         group: mean_ceiling(stats, count) for group, stats in held.get("by_group", {}).items()
     }
