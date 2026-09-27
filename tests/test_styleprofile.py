@@ -736,11 +736,19 @@ def test_near_zero_held_out_range_does_not_inflate_verdicts() -> None:
     # A calibrated range above the floor is unchanged.
     assert mean_ceiling({"median": 0.78, "p95": 0.99}, 1) == 0.99
 
-    quiet = {"reference": {"median": 0.001, "p95": 0.01}, "contrast": {"median": 12.0}}
+    drafts = {"contrast": {"median": 12.0}}
+    quiet = {"reference": {"median": 0.001, "p95": 0.01}, **drafts}
     assert likeness_level(0.07, quiet) == 0
     assert likeness_level(0.07, quiet, count=9) == 0
+    assert likeness_level(0.3, quiet) == 1
     assert likeness_level(4.0, quiet) == 1
     assert likeness_level(10.0, quiet) == 2
+    assert likeness_level(0.3, {"reference": {"median": 0.0, "p95": 0.0}, **drafts}) == 1
+    # Likeness counts only the part of each z toward the contrast set, so its floor is half
+    # the Delta one: a long sample averaging above the writer's own range still shows traits.
+    usual = {"reference": {"median": 0.2, "p95": 0.86}, **drafts}
+    assert likeness_level(0.4, usual, count=64) == 1
+    assert likeness_level(0.4, usual, count=1) == 0
 
 
 def test_rare_habit_cannot_dominate_delta() -> None:

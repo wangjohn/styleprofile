@@ -50,4 +50,8 @@ Two scores answer two questions:
 Every z uses a spread of at least half of one occurrence per chunk for counts (5% of the
 mean for other metrics), so a habit that is almost always absent cannot turn one use into
 dozens of standard deviations. Verdicts compare an average over n chunks with a band
-1/sqrt(n) as wide as a single chunk's, since averages vary less.
+1/sqrt(n) as wide as a single chunk's, since averages vary less. That band never narrows
+below 0.5 for Delta and its areas (half a standard deviation per metric), so an area the
+writer never varies in, like Markdown in plain essays, cannot turn a trace into "very
+different". Likeness counts only the part of each z toward the contrast drafts, about half
+of |z| for noise, so its band never narrows below 0.25.
