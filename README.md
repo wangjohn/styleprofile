@@ -131,8 +131,9 @@ and the resolution floors.
 - **Short texts get wider ranges, then no verdict.** A 150-word paragraph is judged against
   how much the writer's own 150-word passages vary, which is far more than whole essays do,
   so only a larger difference counts. Under 75 words, or below the shortest length the
-  reference has 20 or more pieces for, the verdict is "too short to judge". Score whole
-  drafts, or several paragraphs together, when you can.
+  reference is calibrated for (it needs 3 or more documents), the verdict is "too short to
+  judge", with the reason. A reference from a single document judges nothing shorter than
+  half a window. Score whole drafts, or several paragraphs together, when you can.
 - **A verdict means "unlike this reference", not proof of authorship.** A human can drift
   from their own profile, and a model can be prompted toward it.
 

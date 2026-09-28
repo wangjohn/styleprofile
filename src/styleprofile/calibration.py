@@ -51,16 +51,19 @@ from styleprofile.weighting import (
 CALIBRATION_LENGTHS = (75, 150, 300)
 # Below this a text gets no verdict: a few sentences vary too much by chance to judge.
 MIN_JUDGED_WORDS = 75
-# A length is calibrated only with at least this many pieces (from two or more documents).
-# The verdict's bound is the pieces' 95th percentile; with 20 pieces one lies above it, so
-# it is observed rather than set by the single largest piece.
+# A length is calibrated only with pieces from at least this many documents, and worth at
+# least MIN_CALIBRATION_PIECES independent pieces (``weighting.effective_count``: pieces of
+# one document are alike, so they count for less). The verdict's bound is an upper bound on
+# the pieces' 95th percentile; with 20 independent pieces one lies above it, so it is
+# observed rather than set by the single largest piece.
+MIN_CALIBRATION_DOCUMENTS = 3
 MIN_CALIBRATION_PIECES = 20
 # The contrast's likeness range at a length is only its median, which needs fewer pieces.
 MIN_CONTRAST_PIECES = 5
-# At most this many words of windows are cut into pieces, spread evenly over the corpus, so
-# calibration costs a bounded amount on a large corpus: 30,000 words give about 400 pieces
-# of 75 words and 100 of 300, plenty for a 95th percentile. The contrast only needs its
-# median at each length, so it gets a smaller share.
+# At most this many words of pieces are measured per length, taken evenly across the corpus,
+# so calibration costs a bounded amount on a large corpus: 30,000 words are about 400 pieces
+# of 75 words and 100 of 300. The contrast only needs its median at each length, so it gets
+# a smaller share.
 CALIBRATION_WORDS = 30_000
 CONTRAST_CALIBRATION_WORDS = 10_000
 # Pieces are cut from a chunk only when it holds at least this many of them, so a piece is
@@ -101,15 +104,14 @@ def _units(markdown: str) -> list[_Unit]:
     return units
 
 
-def cut(markdown: str, length: int) -> list[str]:
-    """Cut one chunk into pieces of about ``length`` prose words, as Markdown.
+def _cuts(units: Sequence[_Unit], length: int, *, excerpts: bool) -> list[tuple[int, int]]:
+    """Where to cut ``units`` into pieces of about ``length`` words: (start, end) unit ranges.
 
-    The chunk's prose is divided into round(words / length) pieces of equal size, each cut
-    at the sentence or block boundary nearest its share (a paragraph break if one is
-    nearly as near), so every piece is close to ``length`` and no text is left over. A
-    chunk shorter than 1.5 pieces gives none.
+    The units are divided into round(words / length) pieces of equal size, each cut at the
+    sentence or block boundary nearest its share, so no text is left over. Unless
+    ``excerpts``, a paragraph break a little further from the share wins over a cut inside a
+    paragraph. None when the units hold fewer than 1.5 pieces.
     """
-    units = _units(markdown)
     starts = [0]
     for unit in units:
         starts.append(starts[-1] + unit.words)
@@ -117,12 +119,11 @@ def cut(markdown: str, length: int) -> list[str]:
     count = round(total / length)
     if count < 2 or total < PIECES_PER_CHUNK * length:
         return []
+    penalty = 0.0 if excerpts else PARAGRAPH_PREFERENCE * length
 
     def cost(index: int, target: float) -> float:
-        # A cut inside a paragraph leaves two part-paragraphs, which a real short text
-        # rarely is, so a paragraph break a little further from the target wins.
         inside = units[index].block == units[index - 1].block
-        return abs(starts[index] - target) + (PARAGRAPH_PREFERENCE * length if inside else 0)
+        return abs(starts[index] - target) + (penalty if inside else 0.0)
 
     cuts = [0]
     for part in range(1, count):
@@ -132,13 +133,26 @@ def cut(markdown: str, length: int) -> list[str]:
             break
         cuts.append(min(allowed, key=lambda index: cost(index, target)))
     cuts.append(len(units))
-    pieces = []
-    for start, end in pairwise(cuts):
-        text = units[start].raw
-        for previous, unit in pairwise(units[start:end]):
-            text += (" " if unit.block == previous.block else "\n\n") + unit.raw
-        pieces.append(text)
-    return pieces
+    return list(pairwise(cuts))
+
+
+def _joined(units: Sequence[_Unit], start: int, end: int) -> str:
+    text = units[start].raw
+    for previous, unit in pairwise(units[start:end]):
+        text += (" " if unit.block == previous.block else "\n\n") + unit.raw
+    return text
+
+
+def cut(markdown: str, length: int, *, excerpts: bool = False) -> list[str]:
+    """Cut one chunk into pieces of about ``length`` prose words, as Markdown.
+
+    Pieces end at sentence or block boundaries: by default at a paragraph break when one is
+    nearly as near as the ideal cut, like a paragraph quoted whole; with ``excerpts``, at the
+    nearest sentence, like a passage lifted from the middle of a text. A chunk shorter than
+    1.5 pieces gives none.
+    """
+    units = _units(markdown)
+    return [_joined(units, start, end) for start, end in _cuts(units, length, excerpts=excerpts)]
 
 
 def plan_pieces(
@@ -146,20 +160,39 @@ def plan_pieces(
 ) -> list[tuple[int, int, str]]:
     """(chunk index, length, Markdown) of every piece to measure for calibration.
 
-    Only lengths the median chunk holds 1.5 times are cut. When the chunks hold more than
-    ``budget`` words, every k-th chunk is cut, so the pieces still span the whole corpus.
+    Only lengths the median chunk holds 1.5 times are cut. Every chunk is cut both ways
+    (``cut`` and ``cut(excerpts=True)``), since a short text may be a whole paragraph or an
+    excerpt; when the pieces of a length hold more than ``budget`` words, every k-th piece
+    is kept, so every document still contributes in proportion to its text however few and
+    large the chunks are.
     """
     if not texts:
         return []
     median = statistics.median(sizes)
     usable = [length for length in lengths if PIECES_PER_CHUNK * length <= median]
-    step = max(1, math.ceil(sum(sizes) / budget))
-    return [
-        (index, length, piece)
-        for index in range(0, len(texts), step)
-        for length in usable
-        for piece in cut(texts[index], length)
-    ]
+    if not usable:
+        return []
+    shortest = PIECES_PER_CHUNK * min(usable)
+    units = {
+        index: _units(text)
+        for index, (text, size) in enumerate(zip(texts, sizes, strict=True))
+        if size >= shortest
+    }
+    planned: list[tuple[int, int, str]] = []
+    for length in usable:
+        ranges = [
+            (index, start, end)
+            for index, chunk_units in units.items()
+            for excerpts in (False, True)
+            for start, end in _cuts(chunk_units, length, excerpts=excerpts)
+        ]
+        words = sum(sum(unit.words for unit in units[i][a:b]) for i, a, b in ranges)
+        step = max(1, math.ceil(words / budget))
+        planned += [
+            (index, length, _joined(units[index], start, end))
+            for index, start, end in ranges[::step]
+        ]
+    return planned
 
 
 # Build time: the stored calibration per length.
@@ -185,22 +218,26 @@ def calibrate_length(
     """One length's stored calibration, from its pieces' held-out z-scores
     (``held_out_pieces``), their documents and their word counts.
 
-    The entry always records how many pieces and documents it rests on; the rms and the
-    Delta range only when there are enough.
+    The entry always records how many pieces and documents it rests on, and how many
+    independent pieces they are worth (``effective``); the rms and the Delta range only when
+    there are enough (``enough``).
     """
     entry: dict[str, Any] = {
         "pieces": len(held),
         "documents": len(set(piece_documents)),
         "words": statistics.median(words) if words else 0.0,
     }
-    if not enough(entry):
+    if len(held) < MIN_CALIBRATION_PIECES or entry["documents"] < MIN_CALIBRATION_DOCUMENTS:
         return entry
-    # The 99th percentile is for flagging one passage among many (plan PR 12's drift
-    # localization); with fewer than 100 pieces it is the largest or second largest.
-    delta = calibrate_delta(held, piece_documents, p99=True)
+    # Every 95th percentile is an upper confidence bound, and the 99th percentile is for
+    # flagging one passage among many (plan PR 12's drift localization).
+    delta = calibrate_delta(held, piece_documents, upper=True)
     if delta is None:
         return entry
     delta.pop("max", None)
+    entry["effective"] = delta.pop("effective")
+    if not enough(entry):
+        return entry
     entry["reliability"] = nest(
         {key: round(value, RMS_DIGITS) for key, value in reliability(held, piece_documents).items()}
     )
@@ -209,8 +246,21 @@ def calibrate_length(
 
 
 def enough(entry: Mapping[str, Any]) -> bool:
-    """Whether a length has enough pieces, from enough documents, to be calibrated."""
-    return entry.get("pieces", 0) >= MIN_CALIBRATION_PIECES and entry.get("documents", 0) >= 2
+    """Whether a length has pieces from enough documents, worth enough independent pieces,
+    to be calibrated."""
+    return (
+        entry.get("documents", 0) >= MIN_CALIBRATION_DOCUMENTS
+        and entry.get("effective", 0) >= MIN_CALIBRATION_PIECES
+    )
+
+
+def shortfall(entry: Mapping[str, Any]) -> str:
+    """What a length rests on, e.g. "28 pieces from 7 documents, worth 12 independent ones"."""
+    documents = entry.get("documents", 0)
+    text = f"{entry.get('pieces', 0)} pieces from {documents} document{'s' * (documents != 1)}"
+    if "effective" in entry and entry["effective"] < entry.get("pieces", 0) - 0.5:
+        text += f", worth {entry['effective']:.0f} independent ones"
+    return text
 
 
 # Score time: the calibration for one chunk's length.
@@ -296,6 +346,11 @@ class Lengths:
         # Without held-out calibration (a reference from one document) there are no ranges
         # at all: verdicts use fixed steps, and only the minimum length applies.
         self.calibrated = bool(calibration.get("delta"))
+        # Its windows' length, when there is no calibration to read it from.
+        size = ((reference.get("summary") or {}).get("size") or {}).get("words") or {}
+        self.uncalibrated_words = (reference.get("settings") or {}).get("window_words") or (
+            size.get("mean") or 0.0
+        )
         self.window_rms = flatten(reference.get("reliability", {}))
         self.stored: dict[int, dict[str, Any]] = {
             int(length): entry for length, entry in calibration.get("by_length", {}).items()
@@ -410,22 +465,31 @@ class Lengths:
                 "chance to judge"
             )
         if not self.calibrated:
-            return None
+            # No held-out range at all: only its windows' own length can be read against
+            # fixed steps, as for a window.
+            if words >= self.uncalibrated_words / 2:
+                return None
+            return (
+                "the reference has no held-out range (it comes from fewer than two documents), "
+                f"so texts under half its window ({self.uncalibrated_words / 2:.0f} words) "
+                "cannot be judged; add more of the writer's documents"
+            )
         if any(anchor.covers <= words for anchor in self.anchors):
             return None
         shorter = [length for length in self.stored if length <= words]
         if not shorter:
-            # Windows too short to cut, or a profile built before length calibration.
             shortest = math.ceil(PIECES_PER_CHUNK * min(CALIBRATION_LENGTHS))
             return (
-                "the reference has no calibration for texts this short; rebuild it, with "
-                f"windows of at least {shortest} words"
+                "the reference's windows are too short to cut into calibration pieces, so it "
+                f"has no range for texts this short; rebuild it with window_words {shortest} "
+                "or more"
             )
         entry = self.stored[max(shorter)]
         return (
-            f"the reference has {entry['pieces']} pieces of about {max(shorter)} words from "
-            f"{entry['documents']} document(s) to calibrate texts this short, and needs "
-            f"{MIN_CALIBRATION_PIECES} from 2 or more; add more of the writer's text"
+            f"the reference has {shortfall(entry)} of about {max(shorter)} words to "
+            f"calibrate texts this short, and needs {MIN_CALIBRATION_PIECES} independent "
+            f"pieces from {MIN_CALIBRATION_DOCUMENTS} or more documents; add more of the "
+            "writer's documents"
         )
 
 
@@ -462,6 +526,11 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> di
             if len(reasons) == 1
             else f"none of the {len(rows)} chunks is long enough to judge"
         )
+    # As for ``Note.setting``: the setting the reason names, for a front end to swap in its
+    # own name for it (the CLI's flag).
+    result["setting"] = (
+        "window_words" if result["reason"] and "window_words" in result["reason"] else None
+    )
     deltas = [score["delta"] for score in scored if score["delta"] is not None]
     delta = _mean(deltas)
     ranges = [score["calibration"]["delta"] for score in scored if score["delta"] is not None]

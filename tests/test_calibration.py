@@ -1,10 +1,13 @@
 """Length-aware verdicts: calibration for shorter texts, and "too short to judge".
 
 The acceptance tests measure, on text the reference never saw, how often the writer's own
-pieces of about 75, 150 and 300 words read "clearly different" or worse (at most 5%), and
-how often LLM drafts cut to about 150 words are still flagged (at least 80%). They run on
-the sample corpus in examples/ (leaving one document out at a time) and on a synthetic
-corpus from bench/gen.py (held-out documents), without spaCy so they run everywhere.
+pieces of about 75, 150 and 300 words read "clearly different" or worse (at most 5%), how
+often they land above the stored 95% bound, and how often LLM drafts cut to about 150 words
+are still flagged (at least 80%). The pieces are cut by the test's own cutters, not by the
+one calibration uses: whole paragraphs, and greedy runs of sentences that split paragraphs.
+They run on the sample corpus in examples/ (leaving one document out at a time) and on a
+synthetic corpus from bench/gen.py (held-out documents), without spaCy so they run
+everywhere.
 """
 
 from __future__ import annotations
@@ -12,30 +15,36 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import styleprofile as sp
 from styleprofile.calibration import (
     CALIBRATION_LENGTHS,
+    MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
     MIN_JUDGED_WORDS,
     Lengths,
     chunk_level,
     chunk_likeness_level,
     cut,
+    enough,
     plan_pieces,
 )
 from styleprofile.cli import main
+from styleprofile.core import StyleProfileError
 from styleprofile.profile import (
     VERSION,
     Chunk,
     build_reference,
     load_chunks,
+    load_reference,
     score,
     window,
     write_report,
@@ -44,8 +53,11 @@ from styleprofile.surface import prose, words
 from styleprofile.weighting import (
     DISTANCE_WORDS,
     TOO_SHORT,
+    effective_count,
     mean_ceiling,
     pooled_ceiling,
+    quantile,
+    upper_quantile,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,15 +72,34 @@ FENCE = (
     "do not. My father said a good fence was a promise you kept with your neighbor, and he "
     "kept his."
 )
-# "clearly different" or worse, and "leans LLM" or worse.
+# A 110-word passage in the same voice, from the review.
+BEES = (
+    "My neighbor keeps bees. He has kept them since before I moved here, which is a long time "
+    "now, and every August he leaves a jar of honey on my porch without a note. I have never "
+    "asked him to. I don't think he'd know what to say if I thanked him properly, so I don't. "
+    "I leave a loaf of bread on his porch in December instead.\n\n"
+    "The bees don't care about any of this. They go where the clover is, and in a dry year "
+    "they go farther, and some mornings I find one drowned in the dog's water dish and I fish "
+    "it out with a leaf."
+)
+# "somewhat different" or worse, "clearly different" or worse, and "leans LLM" or worse.
+SOMEWHAT = 1
 CLEARLY = 2
 LEANS = 2
 MAX_FALSE_POSITIVES = 0.05
+# The share of the writer's own pieces above the stored 95% bound. The bound is an upper
+# confidence bound, so it is usually met; this allows for the sampling noise of ~150 pieces.
+MAX_ABOVE_BOUND = 0.08
 MIN_DETECTION = 0.8
 
 
 def _words(text: str) -> int:
     return len(words(prose(text).text))
+
+
+def _body(path: Path) -> str:
+    """A generated document without its title line."""
+    return path.read_text(encoding="utf-8").split("\n", 1)[1]
 
 
 @cache
@@ -90,18 +121,96 @@ def _score(texts: Sequence[str], reference: dict[str, Any]) -> dict[str, Any]:
     return score(chunks, reference, parser=None, settings={"window_words": WINDOW})
 
 
-# Cutting windows into pieces.
+def _generate(out: Path) -> Path:
+    """The benchmark's medium corpus (bench/gen.py), written to ``out``."""
+    spec = importlib.util.spec_from_file_location("bench_gen", ROOT / "bench" / "gen.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # its dataclasses look their module up by name
+    spec.loader.exec_module(module)
+    return module.generate("medium", out)
+
+
+@pytest.fixture(scope="module")
+def corpus(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _generate(tmp_path_factory.mktemp("corpus"))
+
+
+# The test's own cutters, independent of calibration's ``cut``.
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
+
+
+def _paragraphs(text: str) -> list[list[str]]:
+    """Each prose paragraph as its sentences; lists, quotes and tables whole; no headings."""
+    found = []
+    for block in re.split(r"\n\s*\n", text):
+        block = block.strip()
+        if not block or block.startswith("#"):
+            continue
+        if block.startswith(("-", "*", ">", "|", "1.")):
+            found.append([block])
+        else:
+            found.append([part for part in _SENTENCE.split(" ".join(block.split())) if part])
+    return found
+
+
+def cut_sentences(text: str, length: int) -> list[str]:
+    """Greedy runs of sentences, splitting paragraphs wherever ``length`` falls."""
+    pieces: list[str] = []
+    current: list[list[str]] = [[]]
+    count = 0
+    for paragraph in _paragraphs(text):
+        for sentence in paragraph:
+            size = len(sentence.split())
+            if count >= 0.6 * length and abs(count + size - length) > abs(count - length):
+                pieces.append("\n\n".join(" ".join(part) for part in current if part))
+                current, count = [[]], 0
+            current[-1].append(sentence)
+            count += size
+        current.append([])
+    if count >= 0.6 * length:
+        pieces.append("\n\n".join(" ".join(part) for part in current if part))
+    return pieces
+
+
+def cut_paragraphs(text: str, length: int) -> list[str]:
+    """Whole paragraphs, as many as come closest to ``length``."""
+    pieces: list[str] = []
+    current: list[str] = []
+    count = 0
+    for paragraph in _paragraphs(text):
+        joined = " ".join(paragraph)
+        size = len(joined.split())
+        if current and abs(count + size - length) > abs(count - length):
+            pieces.append("\n\n".join(current))
+            current, count = [], 0
+        current.append(joined)
+        count += size
+    if current:
+        pieces.append("\n\n".join(current))
+    return [piece for piece in pieces if 0.6 * length <= len(piece.split()) <= 1.6 * length]
+
+
+CUTTERS: dict[str, Callable[[str, int], list[str]]] = {
+    "sentences": cut_sentences,
+    "paragraphs": cut_paragraphs,
+}
+
+
+# Cutting windows into pieces for calibration.
 
 
 def test_pieces_are_near_their_length_and_lose_no_text() -> None:
     text = (WRITER / "fence-lines.md").read_text(encoding="utf-8")
     total = _words(text)
     for length in CALIBRATION_LENGTHS:
-        pieces = cut(text, length)
-        assert len(pieces) == round(total / length)
-        sizes = [_words(piece) for piece in pieces]
-        assert sum(sizes) == total
-        assert all(0.5 * length <= size <= 1.6 * length for size in sizes), (length, sizes)
+        for excerpts in (False, True):
+            pieces = cut(text, length, excerpts=excerpts)
+            assert len(pieces) == round(total / length)
+            sizes = [_words(piece) for piece in pieces]
+            assert sum(sizes) == total
+            assert all(0.5 * length <= size <= 1.6 * length for size in sizes), (length, sizes)
     # A chunk shorter than one and a half pieces is not cut.
     assert cut(FENCE, 75) == []
 
@@ -120,23 +229,45 @@ def test_pieces_cut_at_sentences_and_keep_blocks_whole() -> None:
     assert listing in joined and code in joined
 
 
-def test_pieces_prefer_paragraph_breaks() -> None:
+def test_pieces_prefer_paragraph_breaks_unless_cut_as_excerpts() -> None:
     first = " ".join(["Alpha beta gamma delta."] * 18)  # 72 words
     second = " ".join(["Epsilon zeta eta theta."] * 20)  # 80 words
-    pieces = cut(f"{first}\n\n{second}", 75)
     # The exact halfway point falls inside the second paragraph; the break is taken instead.
-    assert pieces == [first, second]
+    assert cut(f"{first}\n\n{second}", 75) == [first, second]
+    excerpt, _ = cut(f"{first}\n\n{second}", 75, excerpts=True)
+    assert excerpt.startswith(first) and len(excerpt) > len(first)
 
 
-def test_calibration_cuts_a_bounded_share_of_a_large_corpus() -> None:
+def test_calibration_samples_pieces_from_every_chunk() -> None:
     texts = [" ".join(["Word after word goes here."] * 100)] * 100  # 100 chunks of 500 words
-    sizes = [500] * 100
-    planned = plan_pieces(texts, sizes, CALIBRATION_LENGTHS, 10_000)
-    assert {index for index, _, _ in planned} == set(range(0, 100, 5))
+    planned = plan_pieces(texts, [500] * 100, CALIBRATION_LENGTHS, 10_000)
+    for length in CALIBRATION_LENGTHS:
+        chosen = [(index, text) for index, size, text in planned if size == length]
+        # Every k-th piece, not every k-th chunk, so the pieces span the corpus.
+        indexes = {index for index, _ in chosen}
+        assert len(indexes) >= 30 and max(indexes) >= 90
+        assert sum(len(text.split()) for _, text in chosen) <= 1.1 * 10_000
     # Only lengths the median chunk holds one and a half times are cut.
     assert {length for _, length, _ in plan_pieces(texts, [200] * 100, (75, 150, 300), 10**9)} == {
         75
     }
+
+
+def test_a_few_large_documents_without_windows_are_calibrated(corpus: Path) -> None:
+    files = sorted((corpus / "writer").glob("*.md"))
+    books = [
+        sp.Text(
+            "\n\n".join(path.read_text(encoding="utf-8") for path in files[i::4][:12]), f"book{i}"
+        )
+        for i in range(4)
+    ]
+    profile = sp.build(books, sp.Settings(window_words=0, syntax=False))
+    lengths = profile.report["calibration"]["by_length"]
+    assert all(entry["documents"] == 4 and enough(entry) for entry in lengths.values())
+    draft = "\n\n".join(_body(path) for path in files[100:105])
+    assert 4000 < _words(draft) < 6500
+    result = profile.score(sp.Text(draft), syntax=False)
+    assert result.judged, result.reason
 
 
 # What a reference stores.
@@ -152,8 +283,8 @@ def test_reference_stores_calibration_by_length() -> None:
     for length, entry in lengths.items():
         assert entry["documents"] == 7
         assert entry["words"] == pytest.approx(int(length), rel=0.15)
-        if entry["pieces"] >= MIN_CALIBRATION_PIECES:
-            assert set(entry) >= {"reliability", "delta", "likeness", "contrast_pieces"}
+        if enough(entry):
+            assert set(entry) >= {"reliability", "delta", "likeness", "effective"}
             delta = entry["delta"]
             assert delta["median"] <= delta["p95"] <= delta["p99"]
             assert "max" not in delta and "p99" not in delta["by_group"]["voice"]
@@ -161,9 +292,21 @@ def test_reference_stores_calibration_by_length() -> None:
             assert entry["delta"]["p95"] > calibration["delta"]["p95"]
         else:
             assert "delta" not in entry and "reliability" not in entry
-    # 300-word pieces: 2 per document, too few to calibrate on 7 documents.
-    assert lengths["300"]["pieces"] < MIN_CALIBRATION_PIECES
+    # 300-word pieces: 4 per document, worth fewer than 20 independent ones on 7 documents.
+    assert not enough(lengths["300"]) and lengths["300"]["effective"] < MIN_CALIBRATION_PIECES
     assert len(json.dumps(lengths)) < 20_000
+
+
+def test_the_bound_counts_documents_not_pieces() -> None:
+    # Ten documents of ten pieces each, alike within a document: worth about ten values.
+    alike = [float(doc) for doc in range(10) for _ in range(10)]
+    groups = [str(doc) for doc in range(10) for _ in range(10)]
+    assert effective_count(alike, groups) == pytest.approx(10, rel=0.05)
+    # The same values in a hundred documents are worth a hundred.
+    assert effective_count(alike, [str(index) for index in range(100)]) == 100
+    spread = [float(index % 37) for index in range(100)]
+    assert upper_quantile(spread, groups, 0.95) >= quantile(spread, 0.95)
+    assert upper_quantile(alike, groups, 0.95) == max(alike)
 
 
 def test_calibration_interpolates_between_lengths() -> None:
@@ -188,6 +331,19 @@ def test_pooled_ceiling_is_mean_ceiling_for_equal_ranges() -> None:
     short, long = {"median": 1.1, "p95": 2.1}, {"median": 0.7, "p95": 0.95}
     mixed = pooled_ceiling([short, long])
     assert mixed == pytest.approx(0.9 + (1.0**2 + 0.25**2) ** 0.5 / 2)
+
+
+def test_a_profile_from_before_length_calibration_is_refused(tmp_path: Path) -> None:
+    for missing in ("chunk_words", "by_length"):
+        reference = _reference()
+        del reference["calibration"][missing]
+        path = tmp_path / f"no-{missing}.json"
+        write_report(reference, path)
+        with pytest.raises(StyleProfileError, match="before length-aware verdicts") as error:
+            load_reference(path)
+        assert error.value.code == "outdated"
+        with pytest.raises(StyleProfileError, match="rebuild it"):
+            _score([BEES], reference)
 
 
 # Too short to judge.
@@ -224,21 +380,47 @@ def test_the_review_paragraph_abstains(tmp_path: Path, capsys: pytest.CaptureFix
     assert printed["reference"]["verdict"]["verdict"] == TOO_SHORT
 
 
-def test_a_length_with_too_few_pieces_abstains_and_says_why() -> None:
-    # Three 400-word documents: 15 pieces of 75 words, too few to calibrate that length.
+def test_a_reference_from_one_document_does_not_judge_short_texts(corpus: Path) -> None:
+    files = sorted((corpus / "writer").glob("*.md"))
+    one = "\n\n".join(path.read_text(encoding="utf-8") for path in files[:20])
+    profile = sp.build(sp.Text(one, "all.md"), sp.Settings(syntax=False))
+    assert profile.report["word_count"] > 15_000 and "calibration" not in profile.report
+    # The writer's own paragraphs: none may read "somewhat" or worse; all abstain.
+    results = [
+        profile.score(sp.Text(piece), syntax=False)
+        for path in files[40:60]
+        for length in (75, 150)
+        for piece in cut_paragraphs(path.read_text(encoding="utf-8"), length)
+    ]
+    assert len(results) > 40 and {result.verdict for result in results} == {sp.Verdict.TOO_SHORT}
+    reason = results[-1].reason
+    assert reason is not None and "add more of the writer's documents" in reason
+    # Half a window or more is still judged, against fixed steps as before.
+    long = cut_paragraphs(_body(files[60]), 400)[0]
+    assert profile.score(sp.Text(long), syntax=False).judged
+
+
+def test_a_length_from_too_few_documents_abstains_and_says_why() -> None:
+    # Two long documents: plenty of pieces, but only two documents behind them.
     texts = [
-        " ".join(f"Document {doc} sentence {index} runs about eight words." for index in range(50))
-        for doc in range(3)
+        "\n\n".join(
+            " ".join(
+                f"Document {doc} sentence {index} runs about eight words." for index in range(5)
+            )
+            for _ in range(50)
+        )
+        for doc in range(2)
     ]
     chunks = [Chunk(f"d{doc}", f"d{doc}.md", text) for doc, text in enumerate(texts)]
-    reference = build_reference(chunks, parser=None)
+    reference = build_reference(window(chunks, WINDOW), parser=None)
     entry = reference["calibration"]["by_length"]["75"]
-    assert entry["pieces"] < MIN_CALIBRATION_PIECES
+    assert entry["pieces"] >= MIN_CALIBRATION_PIECES and entry["documents"] == 2
+    assert not enough(entry)
     at = Lengths(reference).at(100)
-    assert not at.judged
-    assert at.reason is not None
-    assert f"{entry['pieces']} pieces of about 75 words" in at.reason
-    assert "add more of the writer's text" in at.reason
+    assert not at.judged and at.reason is not None
+    assert "from 2 documents" in at.reason
+    assert f"from {MIN_CALIBRATION_DOCUMENTS} or more documents" in at.reason
+    assert "add more of the writer's documents" in at.reason
 
 
 def test_each_chunk_is_judged_at_its_own_length() -> None:
@@ -249,21 +431,52 @@ def test_each_chunk_is_judged_at_its_own_length() -> None:
     assert not short["reference"]["calibration"]["judged"]
     assert chunk_level(short) is None and chunk_likeness_level(short) is None
     verdict = report["reference"]["verdict"]
-    # The short chunk is left out of the verdict and the means, with a warning.
+    # The short chunk is left out of the verdict and the means, and the warning names it.
     assert verdict["judged"] and verdict["chunks_judged"] == 1
     assert report["reference"]["delta_mean"] == pytest.approx(long["reference"]["delta"])
-    assert any("1 chunk(s) are too short to judge" in warning for warning in report["warnings"])
+    assert (
+        "left out of the verdict and the means as too short to judge: t1 (36 words, under 75)"
+        in report["warnings"]
+    )
 
 
-def test_without_shorter_lengths_only_texts_near_a_window_are_judged() -> None:
-    # Windows too short to cut into pieces (or a profile from before length calibration).
+def test_chunks_left_out_add_nothing_to_the_differences(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = tmp_path / "writer.json"
+    write_report(_reference(), reference)
+    for name, text in (("fence.md", FENCE), ("bees.md", BEES)):
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    samples = [str(tmp_path / "fence.md"), str(tmp_path / "bees.md"), str(DRAFT)]
+
+    def differences(paths: list[str]) -> str:
+        assert main(["score", "--no-syntax", *paths, str(reference)]) == 0
+        return capsys.readouterr().out.split("Biggest differences", 1)[1].split("\n\n", 1)[0]
+
+    assert differences(samples) == differences(samples[1:])
+    assert main(["score", "-q", *samples, str(reference)]) == 0
+    line = capsys.readouterr().out
+    assert line.startswith("3 inputs: ") and "; 1 of 3 chunks not judged: too short)" in line
+
+
+def test_without_shorter_lengths_only_texts_near_a_window_are_judged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Windows too short to cut into pieces.
     reference = _reference()
     reference["calibration"]["by_length"] = {}
     lengths = Lengths(reference)
     assert lengths.at(330).judged, "half a window or more reads the windows' own range"
     at = lengths.at(200)
     assert not at.judged
-    assert at.reason is not None and "rebuild it, with windows of at least 113 words" in at.reason
+    assert at.reason is not None and "rebuild it with window_words 113 or more" in at.reason
+    # The command line names its flag instead.
+    path = tmp_path / "writer.json"
+    write_report(reference, path)
+    sample = tmp_path / "part.md"
+    sample.write_text(cut_paragraphs(DRAFT.read_text(encoding="utf-8"), 200)[0], encoding="utf-8")
+    assert main(["score", "--no-syntax", str(sample), str(path)]) == 0
+    assert "rebuild it with --window-words 113 or more" in capsys.readouterr().out
 
 
 def test_the_demo_draft_gets_a_sensible_verdict() -> None:
@@ -277,31 +490,30 @@ def test_the_demo_draft_gets_a_sensible_verdict() -> None:
 
 # Acceptance: false positives and detection at each length, on held-out text.
 
-
-def _rates(reference: dict[str, Any], texts: Sequence[str], length: int) -> tuple[int, int, int]:
-    """(pieces judged, clearly different or worse, flagged) for ``texts`` cut to ``length``."""
-    pieces = [piece for text in texts for piece in cut(text, length)]
-    if not pieces:
-        return 0, 0, 0
-    report = _score(pieces, reference)
-    judged = clearly = flagged = 0
-    for row in report["chunks"]:
-        level = chunk_level(row)
-        if level is None:
-            continue
-        judged += 1
-        likeness = chunk_likeness_level(row) or 0
-        clearly += level >= CLEARLY
-        flagged += level >= CLEARLY or likeness >= LEANS
-    return judged, clearly, flagged
+# (cutter, length) -> [judged, above the bound, clearly different or worse, flagged]
+Counts = dict[tuple[str, int], list[int]]
 
 
-def _accumulate(totals: dict[int, list[int]], length: int, counts: tuple[int, int, int]) -> None:
-    for index, count in enumerate(counts):
-        totals.setdefault(length, [0, 0, 0])[index] += count
+def _count(reference: dict[str, Any], texts: Sequence[str], counts: Counts) -> None:
+    for name, cutter in CUTTERS.items():
+        for length in CALIBRATION_LENGTHS:
+            pieces = [piece for text in texts for piece in cutter(text, length)]
+            if not pieces:
+                continue
+            report = _score(pieces, reference)
+            totals = counts.setdefault((name, length), [0, 0, 0, 0])
+            for row in report["chunks"]:
+                level = chunk_level(row)
+                if level is None:
+                    continue
+                likeness = chunk_likeness_level(row) or 0
+                totals[0] += 1
+                totals[1] += level >= SOMEWHAT
+                totals[2] += level >= CLEARLY
+                totals[3] += level >= CLEARLY or likeness >= LEANS
 
 
-Rates = tuple[dict[int, list[int]], dict[int, list[int]]]
+Rates = tuple[Counts, Counts]
 
 
 @pytest.fixture(scope="module")
@@ -310,71 +522,59 @@ def examples_rates() -> Rates:
     against a contrast of the other four."""
     writer = load_chunks([str(WRITER)])
     drafts = load_chunks([str(DRAFTS)])
-    own: dict[int, list[int]] = {}
-    llm: dict[int, list[int]] = {}
+    own: Counts = {}
+    llm: Counts = {}
     for held in writer:
         rest = [chunk for chunk in writer if chunk is not held]
         reference = build_reference(
             window(rest, WINDOW), parser=None, contrast=window(drafts, WINDOW)
         )
-        for length in CALIBRATION_LENGTHS:
-            _accumulate(own, length, _rates(reference, [held.text], length))
+        _count(reference, [held.text], own)
     for held in drafts:
         rest = [chunk for chunk in drafts if chunk is not held]
         reference = build_reference(
             window(writer, WINDOW), parser=None, contrast=window(rest, WINDOW)
         )
-        _accumulate(llm, 150, _rates(reference, [held.text], 150))
+        _count(reference, [held.text], llm)
     return own, llm
 
 
-def _generate(out: Path) -> Path:
-    """The benchmark's medium corpus (bench/gen.py), written to ``out``."""
-    spec = importlib.util.spec_from_file_location("bench_gen", ROOT / "bench" / "gen.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # its dataclasses look their module up by name
-    spec.loader.exec_module(module)
-    return module.generate("medium", out)
-
-
 @pytest.fixture(scope="module")
-def synthetic_rates(tmp_path_factory: pytest.TempPathFactory) -> Rates:
+def synthetic_rates(corpus: Path) -> Rates:
     """A synthetic writer of 80 documents with 20 contrast drafts, scored on 40 held-out
     documents and 10 held-out drafts."""
-    folder = _generate(tmp_path_factory.mktemp("corpus"))
-    writer = sorted((folder / "writer").glob("*.md"))
-    drafts = sorted((folder / "contrast").glob("*.md"))
+    writer = sorted((corpus / "writer").glob("*.md"))
+    drafts = sorted((corpus / "contrast").glob("*.md"))
     reference = build_reference(
         window(load_chunks([str(path) for path in writer[:80]]), WINDOW),
         parser=None,
         contrast=window(load_chunks([str(path) for path in drafts[:20]]), WINDOW),
     )
-    held_writer = [path.read_text(encoding="utf-8") for path in writer[80:120]]
-    held_drafts = [path.read_text(encoding="utf-8") for path in drafts[20:30]]
-    own: dict[int, list[int]] = {}
-    llm: dict[int, list[int]] = {}
-    for length in CALIBRATION_LENGTHS:
-        _accumulate(own, length, _rates(reference, held_writer, length))
-    _accumulate(llm, 150, _rates(reference, held_drafts, 150))
+    own: Counts = {}
+    llm: Counts = {}
+    _count(reference, [path.read_text(encoding="utf-8") for path in writer[80:120]], own)
+    _count(reference, [path.read_text(encoding="utf-8") for path in drafts[20:30]], llm)
     return own, llm
 
 
-@pytest.mark.parametrize("corpus", ["examples_rates", "synthetic_rates"])
+@pytest.mark.parametrize("corpus_rates", ["examples_rates", "synthetic_rates"])
+@pytest.mark.parametrize("cutter", list(CUTTERS))
 @pytest.mark.parametrize("length", CALIBRATION_LENGTHS)
 def test_held_out_writer_text_is_rarely_clearly_different(
-    corpus: str, length: int, request: pytest.FixtureRequest
+    corpus_rates: str, cutter: str, length: int, request: pytest.FixtureRequest
 ) -> None:
-    judged, clearly, _ = request.getfixturevalue(corpus)[0][length]
+    judged, above, clearly, _ = request.getfixturevalue(corpus_rates)[0][(cutter, length)]
     assert judged >= 10, "too few judged pieces to measure a rate"
     assert clearly / judged <= MAX_FALSE_POSITIVES, f"{clearly} of {judged} pieces"
+    assert above / judged <= MAX_ABOVE_BOUND, f"{above} of {judged} pieces above the bound"
 
 
-@pytest.mark.parametrize("corpus", ["examples_rates", "synthetic_rates"])
+@pytest.mark.parametrize("corpus_rates", ["examples_rates", "synthetic_rates"])
+@pytest.mark.parametrize("cutter", list(CUTTERS))
 def test_llm_drafts_cut_to_150_words_are_still_flagged(
-    corpus: str, request: pytest.FixtureRequest
+    corpus_rates: str, cutter: str, request: pytest.FixtureRequest
 ) -> None:
-    judged, _, flagged = request.getfixturevalue(corpus)[1][150]
+    judged, _, _, flagged = request.getfixturevalue(corpus_rates)[1][(cutter, 150)]
     assert judged >= 10
     assert flagged / judged >= MIN_DETECTION, f"{flagged} of {judged} pieces"
 
@@ -383,14 +583,21 @@ def test_min_judged_words_is_the_shortest_length() -> None:
     assert min(CALIBRATION_LENGTHS) == MIN_JUDGED_WORDS
 
 
-def test_pieces_are_parsed_once_with_their_windows() -> None:
+# spaCy.
+
+
+def _parser() -> Any:
     pytest.importorskip("spacy")
     from styleprofile.syntax import SyntaxUnavailableError, load_parser
 
     try:
-        parser = load_parser()
+        return load_parser()
     except SyntaxUnavailableError:
         pytest.skip("spaCy English model is not installed")
+
+
+def test_pieces_are_parsed_once_with_their_windows() -> None:
+    parser = _parser()
     parsed: list[str] = []
     pipe = parser.nlp.pipe
 
@@ -408,3 +615,19 @@ def test_pieces_are_parsed_once_with_their_windows() -> None:
     assert len(parsed) == len(writer)
     lengths = reference["calibration"]["by_length"]
     assert "syntax" in lengths["75"]["reliability"]
+
+
+def test_a_span_is_measured_on_its_own_sentences() -> None:
+    from styleprofile.syntax import _sentences  # pyright: ignore[reportPrivateUsage]
+
+    parser = _parser()
+    doc = parser.nlp("First sentence here is long enough. Second one follows right after it.")
+    # The span starts mid-sentence; spaCy's Span.sents would give both whole sentences.
+    span = doc[3:]
+    assert [sentence.text for sentence in _sentences(span)] == [
+        "is long enough.",
+        "Second one follows right after it.",
+    ]
+    assert [sentence.text for sentence in _sentences(doc)] == [
+        sentence.text for sentence in doc.sents
+    ]

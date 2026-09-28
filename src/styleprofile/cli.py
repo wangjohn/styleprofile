@@ -475,7 +475,11 @@ def _headline(result: ScoreResult, samples: Sequence[str]) -> str:
         return f"{name}: no metrics could be compared with the reference"
     if not result.judged:
         return f"{name}: {too_short_text(result.report['reference']['verdict'])}"
-    parts = [f"{name}: {result.verdict} (Delta {result.delta:.2f})"]
+    verdict = result.report["reference"]["verdict"]
+    left_out = verdict["chunks"] - verdict["chunks_judged"]
+    # Chunks too short to judge count for nothing, which a batch line must not hide.
+    note = f"; {left_out} of {verdict['chunks']} chunks not judged: too short" if left_out else ""
+    parts = [f"{name}: {result.verdict} (Delta {result.delta:.2f}{note})"]
     label = result.contrast_label
     if result.likeness is not None and result.likeness_verdict is not None and label:
         likeness = f"{result.likeness_verdict.words(label)} ({result.likeness:.2f})"
@@ -518,7 +522,8 @@ def _run_score(args: argparse.Namespace) -> int:
         if result.warnings:
             _note(f"{_plural(len(result.warnings), 'warning')}; run without -q to see them")
     else:
-        print(result.to_text(color=_color(), full=args.all))
+        setting = result.report["reference"]["verdict"].get("setting")
+        print(_flagged(result.to_text(color=_color(), full=args.all), setting))
         if args.output:
             print(f"\nwrote {args.output}")
     return 0

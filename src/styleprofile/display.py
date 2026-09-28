@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from styleprofile.calibration import (
+    MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
     MIN_JUDGED_WORDS,
     chunk_level,
     chunk_likeness_level,
     enough,
+    shortfall,
     too_short_text,
 )
 from styleprofile.core import Verdict
@@ -33,6 +35,7 @@ from styleprofile.metrics import (
     label,
 )
 from styleprofile.metrics import title as group_title
+from styleprofile.profile import summarize
 from styleprofile.weighting import (
     DISTANCE_WORDS,
     LENGTH_AUC_WARNING,
@@ -207,16 +210,23 @@ def _lengths_line(lengths: dict[str, Any]) -> str:
         if "delta" in entry
     ]
     thin = [
-        f"{length} words has too few ({entry['pieces']}, needs {MIN_CALIBRATION_PIECES})"
+        f"{length} words is not ({shortfall(entry)})"
         for length, entry in lengths.items()
         if not enough(entry)
     ]
-    if not calibrated:
+    if not lengths:
         text = "Shorter texts: not calibrated (its chunks are too short to cut into pieces)"
+    elif not calibrated:
+        text = "Shorter texts: not calibrated"
     else:
         text = "Shorter texts: calibrated at " + ", ".join(calibrated)
     if thin:
         text += "; " + ", ".join(thin)
+    if thin:
+        text += (
+            f"; a length needs {MIN_CALIBRATION_PIECES} independent pieces from "
+            f"{MIN_CALIBRATION_DOCUMENTS} or more documents"
+        )
     return f"{text}. Under {MIN_JUDGED_WORDS} words, no verdict."
 
 
@@ -274,6 +284,21 @@ def _length_line(length: dict[str, Any], name: str) -> str:
         f"Length alone: AUC {auc:.2f} (reference {length['reference_median_words']:.0f} words "
         f"per chunk, {name} drafts {length['contrast_median_words']:.0f}): {verdict}"
     )
+
+
+def _judged_view(report: dict[str, Any]) -> dict[str, Any]:
+    """The report as far as its verdict goes: only the chunks long enough to judge, with
+    their own summary, or every chunk when none is (then everything shown is indicative).
+    A chunk left out of the verdict adds nothing to the differences, arrows or signals."""
+    rows = [row for row in report["chunks"] if row["reference"]["calibration"]["judged"]]
+    if not rows or len(rows) == len(report["chunks"]):
+        return report
+    return {
+        **report,
+        "chunks": rows,
+        "chunk_count": len(rows),
+        "summary": summarize([row["metrics"] for row in rows]),
+    }
 
 
 def _chunk_z(report: dict[str, Any]) -> dict[tuple[str, str], list[float]]:
@@ -375,10 +400,7 @@ def _at_length(report: dict[str, Any], reference: dict[str, Any]) -> str:
     """How the verdict's ranges were matched to length, for the lines that quote them."""
     if (reference.get("calibration") or {}).get("by_length") is None:
         return ""
-    rows = report["chunks"]
-    # The verdict reads only the chunks long enough to judge.
-    rows = [row for row in rows if row["reference"]["calibration"]["judged"]] or rows
-    counts = [int(row["metrics"]["size"]["words"] or 0) for row in rows]
+    counts = [int(row["metrics"]["size"]["words"] or 0) for row in report["chunks"]]
     if len(counts) == 1:
         return f" at this length ({counts[0]:,} words)"
     return f" at these lengths ({min(counts):,}-{max(counts):,} words per chunk)"
@@ -420,7 +442,7 @@ def _likeness(
         lines.append(
             style.dim(
                 f"  The reference's own writing{_at_length(report, reference)} "
-                f"scores {entry['typical']:.2f} typically (95% under {entry['p95']:.2f}); "
+                f"scores {entry['typical']:.2f} typically ({_bound(report, entry)}); "
                 f"the {name} drafts {entry['target']:.2f}."
             )
         )
@@ -438,8 +460,19 @@ def _delta_baseline(
         return "Text by the reference's own writer usually scores around 0.8."
     return (
         f"The reference's own held-out writing{_at_length(report, reference)} scores "
-        f"{entry['typical']:.2f} typically, 95% under {entry['p95']:.2f}."
+        f"{entry['typical']:.2f} typically ({_bound(report, entry)})."
     )
+
+
+def _bound(report: dict[str, Any], entry: dict[str, Any]) -> str:
+    """The bound the verdict reads: one chunk's 95% bound, or the tighter one for a mean
+    over several chunks (``pooled_ceiling``), which is what the verdict words compare with."""
+    if report["chunk_count"] > 1:
+        return f"a mean over {report['chunk_count']} chunks, up to {entry['ceiling']:.2f}"
+    if entry["ceiling"] is not None and entry["ceiling"] > entry["p95"] + 5e-3:
+        # The floor that keeps a near-zero range from inflating verdicts.
+        return f"95% under {entry['p95']:.2f}; close up to {entry['ceiling']:.2f}"
+    return f"95% under {entry['p95']:.2f}"
 
 
 def _flagged_chunks(report: dict[str, Any], reference: dict[str, Any], style: _Style) -> list[str]:
@@ -587,7 +620,8 @@ def _comparison_view(
             + style.distance(style.bold(verdict["verdict"]), level)
             + f"   Delta {delta:.2f}",
             style.dim(
-                f"  Lower is closer. {_delta_baseline(report, reference, verdict['delta'])}"
+                f"  Lower is closer. "
+                f"{_delta_baseline(_judged_view(report), reference, verdict['delta'])}"
                 f"{shading}"
             ),
         ]
@@ -601,11 +635,20 @@ def _comparison_view(
                 "are indicative only."
             ),
         ]
+    # What the verdict reads: without the chunks it left out.
+    view = _judged_view(report)
+    if view is not report:
+        left_out = report["chunk_count"] - view["chunk_count"]
+        verb = "is" if left_out == 1 else "are"
+        lines[-1] += style.dim(
+            f" {left_out} of {report['chunk_count']} chunks {verb} too short to judge and "
+            f"{verb} left out (see the note below)."
+        )
     if reference.get("contrast"):
-        lines += ["", *_likeness(report, reference, style, verdict)]
+        lines += ["", *_likeness(view, reference, style, verdict)]
     areas = _areas(verdict)
     lines += ["", *_area_lines(areas, style, judged=judged)]
-    lines += ["", *_differences(report, reference, style, judged=judged)]
+    lines += ["", *_differences(view, reference, style, judged=judged)]
     if report["chunk_count"] > 1:
         lines += _flagged_chunks(report, reference, style)
     if full:
@@ -625,7 +668,7 @@ def _comparison_view(
                 for name, amount in divergences
             ]
         lines += _area_deltas(areas, style)
-        lines += _comparison_rows(report, reference, style)
+        lines += _comparison_rows(view, reference, style)
     return lines
 
 

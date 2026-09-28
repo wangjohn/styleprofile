@@ -4,10 +4,10 @@ $ styleprofile score examples/writer/sharpening.md examples/writer/old-maps.md '
 STYLE COMPARISON   2 chunks, 1,277 words   vs writer.json (7 chunks)
 
 Overall: close   Delta 0.49
-  Lower is closer. The reference's own held-out writing at these lengths (637-640 words per chunk) scores 0.68 typically, 95% under 0.89.
+  Lower is closer. The reference's own held-out writing at these lengths (637-640 words per chunk) scores 0.68 typically (a mean over 2 chunks, up to 0.83).
 
 LLM-likeness: like the reference   0.10
-  The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (95% under 0.82); the LLM drafts 14.23.
+  The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.64); the LLM drafts 14.23.
 
 By area   Delta ÷ the top of the reference's usual range in each area
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above

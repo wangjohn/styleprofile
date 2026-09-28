@@ -4,7 +4,7 @@ $ styleprofile build examples/writer --contrast examples/llm-drafts -o '<tmp>/wr
 STYLE PROFILE   7 chunks, 4,496 words
 
 As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
-  Shorter texts: calibrated at 75 words (62 pieces), 150 words (28 pieces); 300 words has too few (14, needs 20). Under 75 words, no verdict.
+  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); 300 words is not (28 pieces from 7 documents, worth 12 independent ones); a length needs 20 independent pieces from 3 or more documents. Under 75 words, no verdict.
 
 Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on 7 reference and 5 contrast documents)
   LLM-likeness on held-out text: reference 0.20 typically (95% under 0.82), LLM drafts 14.23

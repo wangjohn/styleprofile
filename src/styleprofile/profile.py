@@ -28,6 +28,7 @@ from styleprofile.calibration import (
     CALIBRATION_WORDS,
     CONTRAST_CALIBRATION_WORDS,
     MIN_CONTRAST_PIECES,
+    MIN_JUDGED_WORDS,
     AtLength,
     Lengths,
     calibrate_length,
@@ -867,12 +868,25 @@ def check_version(report: dict[str, Any], name: str = "the report") -> None:
     kind = report.get("kind")
     expected = EVALUATION_VERSION if kind == EVALUATION else VERSION
     version = report.get("version")
-    if version == expected:
-        return
     again = {
         SCORE: "score it again with `styleprofile score`",
         EVALUATION: "run `styleprofile evaluate` again",
     }.get(kind or "", "rebuild it with `styleprofile build`")
+    if version == expected:
+        # Version 6 gained length calibration before any release; a report from before it
+        # would judge short texts against its windows' range.
+        calibration = report.get("calibration") or {}
+        before_lengths = (
+            kind == REFERENCE
+            and bool(calibration)
+            and not {"by_length", "chunk_words"} <= calibration.keys()
+        ) or (kind == SCORE and "verdict" not in (report.get("reference") or {}))
+        if before_lengths:
+            raise StyleProfileError(
+                f"{name} was made by an older styleprofile, before length-aware verdicts; {again}",
+                code="outdated",
+            )
+        return
     age = "a newer" if isinstance(version, int) and version > expected else "an older"
     raise StyleProfileError(
         f"{name} was made by {age} styleprofile (report version {version}; this one reads "
@@ -1394,6 +1408,27 @@ def _baseline(reference: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _left_out(rows: Sequence[dict[str, Any]], shown: int = 5) -> str:
+    """Which chunks a verdict leaves out as too short to judge, and why, for its warning.
+
+    A chunk is named by its input (``notes.md``), or with its window (``draft.md#w3``) when
+    its input was cut into several."""
+    left_out = [row for row in rows if not row["reference"]["calibration"]["judged"]]
+    windows = Counter(base_id(row["id"]) for row in rows)
+    names = []
+    for row in left_out[:shown]:
+        words = int(row["metrics"]["size"]["words"] or 0)
+        why = (
+            f"under {MIN_JUDGED_WORDS}"
+            if words < MIN_JUDGED_WORDS
+            else "shorter than the reference is calibrated for"
+        )
+        name = row["id"] if windows[base_id(row["id"])] > 1 else base_id(row["id"])
+        names.append(f"{name} ({words:,} words, {why})")
+    more = f" and {len(left_out) - shown} more" if len(left_out) > shown else ""
+    return "left out of the verdict and the means as too short to judge: " + ", ".join(names) + more
+
+
 def _without_rms(calibration: dict[str, Any] | None) -> dict[str, Any] | None:
     """The calibration without each length's per-metric rms, which only scoring reads."""
     if not calibration:
@@ -1452,11 +1487,7 @@ def score(
     groups = sorted({group for scores in scored for group in scores["delta_by_group"]})
     reference_settings = reference.get("settings", {})
     if judged and len(judged) < len(rows):
-        left_out = len(rows) - len(judged)
-        warnings.append(
-            f"{left_out} chunk(s) are too short to judge and are left out of the verdict and "
-            "the means"
-        )
+        warnings.append(_left_out(rows))
     if not reference.get("reliability"):
         warnings.append(
             "the reference has no held-out reliability (it needs chunks from at least two "

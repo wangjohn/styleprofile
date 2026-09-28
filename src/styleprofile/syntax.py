@@ -77,6 +77,19 @@ def _pct(part: int, whole: int) -> float | None:
     return 100 * part / whole if whole else None
 
 
+def _sentences(doc: Any) -> list[Any]:
+    """The sentences of a ``Doc``, or of a ``Span`` clipped to its edges: ``Span.sents``
+    yields whole sentences, running past the span when the parser puts a sentence boundary
+    somewhere other than where the span starts or ends."""
+    if not hasattr(doc, "start"):
+        return list(doc.sents)
+    whole = doc.doc
+    clipped = [
+        whole[max(sentence.start, doc.start) : min(sentence.end, doc.end)] for sentence in doc.sents
+    ]
+    return [sentence for sentence in clipped if len(sentence)]
+
+
 def syntax_metrics(doc: Any) -> Metrics:
     """Parser-based metrics for one parsed chunk, named and grouped by the registry.
 
@@ -91,7 +104,7 @@ def syntax_metrics(doc: Any) -> Metrics:
 
     sentences = [
         sentence
-        for sentence in doc.sents
+        for sentence in _sentences(doc)
         if sum(token.is_alpha for token in sentence) >= _MIN_SENTENCE_WORDS
     ]
     openers = [next(token for token in sentence if token.is_alpha) for sentence in sentences]

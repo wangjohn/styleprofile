@@ -1,4 +1,4 @@
 $ styleprofile score -q examples/draft.md '<tmp>/writer.json'
 [exit 0]
 --- stdout
-examples/draft.md: close (Delta 0.82); LLM-likeness like the reference (0.73)
+examples/draft.md: close (Delta 0.81); LLM-likeness like the reference (0.73)
