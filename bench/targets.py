@@ -139,10 +139,11 @@ CASES = {
                 "score_s": SCORE_S,
             },
             # Only values over 2x target need a baseline; the rest fall back to 2x target.
-            # build_s meets its target on a laptop (1.3s) but the shared runner is about 2.3x
-            # slower. Plan PR 3 brought it from 3.72s to 2.94s there; the baseline can go once
-            # it measures under 3.2s / 1.5 = 2.13s (PRs 13 and 14).
-            baseline={"build_s": 2.94},
+            # build_s meets its target on a laptop (1.2s); the shared runner is slower. Plan
+            # PR 3 brought it from 3.72s to 2.94s there, and with PR 14's lean profile it
+            # measured 1.83s (plan PR 8's CI run), under 3.2s / 1.5 = 2.13s, so its baseline
+            # is deleted and the budget is 2x target, 3.2s.
+            baseline={},
             ci=True,
         ),
         Case(

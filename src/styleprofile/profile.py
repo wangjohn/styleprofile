@@ -23,7 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from styleprofile.core import StyleProfileError
+from styleprofile.core import Note, NoteCode, StyleProfileError
+from styleprofile.formats import (
+    AUTO,
+    HTML,
+    HTML_SUFFIXES,
+    INPUT_FORMATS,
+    JSONL,
+    html_to_markdown,
+    looks_like_html,
+    looks_like_jsonl,
+)
 from styleprofile.surface import (
     Metrics,
     block_word_count,
@@ -32,6 +42,7 @@ from styleprofile.surface import (
     jensen_shannon,
     masked_bigrams,
     prose,
+    strip_front_matter,
     surface_metrics,
     words,
 )
@@ -81,6 +92,30 @@ KINDS = (REFERENCE, SCORE, EVALUATION)
 UNREADABLE = "not a style profile this version of styleprofile can read; rebuild it"
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
+# What a directory walk reads; other files are reported as skipped.
+INPUT_SUFFIXES = TEXT_SUFFIXES | HTML_SUFFIXES | {".jsonl"}
+_SKIPPED_SHOWN = 4
+# Formats a directory walk names when it skips them: documents a user may have expected to
+# be read. Other skipped files (images, code, backups) are only counted.
+DOCUMENT_SUFFIXES = frozenset(
+    {
+        ".docx", ".doc", ".pdf", ".rtf", ".odt", ".epub", ".rst", ".org", ".tex", ".pages",
+        ".adoc", ".asciidoc", ".textile", ".mdx", ".wiki", ".pptx", ".xhtml", ".mht", ".mhtml",
+    }
+)  # fmt: skip
+# The documents pandoc can convert to Markdown.
+PANDOC_SUFFIXES = frozenset(
+    {".docx", ".odt", ".rtf", ".epub", ".rst", ".org", ".tex", ".textile", ".wiki", ".xhtml"}
+)
+# Static-site generators (Jekyll, Eleventy, Hugo). Their output folders hold built pages
+# that repeat the posts beside them, so a walk skips the HTML there (a writer may keep
+# Markdown in a folder named public/). Their template folders are not prose at all, so a
+# walk skips them whole. Either way it says so, and a directory named directly is read.
+SITE_OUTPUT_DIRS = frozenset({"_site", "public"})
+TEMPLATE_DIRS = frozenset({"_layouts", "_includes", "layouts", "themes", "resources"})
+# Documents shorter than this are never dropped as duplicates: short records ("Thanks!")
+# repeat legitimately.
+DUPLICATE_MIN_WORDS = 20
 # Directory walks skip dot-directories (.git, .venv) and these vendored ones.
 SKIPPED_DIRS = frozenset({"node_modules", "__pycache__", "site-packages"})
 OTHER = "<other>"
@@ -125,28 +160,37 @@ def _text_fields(text_field: str | Sequence[str] | None) -> tuple[str, ...]:
     return tuple(text_field) if text_field else TEXT_FIELDS
 
 
-def _jsonl_chunks(path: Path, source: str, text_field: str | Sequence[str] | None) -> list[Chunk]:
+def _jsonl_chunks(
+    text: str,
+    name: str,
+    source: str,
+    path: str | None,
+    text_field: str | Sequence[str] | None,
+) -> list[Chunk]:
+    """Read JSONL ``text``: ``name`` labels errors and default ids, ``source`` is saved for
+    each record, and ``path`` is the file it came from (None for stdin)."""
     fields = _text_fields(text_field)
     chunks: list[Chunk] = []
-    for line_number, line in enumerate(_read_text(path).split("\n"), start=1):
+    for line_number, line in enumerate(text.split("\n"), start=1):
         if not line.strip():
             continue
         try:
             record = json.loads(line)
         except json.JSONDecodeError as error:
-            raise StyleProfileError(f"{path}:{line_number}: invalid JSON: {error}") from error
+            raise StyleProfileError(f"{name}:{line_number}: invalid JSON: {error}") from error
         if not isinstance(record, dict):
-            raise StyleProfileError(f"{path}:{line_number}: expected a JSON object")
-        field = next((name for name in fields if isinstance(record.get(name), str)), None)
+            raise StyleProfileError(f"{name}:{line_number}: expected a JSON object")
+        field = next((key for key in fields if isinstance(record.get(key), str)), None)
         if field is None:
             raise StyleProfileError(
-                f"{path}:{line_number}: no string field among {', '.join(fields)}",
+                f"{name}:{line_number}: no string field among {', '.join(fields)}",
                 code="text_field",
             )
         record_id = record.get("id")
         # An id of 0 is kept; a missing, null or empty id falls back to the line.
-        chunk_id = f"{path.name}:{line_number}" if record_id in (None, "") else str(record_id)
-        chunks.append(Chunk(chunk_id, source, record[field], str(path)))
+        label = Path(name).name
+        chunk_id = f"{label}:{line_number}" if record_id in (None, "") else str(record_id)
+        chunks.append(Chunk(chunk_id, source, record[field], path))
     return chunks
 
 
@@ -216,22 +260,6 @@ def _numbered(name: str, number: int, is_file: bool) -> str:
     return f"{name} ({number})"
 
 
-def _files(path: Path) -> list[Path]:
-    files = sorted(
-        item
-        for item in path.rglob("*")
-        if item.is_file()
-        and item.suffix.lower() in {*TEXT_SUFFIXES, ".jsonl"}
-        and not any(
-            part.startswith(".") or part in SKIPPED_DIRS
-            for part in item.relative_to(path).parts[:-1]
-        )
-    )
-    if not files:
-        raise StyleProfileError(f"{path} contains no .md, .markdown, .txt, or .jsonl files")
-    return files
-
-
 def _name_sources(value: str, path: Path, files: Sequence[Path], names: SourceNames) -> list[str]:
     """Each file's source: the input's ``root_name``, joined for a directory with the file's
     path inside it. A name another file already has (two folders both called ``posts``, say)
@@ -251,13 +279,180 @@ def _name_sources(value: str, path: Path, files: Sequence[Path], names: SourceNa
         number += 1
 
 
+def _check_format(input_format: str) -> None:
+    if input_format not in INPUT_FORMATS:
+        raise StyleProfileError(
+            f"unknown input format {input_format!r}; choose one of {', '.join(INPUT_FORMATS)}"
+        )
+
+
+def _format_of(path: Path, input_format: str) -> str:
+    """The format a file is read in: the one asked for, else the one its suffix names."""
+    if input_format != AUTO:
+        return input_format
+    suffix = path.suffix.lower()
+    return JSONL if suffix == ".jsonl" else HTML if suffix in HTML_SUFFIXES else AUTO
+
+
+def _forced_jsonl(
+    text: str,
+    name: str,
+    source: str,
+    path: str | None,
+    text_field: str | Sequence[str] | None,
+) -> list[Chunk]:
+    """Read JSONL that was asked for rather than detected, saying so when it fails."""
+    try:
+        return _jsonl_chunks(text, name, source, path, text_field)
+    except StyleProfileError as error:
+        if error.code:
+            raise
+        raise StyleProfileError(
+            f"{error}; {Path(name).name} was read as JSONL because that format was asked for",
+            code="forced_jsonl",
+        ) from error
+
+
+@dataclass
+class _Detected:
+    """What reading one input found, for its notes: files sniffed as HTML, and HTML files
+    with no text once converted."""
+
+    sniffed: list[str]
+    empty: list[str]
+
+
+def _file_chunks(
+    path: Path,
+    label: str,
+    chunk_id: str,
+    source: str,
+    input_format: str,
+    text_field: str | Sequence[str] | None,
+    detected: _Detected,
+) -> list[Chunk]:
+    text = _read_text(path)
+    fmt = _format_of(path, input_format)
+    if fmt == JSONL:
+        if input_format == JSONL and path.suffix.lower() != ".jsonl":
+            return _forced_jsonl(text, str(path), source, str(path), text_field)
+        return _jsonl_chunks(text, str(path), source, str(path), text_field)
+    if fmt == AUTO and looks_like_html(text):
+        detected.sniffed.append(label)
+        fmt = HTML
+    if fmt == HTML:
+        text = html_to_markdown(text)
+        if not re.search(r"\w", text):
+            detected.empty.append(label)
+    return [Chunk(chunk_id, source, text, str(path))]
+
+
+def _stdin_chunks(
+    input_format: str, text_field: str | Sequence[str] | None, notes: list[Note]
+) -> list[Chunk]:
+    text = _decode(sys.stdin.buffer.read(), "stdin")
+    if input_format == JSONL:
+        return _forced_jsonl(text, "stdin", "stdin", None, text_field)
+    fmt = input_format
+    if fmt == AUTO and looks_like_jsonl(text):
+        notes.append(
+            Note(
+                "stdin is JSON objects, one per line, so it is read as JSONL",
+                NoteCode.READ_AS_JSONL,
+            )
+        )
+        return _jsonl_chunks(text, "stdin", "stdin", None, text_field)
+    if fmt == AUTO and looks_like_html(text):
+        fmt = HTML
+        notes.append(Note("stdin looks like HTML, so it is read as HTML", NoteCode.READ_AS_HTML))
+    if fmt == HTML:
+        text = html_to_markdown(text)
+        if not re.search(r"\w", text):
+            notes.append(Note("stdin has no readable text after conversion", NoteCode.EMPTY_HTML))
+    return [Chunk("stdin", "stdin", text)]
+
+
+def _listing(items: Sequence[str], shown: int = 3) -> str:
+    """ "a, b and c", or "a, b, c and 4 more" past ``shown`` items."""
+    if len(items) > shown:
+        return f"{', '.join(items[:shown])} and {len(items) - shown:,} more"
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _skipped(files: Sequence[Path]) -> tuple[str, str] | None:
+    """Describe skipped files and what to do about them: ("12 .docx and 40 other files", ...).
+
+    Only ``DOCUMENT_SUFFIXES`` are named, most common first; everything else (images,
+    code, backups, unknown extensions) counts toward the "other" tail. Pandoc is suggested
+    only for documents it can convert. None when no document was skipped.
+    """
+    documents = Counter(
+        suffix for item in files if (suffix := item.suffix.lower()) in DOCUMENT_SUFFIXES
+    )
+    if not documents:
+        return None
+    named = documents.most_common(_SKIPPED_SHOWN)
+    shown = [f"{count:,} {suffix}" for suffix, count in named]
+    others = len(files) - sum(count for _, count in named)
+    if others:
+        shown.append(f"{others:,} other")
+    # "and 1 other file" reads better than "files" whatever came before it.
+    listed = _listing(shown, len(shown)) + " file" + ("" if len(files) == 1 or others == 1 else "s")
+    if len(documents) > len(named):
+        which = "those documents"
+    else:
+        which = f"the {_listing([suffix for suffix, _ in named])} "
+        which += "file" if sum(documents.values()) == 1 else "files"
+    pandoc = " (for example with pandoc)" if set(documents) & PANDOC_SUFFIXES else ""
+    return listed, f"convert {which} to Markdown, text or HTML first{pandoc}"
+
+
+def _walk(path: Path) -> tuple[list[Path], list[Path], list[str]]:
+    """The readable files under a directory, the other files it skips, and the static-site
+    folders it left readable files out of: the HTML in ``SITE_OUTPUT_DIRS`` and everything
+    in ``TEMPLATE_DIRS``.
+
+    Dot-directories (.git, .venv) and vendored directories are left out of all three, and
+    dotfiles (.DS_Store) are not reported as skipped.
+    """
+    readable: list[Path] = []
+    skipped: list[Path] = []
+    generated: list[str] = []
+    for item in sorted(path.rglob("*")):
+        parts = item.relative_to(path).parts
+        if not item.is_file() or any(
+            part.startswith(".") or part in SKIPPED_DIRS for part in parts[:-1]
+        ):
+            continue
+        suffix = item.suffix.lower()
+        site = next(
+            (
+                index
+                for index, part in enumerate(parts[:-1])
+                if part in TEMPLATE_DIRS or (part in SITE_OUTPUT_DIRS and suffix in HTML_SUFFIXES)
+            ),
+            None,
+        )
+        if site is not None:
+            folder = "/".join(parts[: site + 1])
+            if suffix in INPUT_SUFFIXES and folder not in generated:
+                generated.append(folder)
+        elif suffix in INPUT_SUFFIXES:
+            readable.append(item)
+        elif not parts[-1].startswith("."):
+            skipped.append(item)
+    return readable, skipped, generated
+
+
 def load_chunks(
     inputs: Sequence[str],
     text_field: str | Sequence[str] | None = None,
     *,
     names: SourceNames | None = None,
+    input_format: str = AUTO,
+    notes: list[Note] | None = None,
 ) -> list[Chunk]:
-    """Read JSONL records, Markdown/text files, directories of them, or ``-`` for stdin.
+    """Read Markdown, text, HTML or JSONL files, directories of them, or ``-`` for stdin.
 
     ``text_field`` names the JSONL field that holds the text, or several to try in order;
     by default the first of ``TEXT_FIELDS`` that a record has.
@@ -266,26 +461,147 @@ def load_chunks(
     directory with its path inside it (``posts/2024/a.md``); nothing above the input is
     saved. ``names`` records the names given out; pass the same one to several calls to keep
     sources distinct across them, as one call does across its inputs. Chunks remember the
-    file they came from (``Chunk.path``), so documents stay distinct either way."""
+    file they came from (``Chunk.path``), so documents stay distinct either way.
+
+    With ``input_format`` ``"auto"``, a file's suffix picks its format, a Markdown or text
+    file that looks like HTML is read as HTML, and stdin is read as JSONL when every line is
+    a JSON object. ``"markdown"``, ``"html"`` or ``"jsonl"`` reads every input that way.
+    HTML is converted to Markdown (see ``formats.html_to_markdown``). A directory walk
+    leaves out static-site output and templates (``SITE_OUTPUT_DIRS``, ``TEMPLATE_DIRS``).
+    What was detected, and what a walk skipped, are appended to ``notes`` when it is given;
+    notes name inputs as typed, since they are shown rather than saved.
+    """
+    _check_format(input_format)
     names = SourceNames() if names is None else names
+    notes = [] if notes is None else notes
     chunks: list[Chunk] = []
     for value in inputs:
         if value == "-":
-            chunks.append(Chunk("stdin", "stdin", _decode(sys.stdin.buffer.read(), "stdin")))
+            chunks.extend(_stdin_chunks(input_format, text_field, notes))
             continue
         path = expand_path(value).resolve()
-        files = _files(path) if path.is_dir() else [path]
-        sources = _name_sources(value, path, files, names)
-        for item, source in zip(files, sources, strict=True):
-            if item.suffix.lower() == ".jsonl":
-                chunks.extend(_jsonl_chunks(item, source, text_field))
-            elif path.is_dir():
-                chunks.append(
-                    Chunk(str(item.relative_to(path)), source, _read_text(item), str(item))
+        detected = _Detected([], [])
+        if not path.is_dir():
+            [source] = _name_sources(value, path, [path], names)
+            chunks.extend(
+                _file_chunks(path, value, path.name, source, input_format, text_field, detected)
+            )
+        else:
+            files, skipped, generated = _walk(path)
+            described = _skipped(skipped)
+            if generated:
+                notes.append(
+                    Note(
+                        f"left out static-site output and template folders in {value}: "
+                        f"{_listing(generated)}; name one directly to read it",
+                        NoteCode.SKIPPED_DIRS,
+                    )
                 )
-            else:
-                chunks.append(Chunk(item.name, source, _read_text(item), str(item)))
+            if not files:
+                if generated:
+                    raise StyleProfileError(
+                        f"{value} has readable files only in static-site output and template "
+                        f"folders ({_listing(generated)}), which are left out; name one directly "
+                        "to read it",
+                        code="only_generated",
+                    )
+                if described:
+                    has = f"; it has {described[0]}, so {described[1]}"
+                elif skipped:
+                    has = f"; it has only images, code and other files ({len(skipped):,})"
+                else:
+                    has = ""
+                raise StyleProfileError(
+                    f"{value} contains no .md, .markdown, .txt, .html, .htm, or .jsonl files{has}"
+                )
+            if described:
+                notes.append(
+                    Note(
+                        f"skipped {described[0]} in {value}; {described[1]}", NoteCode.SKIPPED_FILES
+                    )
+                )
+            sources = _name_sources(value, path, files, names)
+            for item, source in zip(files, sources, strict=True):
+                chunk_id = str(item.relative_to(path))
+                label = str(Path(value) / chunk_id)
+                chunks.extend(
+                    _file_chunks(item, label, chunk_id, source, input_format, text_field, detected)
+                )
+        if detected.sniffed:
+            they = "it is" if len(detected.sniffed) == 1 else "they are"
+            looks = "looks" if len(detected.sniffed) == 1 else "look"
+            notes.append(
+                Note(
+                    f"{_listing(detected.sniffed)} {looks} like HTML, so {they} read as HTML",
+                    NoteCode.READ_AS_HTML_IN_FOLDER if path.is_dir() else NoteCode.READ_AS_HTML,
+                )
+            )
+        if detected.empty:
+            has = "has" if len(detected.empty) == 1 else "have"
+            notes.append(
+                Note(
+                    f"{_listing(detected.empty)} {has} no readable text after conversion from HTML",
+                    NoteCode.EMPTY_HTML,
+                )
+            )
     return chunks
+
+
+def _document_label(chunk: Chunk) -> str:
+    """A document as reports name it: its saved source (never a path), and a record's id."""
+    source = chunk.source
+    if source == "stdin" or source.endswith(base_id(chunk.id)):
+        return source
+    return f"record {base_id(chunk.id)} in {source}"
+
+
+def drop_duplicates(
+    chunks: Sequence[Chunk], seen: dict[str, str] | None = None
+) -> tuple[list[Chunk], Note | None]:
+    """Keep the first of documents whose text is word-for-word the same.
+
+    Chunks are grouped into documents by ``chunk_document`` (their real file and record, so
+    windows of one document stay together and two files that share a saved name stay
+    apart). Each document's words, lowercased, are compared with front matter, punctuation
+    and Markdown markup left out, so a post and its generated HTML page (converted to
+    Markdown) match; this reads each document once with one regular expression rather than
+    parsing its Markdown, which measuring does later. A file given twice is a different
+    check, made when inputs are read.
+
+    ``seen`` maps the text of documents read earlier (another input set) to their label,
+    and is updated, so a contrast draft that repeats a reference document is dropped too.
+    Twins would sit on both sides of held-out calibration and make it look too tight.
+    Documents under ``DUPLICATE_MIN_WORDS`` words are always kept. The note names documents
+    by their saved sources, never by path.
+    """
+    seen = {} if seen is None else seen
+    documents: dict[str, list[Chunk]] = {}
+    for chunk in chunks:
+        documents.setdefault(chunk_document(chunk), []).append(chunk)
+    dropped_documents: set[str] = set()
+    dropped: list[tuple[str, str]] = []
+    for document, members in documents.items():
+        tokens = words(strip_front_matter("\n\n".join(chunk.text for chunk in members)))
+        if len(tokens) < DUPLICATE_MIN_WORDS:
+            continue
+        key = " ".join(tokens).lower()
+        label = _document_label(members[0])
+        if key in seen:
+            dropped.append((label, seen[key]))
+            dropped_documents.add(document)
+        else:
+            seen[key] = label
+    kept = [chunk for chunk in chunks if chunk_document(chunk) not in dropped_documents]
+    if not dropped:
+        return kept, None
+    copy, original = dropped[0]
+    count = len(dropped)
+    repeating = "1 document that repeats" if count == 1 else f"{count:,} documents that repeat"
+    note = (
+        f"dropped {repeating} another word for word, keeping the first copy (for example, "
+        f"{copy} repeats {original})"
+    )
+    return kept, Note(note, NoteCode.DUPLICATES)
 
 
 def window(chunks: Sequence[Chunk], window_words: int) -> list[Chunk]:

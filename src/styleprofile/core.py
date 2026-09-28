@@ -40,6 +40,20 @@ class NoteCode(StrEnum):
     """A score overrides a setting the profile was built with (``Note.setting`` names it)."""
     THIN_REFERENCE = "thin_reference"
     """The reference is too small to trust, for the reason in the message."""
+    READ_AS_HTML = "read_as_html"
+    """A Markdown or text file, or stdin, looked like HTML and was read as HTML."""
+    READ_AS_HTML_IN_FOLDER = "read_as_html_in_folder"
+    """Markdown or text files in a folder looked like HTML and were read as HTML."""
+    READ_AS_JSONL = "read_as_jsonl"
+    """Stdin was JSON objects, one per line, and was read as JSONL."""
+    EMPTY_HTML = "empty_html"
+    """HTML had no readable text once converted (all chrome, or an empty page)."""
+    SKIPPED_FILES = "skipped_files"
+    """A folder walk skipped documents it cannot read (Word, PDF, ...)."""
+    SKIPPED_DIRS = "skipped_dirs"
+    """A folder walk left out static-site output and template folders."""
+    DUPLICATES = "duplicates"
+    """Documents repeating another's text word for word were dropped."""
 
 
 @dataclass(frozen=True)
