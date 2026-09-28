@@ -1,0 +1,16 @@
+# Intended benchmark regressions, one [[regression]] entry per case and metric.
+#
+# CI's benchmark job fails a pull request that is worse than its base by more than the margins
+# in bench/targets.py (MARGINS). When the cost is intended, add an entry here in that PR, so a
+# reviewer sees and approves it:
+#
+#   [[regression]]
+#   pr = 15                    # this pull request's number
+#   case = "medium-nosyntax"   # the case, from bench/targets.py
+#   metric = "build_cpu_s"     # the metric, from MARGINS in bench/targets.py
+#   ratio = 1.9                # the most it may cost, as change / base, with room for noise
+#   reason = "Why the cost is worth it."
+#
+# An entry applies only to the PR it names (its PR runs, and the push to main that merges it).
+# Afterwards it is inert and CI warns until it is deleted; delete it in any later PR. See
+# bench/gate.py.

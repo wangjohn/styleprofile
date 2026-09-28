@@ -31,7 +31,8 @@ demo:
 
 # Benchmark every case in bench/targets.py on generated corpora (bench/gen.py) and compare with
 # the performance targets. Results go to bench/results.json. Pass options with BENCH, e.g.
-# `make bench BENCH="--case big --repeat 3"`. bench-quick runs only the case CI runs.
+# `make bench BENCH="--case big --repeat 3"`. bench-quick runs only the case CI runs. Compare
+# with a base revision as CI does with `make bench-quick BENCH="--against origin/main --repeat 5"`.
 bench:
 	$(UV) run python bench/run.py $(BENCH)
 

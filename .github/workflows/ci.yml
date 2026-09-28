@@ -42,21 +42,25 @@ jobs:
 
   bench:
     # A separate job so the benchmark neither slows nor is slowed by the test matrix. It runs
-    # the medium corpus without spaCy and fails when a value is over its regression budget in
-    # bench/targets.py (max(2x the plan's target, a noise margin x the baseline measured on this
-    # runner)), or when a baseline is stale and must be lowered. Wall time is the fastest of
-    # three runs, to damp the noise of shared runners. The runner image is pinned, because the
-    # baselines were measured on it; re-measure them if you change it. The results table goes
-    # to the job summary.
+    # the medium corpus without spaCy for this change *and for its base*, HEAD^ (for a pull
+    # request, HEAD is GitHub's merge commit and HEAD^ the tip of main it merges into; for a
+    # push to main, the commit before). The two alternate on the same runner, five runs each,
+    # and the job fails when the change is worse than its base by more than the margins in
+    # bench/targets.py (CPU time 1.25x, peak memory 1.2x, profile size 1.05x), unless
+    # bench/accepted.toml accepts the cost for this PR. Wall time on shared runners swings by
+    # up to ~75% between runs, so absolute budgets were flaky; the plan's targets are now only
+    # a report. The tables go to the job summary.
     name: benchmark (medium corpus, without spaCy)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # HEAD^, the base
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
       - run: uv sync --locked
-      - run: uv run python bench/run.py --quick --repeat 3 --check
+      - run: uv run python bench/run.py --quick --repeat 5 --against HEAD^ --check
       - if: always()
         uses: actions/upload-artifact@v4
         with:
