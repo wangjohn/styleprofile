@@ -1070,7 +1070,13 @@ def summarize(chunk_metrics: Sequence[Metrics]) -> Summary:
 #   of one input (a file, or every file of a folder) with one value in it are one document,
 #   and records with no value are one more;
 # - an ungrouped window that ``pool`` joins from several short texts (the records of one
-#   JSONL file, the files of one folder input, or ``Text`` inputs) is a document of its own.
+#   JSONL file, the files of one folder input, or ``Text`` inputs) is a document of its own;
+# - a part of a split text is a document of its own (see ``split``). When the writer's texts
+#   are fewer than three documents, too few to calibrate (``api.Settings.split_on``), each
+#   Markdown, text or HTML text among them is split at its headings or rules into parts of
+#   at least half a window, ``book.md#3-mud-season``; one with none is cut into stand-in
+#   documents of consecutive windows, ``book.md#3#w1``, which share topics, so calibration
+#   on them is optimistic. JSONL records are never split: each is already a document.
 #
 # Windows of a document stay in it. Ids name chunks for people (``post#w2``,
 # ``thread=t1#r12``, ``c0012..c0019``) and are never read back to find a document, except
@@ -1144,6 +1150,11 @@ def bare_key(key: str) -> str | None:
 def _record(chunk: Chunk) -> bool:
     """Whether ``chunk`` is a JSONL record, or a window of records."""
     return _grouped(chunk) or _RECORD in (chunk.document or "")
+
+
+def is_record(chunk: Chunk) -> bool:
+    """Whether ``chunk`` is a JSONL record, grouped or not, or a window of records."""
+    return _record(chunk)
 
 
 def pair_key(chunk: Chunk) -> str:
@@ -2749,6 +2760,8 @@ def average_z(
 _ESCAPED_SUFFIX = re.compile(r"(?:%23[rw]\d+)+(?=(?:@\d+)?$)")
 
 # A number that keeps a saved source unique (``posts (2)/a.md``, ``notes (2).md``).
+# The id suffix of a part of a split text (``split.part_id``): ``#3``, ``#3-mud-season``.
+_PART_OF_SPLIT = re.compile(r"#\d+(?:-[\w-]*)?$")
 _SOURCE_NUMBER = re.compile(r" \(\d+\)(?=(?:\.[^/.]*)?(?:/|$))")
 
 
@@ -2773,6 +2786,9 @@ def document_label(source: str, base: str) -> str:
     file_name = PurePosixPath(source).name
     if base.startswith(file_name + ":"):  # a record without an id, named by its line
         return source[: len(source) - len(file_name)] + base
+    part = _PART_OF_SPLIT.search(base)
+    if part and document_label(source, base[: part.start()]) == source:
+        return source + part.group(0)  # a part of a split file: ``book.md#3-mud-season``
     return f"{source}:{base}"
 
 

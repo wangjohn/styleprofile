@@ -479,7 +479,10 @@ class _Converter(HTMLParser):
         if not choice or not words(choice):
             return self.lines
         selected: list[str] = []
-        for candidate in choice:
+        for number, candidate in enumerate(choice):
+            # Separate articles are separate pieces: a rule between them, which has no
+            # words to measure, lets ``split`` cut a page of posts into its posts.
+            selected += ["---", ""] if number else []
             selected += [*self.lines[candidate.start : candidate.end], ""]
         return selected
 
@@ -498,7 +501,8 @@ def html_to_markdown(html: str) -> str:
 
     - among the articles, the one with the most text when it has at least twice the text
       of all the others together (a post beside smaller cards), else all of them (an index
-      page of post excerpts, the newest perhaps in full);
+      page of post excerpts, the newest perhaps in full), separated by rules (``---``), so
+      ``split`` can cut a page of posts into its posts;
     - a ``<main>`` instead when that choice holds under half of the main's text (the post
       body sits in a ``<div>`` next to an article card);
     - the whole ``<body>`` when there are no candidates, or the chosen ones have no text.
