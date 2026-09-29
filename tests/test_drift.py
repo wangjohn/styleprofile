@@ -187,12 +187,21 @@ def test_nothing_drifts_without_thresholds() -> None:
 
 
 def test_a_paragraph_whose_spans_hold_one_that_drifts_is_explained_by_it() -> None:
-    # The first paragraph's spans (0,2) and (0,3) are high because of the second, whose
-    # own spans (1,3) and (0,2) do not both hold the first.
-    values = {(0, 2): 1.6, (0, 3): 1.6, (1, 3): 1.6}
+    # The first paragraph's spans (0,2) and (0,3) are high because of the second, which
+    # is stronger and whose own spans (1,3) and (0,2) do not both hold the first.
+    values = {(0, 2): 1.8, (0, 3): 1.6, (1, 3): 1.8}
     entries = _entries([60] * 4, values)
     assert [entry["drifts"] for entry in entries] == [False, True, False, False]
     assert entries[0]["note"] == "both its spans hold line 3"
+
+
+def test_a_weaker_paragraph_never_explains_a_stronger_one() -> None:
+    # The first paragraph (5x) has the second (1.6x) in both its spans, but the second is
+    # weaker, so it cannot explain the first away: both drift.
+    values = {(0, 2): 5.0, (0, 3): 5.0, (1, 3): 1.6}
+    entries = _entries([60] * 4, values)
+    assert [entry["drifts"] for entry in entries] == [True, True, False, False]
+    assert entries[0]["note"] is None
 
 
 def test_a_paragraph_on_one_span_does_not_drift_without_its_own_null() -> None:
@@ -465,3 +474,32 @@ def test_html_line_numbers_are_said_to_be_of_the_converted_text(
         "line numbers are of the text converted from html"
         in result.to_text(by_paragraph=True).lower()
     )
+
+
+def test_an_llm_opening_is_not_hidden_behind_its_neighbours(demo_profile: sp.Profile) -> None:
+    # The review's chain: lines 3, 7 and 11 of an LLM draft were each explained away by the
+    # next, down to a weaker paragraph. Explanation now only runs from stronger to weaker.
+    result = demo_profile.score(ROOT / "examples" / "llm-drafts" / "mud-season.md")
+    drifting = {passage.lines[0] for passage in result.passages if passage.drifts}
+    assert {3, 7, 11} <= drifting
+
+
+def test_pooled_records_are_not_read_in_parts(tmp_path: Path, demo_profile: sp.Profile) -> None:
+    records = tmp_path / "records.jsonl"
+    blocks = DRAFT.read_text().split("\n\n")[1:] * 3
+    records.write_text(
+        "".join(json.dumps({"id": str(i), "text": b}) + "\n" for i, b in enumerate(blocks))
+    )
+    result = demo_profile.score(records, pool=True)
+    documents = result.report["passages"] or []
+    assert documents and all(d["pooled"] and not d["judged"] for d in documents)
+    assert result.passages == ()
+    line = "Where it drifts: paragraph checks don't apply to pooled records"
+    assert line in result.to_text()
+    path = tmp_path / "score.json"
+    result.save(path)
+    saved = sp.ScoreResult(load_report(path))
+    assert line in saved.to_text() and all(d["pooled"] for d in saved.report["passages"] or [])
+    # Unpooled, each record is its own document and none is pooled.
+    plain = demo_profile.score(records, pool=False, passages=True)
+    assert not any(d["pooled"] for d in plain.report["passages"] or [])

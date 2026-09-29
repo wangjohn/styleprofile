@@ -663,6 +663,10 @@ class ParagraphScore(TypedDict):
     likeness_level: int | None
     # The paragraph's own traits, measured on it alone.
     traits: list[PassageTrait]
+    # Its own score over the bound at its length, read alone (not a verdict: below 75 words
+    # the bound is only widened). One above 1 reads unlike the writer by itself, so no
+    # neighbour explains it away.
+    alone: float | None
     # Whether it drifts (a paragraph's own flag, distinct from a chunk's ``flagged``), and
     # when its statistic is above its span's 95% bound but it does not, why.
     drifts: bool
@@ -685,6 +689,8 @@ class DocumentPassages(TypedDict):
     source: str
     # Read from HTML: its lines are those of the Markdown conversion.
     converted: bool
+    # Scored as pooled windows of records, so not read in parts (``reason`` says so).
+    pooled: bool
     words: int
     span_words: int
     # False when no span could be judged; ``reason`` says why, and ``paragraphs`` is empty.

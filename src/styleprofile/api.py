@@ -462,7 +462,10 @@ class Profile(_Result[ReferenceReport]):
                     **chosen.to_report(),
                     "pool_used": cut.pooled is not None,
                 },
-                read_in_parts=chunks if _wants_passages(passages, chunks) else None,
+                read_in_parts=(
+                    chunks if cut.pooled is None and _wants_passages(passages, chunks) else None
+                ),
+                pooled=cut.pooled is not None,
             )
             report["warnings"] += _pooling_mismatch(cut, reference_pooled)
             step(Phase.DONE)

@@ -759,9 +759,7 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["group_field"] = args.group_field
     if args.pool is not None:
         overrides["pool"] = args.pool
-    result = profile.score(
-        samples, passages=True if args.by_paragraph else None, **overrides
-    )
+    result = profile.score(samples, passages=True if args.by_paragraph else None, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     failed = _failed(args, result)

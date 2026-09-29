@@ -96,7 +96,7 @@ LIKENESS_CELLS = {
     # Judged on Delta, but the reference has no likeness range at its length.
     LikenessVerdict.TOO_SHORT: "too short",
 }
-# Flagged paragraphs "Where it drifts" shows, and the excerpt length in "By paragraph".
+# Paragraphs that drift "Where it drifts" shows, and the excerpt length in "By paragraph".
 PASSAGES_SHOWN = 3
 EXCERPT_SHOWN = 40
 BAR_WIDTH = 20
@@ -714,6 +714,10 @@ NEEDS_CONTRAST = (
     "rarely catch an LLM passage"
 )
 CONVERTED = "line numbers are of the text converted from HTML"
+POOLED = (
+    "paragraph checks don't apply to pooled records; score without --pool for each "
+    "record's own verdict in the document table"
+)
 
 
 def _line_range(entry: ParagraphScore) -> str:
@@ -903,6 +907,8 @@ def _no_drift(documents: list[DocumentPassages]) -> str:
     """The one line "Where it drifts" becomes when no paragraph drifts: that the check ran
     and on how much, or why it could not or says little."""
     judged = [document for document in documents if document["judged"]]
+    if any(document["pooled"] for document in documents):
+        return f"Where it drifts: {POOLED}."
     if not judged:
         if all(not document["spans"] for document in documents):
             words = documents[0]["span_words"]

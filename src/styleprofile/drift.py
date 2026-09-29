@@ -41,8 +41,9 @@ from typing import Any
 
 from styleprofile.calibration import chunk_level, chunk_likeness_level
 from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict
+from styleprofile.metrics import METRICS
 from styleprofile.surface import Block, block_word_count, classify, prose
-from styleprofile.weighting import LIKENESS_MIN_CEILING, MIN_CEILING, UPPER_Z
+from styleprofile.weighting import LIKENESS_MIN_CEILING, MIN_CEILING, UNSEEN_Z, UPPER_Z
 
 # Spans hold at least this many prose words (docs/method.md, "Where a draft drifts").
 SPAN_WORDS = 100
@@ -66,6 +67,17 @@ CALIBRATION_WORDS = 40_000
 # Traits kept per paragraph, and the length of its excerpt in characters.
 TRAITS_KEPT = 3
 EXCERPT_CHARS = 60
+# A span's Delta and likeness count each z of the parser's metrics (the ``SPAN_Z_GROUPS``)
+# up to this size (the cap an unseen value gets, ``weighting.UNSEEN_Z``), in scoring spans
+# and in their null alike. A span of 100 words has 5 to 8 sentences, so one parse decision
+# (a sentence tagged as opening on a verb, where the writer almost never does) can move such
+# a rate a dozen standard deviations or more, which alone would carry the span. Capping every
+# metric also caps the surface tells an LLM paragraph is found by (em dashes, LLM marker
+# words), and found fewer inserts for no fewer false drifts (docs/method.md).
+SPAN_Z = UNSEEN_Z
+SPAN_Z_GROUPS: frozenset[str] | None = frozenset(
+    metric.group for metric in METRICS if metric.syntax
+)
 # The two scores a span can be judged by.
 DELTA = "delta"
 LIKENESS = "likeness"
@@ -378,12 +390,15 @@ def judge(
     judged: Sequence[Mapping[str, Any]],
     limits: Mapping[str, float | None] | None,
     traits: Sequence[Sequence[Mapping[str, Any]]],
+    alone: Sequence[float | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Each paragraph's entry: its lines, words and excerpt, its statistic and the figures
     of its lower span, its own traits, and whether it ``drifts``: above its threshold
-    (``limits``), unless another paragraph that drifts lies in both its spans while it does
-    not lie in both of that one's, which then explains its spans (``note`` says so).
-    Nothing drifts without thresholds."""
+    (``limits``), unless a paragraph at least as strong that still drifts lies in both its
+    spans while it does not lie in both of that one's, which then explains its spans
+    (``note`` says so). A paragraph that reads unlike the writer on its own (its score
+    ``alone`` above its bound) is never explained away. Nothing drifts without
+    thresholds."""
     stats = statistics(layout, [span["relative"] for span in judged])
     entries: list[dict[str, Any]] = []
     for index, paragraph in enumerate(found):
@@ -400,6 +415,7 @@ def judge(
             "likeness": None,
             "likeness_level": None,
             "traits": list(traits[index]),
+            "alone": alone[index] if alone is not None else None,
             "drifts": False,
             "note": None,
         }
@@ -429,13 +445,28 @@ def judge(
         ranges = [set(range(*layout.spans[position])) for position in sides]
         return set.intersection(*ranges) if ranges else set()
 
-    drifting = [index for index, entry in enumerate(entries) if entry["drifts"]]
+    # Strongest first: a paragraph is explained only by one at least as strong that still
+    # drifts, so an explanation never passes along a chain to a weaker paragraph.
+    drifting = sorted(
+        (index for index, entry in enumerate(entries) if entry["drifts"]),
+        key=lambda index: -(entries[index]["relative"] or 0.0),
+    )
+    kept: list[int] = []
     for index in drifting:
-        for other in drifting:
-            if other != index and other in inside(index) and index not in inside(other):
-                entries[index]["drifts"] = False
-                entries[index]["note"] = f"both its spans hold line {found[other].line}"
-                break
+        own = entries[index]["alone"]
+        if own is not None and own > 1.0:
+            # It reads unlike the writer by itself: nothing next to it explains that.
+            kept.append(index)
+            continue
+        explains = next(
+            (other for other in kept if other in inside(index) and index not in inside(other)),
+            None,
+        )
+        if explains is None:
+            kept.append(index)
+            continue
+        entries[index]["drifts"] = False
+        entries[index]["note"] = f"both its spans hold line {found[explains].line}"
     return entries
 
 
