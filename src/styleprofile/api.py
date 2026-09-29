@@ -27,6 +27,8 @@ import dataclasses
 import functools
 import json
 import os
+import statistics
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -34,7 +36,12 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Generic, Literal, TypedDict, TypeVar, Unpack, cast
 
-from styleprofile.calibration import too_short_text
+from styleprofile.calibration import (
+    MIN_CALIBRATION_DOCUMENTS,
+    MIN_CALIBRATION_PIECES,
+    MIN_JUDGED_WORDS,
+    too_short_text,
+)
 from styleprofile.core import (
     DISTANCES,
     LIKENESSES,
@@ -57,15 +64,23 @@ from styleprofile.profile import (
     REFERENCE,
     TEXT_FIELDS,
     Chunk,
+    Pooled,
+    Records,
     SourceNames,
+    bare_key,
     build_reference,
     check_report,
+    chunk_document,
+    cover_key,
     drop_duplicates,
     dumps_report,
     expand_path,
+    group_id,
+    is_grouped,
     literal_id,
     load_chunks,
     load_reference,
+    pool,
     report_kind,
     score,
     window,
@@ -80,6 +95,7 @@ from styleprofile.schema import (
     ScoreReport,
     ScoreVerdict,
 )
+from styleprofile.surface import words
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
 
 AUTO = "auto"
@@ -101,6 +117,8 @@ class Text:
     ``name`` identifies it in reports (as a file name does) and pairs an edited text with
     its original in ``evaluate``. Unnamed texts are ``text1``, ``text2``, ... in order,
     skipping names other texts already have; two texts with one name are an error.
+    The texts of one role (the writer's, say) are like the records of one JSONL file: each
+    is a document, and short ones are pooled in order (see ``Settings.pool``).
     """
 
     text: str
@@ -130,6 +148,14 @@ class Settings:
       Markdown or text file that looks like HTML as HTML, and reads stdin as JSONL when
       every line is a JSON object; ``"markdown"``, ``"html"`` or ``"jsonl"`` reads every
       input that way, folder contents included.
+    - ``group_field``: the JSONL field (``thread``, ``conversation_id``) whose value groups
+      the records of one input into documents; by default each record is its own document.
+      Records with no value in it are one more group, ``thread=(none)``.
+    - ``pool``: join short texts into windows of about ``window_words``, never across
+      groups or inputs: ``True``, ``False``, or ``"auto"``, which pools when the median text is
+      under a quarter of a window and pooling leaves ``ENOUGH_CHUNKS`` windows. Without
+      ``group_field``, each joined window counts as a document. ``Profile.score`` does not
+      inherit it: drafts are scored one by one unless it is asked for.
 
     A new setting is one field here: recording, reading back, inheriting and overriding
     all go through the fields.
@@ -141,6 +167,8 @@ class Settings:
     syntax: Literal["auto"] | bool = AUTO
     top_k: int = DEFAULT_TOP_K
     input_format: str = AUTO
+    group_field: str | None = None
+    pool: Literal["auto"] | bool = AUTO
 
     def __post_init__(self) -> None:
         _count(self, "window_words", 0, "must be 0 (no windowing) or positive")
@@ -152,6 +180,15 @@ class Settings:
             )
         if not (type(self.syntax) is bool or self.syntax == AUTO):
             _invalid("syntax", f"syntax must be True, False or {AUTO!r}, not {self.syntax!r}")
+        if not (
+            self.group_field is None or (isinstance(self.group_field, str) and self.group_field)
+        ):
+            _invalid(
+                "group_field",
+                f"group_field must be a field name or None, not {self.group_field!r}",
+            )
+        if not (type(self.pool) is bool or self.pool == AUTO):
+            _invalid("pool", f"pool must be True, False or {AUTO!r}, not {self.pool!r}")
         if self.input_format not in INPUT_FORMATS:
             choices = ", ".join(repr(name) for name in INPUT_FORMATS)
             _invalid(
@@ -185,6 +222,8 @@ class SettingsOverrides(TypedDict, total=False):
     syntax: Literal["auto"] | bool
     top_k: int
     input_format: str
+    group_field: str | None
+    pool: Literal["auto"] | bool
 
 
 def _invalid(name: str, message: str) -> None:
@@ -310,9 +349,12 @@ class Profile(_Result[ReferenceReport]):
 
         By default the settings are the profile's, except that syntax is used (``"auto"``)
         only when the profile has it, and ``input_format`` is ``"auto"``: drafts are often
-        in another format than the writer's corpus. ``settings`` replaces them, and keyword
-        overrides (``window_words=0``, ``min_words=5``; see ``SettingsOverrides``) change
-        single fields: leave one out to inherit it.
+        in another format than the writer's corpus, and ``pool`` is ``False``: each draft is
+        judged on its own (``pool=True`` judges short drafts as a batch, joined into
+        windows, and a note suggests it when they are short). ``group_field`` is inherited;
+        drafts without it are read with a note, unless it is given here. ``settings``
+        replaces them all, and keyword overrides (``window_words=0``, ``min_words=5``; see
+        ``SettingsOverrides``) change single fields: leave one out to inherit it.
 
         A window size or syntax setting unlike the profile's is warned about in the report,
         since z-scores assume chunks like the reference's; another ``min_words`` gets a
@@ -324,7 +366,10 @@ class Profile(_Result[ReferenceReport]):
             base = settings
             if base is None:
                 base = dataclasses.replace(
-                    self.settings, syntax=AUTO if self.has_syntax else False, input_format=AUTO
+                    self.settings,
+                    syntax=AUTO if self.has_syntax else False,
+                    input_format=AUTO,
+                    pool=False,
                 )
             unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
             if unknown:
@@ -347,14 +392,39 @@ class Profile(_Result[ReferenceReport]):
                     chosen.text_field,
                     *(name for name in TEXT_FIELDS if name != chosen.text_field),
                 )
+            pooling = _pooling(chosen)
             step = _progress(progress)
             step(Phase.READ)
             items = _items(inputs)
             _stdin_once(items)
             names = SourceNames()
+            records = Records()
             chunks = _read(
-                items, fields, set(), notes, "<text>", names, input_format=chosen.input_format
+                items,
+                fields,
+                set(),
+                notes,
+                "<text>",
+                names,
+                input_format=chosen.input_format,
+                group_field=chosen.group_field,
+                # An inherited group field is one the drafts may not have.
+                require_groups="group_field" in overrides or settings is not None,
+                records=records,
             )
+            cut = _chunked(chunks, chosen, pooling, notes, records=records)
+            reference_pooled = bool((self._report.get("settings") or {}).get("pool_used"))
+            if cut.pooled is None and cut.short and len(chunks) > 1:
+                notes.append(
+                    Note(
+                        f"these {len(chunks):,} texts are short (the median is under a quarter "
+                        "of a window), so each is judged at its own length, and those under "
+                        f"{MIN_JUDGED_WORDS} words get no verdict; use pool to judge them as "
+                        "one batch",
+                        NoteCode.SHORT_TEXTS,
+                        setting="pool",
+                    )
+                )
             parser = _parser(
                 chosen.syntax,
                 notes,
@@ -371,14 +441,19 @@ class Profile(_Result[ReferenceReport]):
             )
             step(Phase.SCORE)
             report = score(
-                _windowed(chunks, chosen.window_words),
+                cut.windows,
                 self._report,
                 parser=parser,
                 top_k=chosen.top_k,
                 min_words=chosen.min_words,
                 reference_path=self._path,
-                settings={"inputs": _described(items, names), **chosen.to_report()},
+                settings={
+                    "inputs": _described(items, names),
+                    **chosen.to_report(),
+                    "pool_used": cut.pooled is not None,
+                },
             )
+            report["warnings"] += _pooling_mismatch(cut, reference_pooled)
             step(Phase.DONE)
             return ScoreResult(
                 report,
@@ -679,6 +754,7 @@ def build(
     """
     notes: list[Note] = []
     with _notes_on_error(notes):
+        pooling = _pooling(settings)
         step = _progress(progress)
         step(Phase.READ)
         items = _items(inputs)
@@ -695,10 +771,30 @@ def build(
             names=names,
             input_format=settings.input_format,
             known_texts=texts,
+            group_field=settings.group_field,
         )
-        chunks = read(items, role="<text>")
+        records, contrast_records = Records(), Records()
+        chunks = read(items, role="<text>", records=records)
         contrast_chunks = (
-            read(contrast_items, role="<contrast>") if contrast_items is not None else None
+            read(contrast_items, role="<contrast>", records=contrast_records, require_groups=False)
+            if contrast_items is not None
+            else None
+        )
+        # Duplicates were dropped as the texts were read, before any pooling.
+        cut = _chunked(chunks, settings, pooling, notes, calibrated=True, records=records)
+        # The contrast set pools when the writer's texts do, so the two stay alike in length.
+        contrast_windows = (
+            _chunked(
+                contrast_chunks,
+                settings,
+                cut.pooled is not None,
+                notes,
+                role="contrast ",
+                following=True,
+                records=contrast_records,
+            ).windows
+            if contrast_chunks is not None
+            else None
         )
         parser = _parser(
             settings.syntax,
@@ -709,15 +805,11 @@ def build(
         )
         step(Phase.BUILD)
         report = build_reference(
-            _windowed(chunks, settings.window_words),
+            cut.windows,
             parser=parser,
             top_k=settings.top_k,
             min_words=settings.min_words,
-            contrast=(
-                _windowed(contrast_chunks, settings.window_words)
-                if contrast_chunks is not None
-                else None
-            ),
+            contrast=contrast_windows,
             contrast_label=contrast_label,
             settings={
                 "inputs": _described(items, names),
@@ -725,10 +817,11 @@ def build(
                     _described(contrast_items, names) if contrast_items is not None else None
                 ),
                 **settings.to_report(),
+                "pool_used": cut.pooled is not None,
             },
             keep_chunks=keep_chunks,
         )
-        notes += _thin_reference(report, settings)
+        notes += _thin_reference(report, settings, cut.windows)
         step(Phase.DONE)
         sources = _sources([*chunks, *(contrast_chunks or [])])
         # Keep the profile exactly as it is saved (floats rounded), so scoring it before or
@@ -755,6 +848,7 @@ def evaluate(
     with _notes_on_error(notes):
         step = _progress(progress)
         step(Phase.READ)
+        pooling = _pooling(settings)
         items, contrast_items = _items(inputs), _items(contrast)
         edited_items = {label: _items(value) for label, value in edited.items()}
         every = [*items, *contrast_items, *(item for v in edited_items.values() for item in v)]
@@ -763,11 +857,24 @@ def evaluate(
         names = SourceNames()
         texts: dict[str, str] = {}
         read = functools.partial(
-            _read, text_field=settings.text_field, notes=notes, input_format=settings.input_format
+            _read,
+            text_field=settings.text_field,
+            notes=notes,
+            input_format=settings.input_format,
+            group_field=settings.group_field,
         )
-        reference_chunks = read(items, seen=seen, role="<text>", names=names, known_texts=texts)
+        records, contrast_records = Records(), Records()
+        reference_chunks = read(
+            items, seen=seen, role="<text>", names=names, known_texts=texts, records=records
+        )
         contrast_chunks = read(
-            contrast_items, seen=seen, role="<contrast>", names=names, known_texts=texts
+            contrast_items,
+            seen=seen,
+            role="<contrast>",
+            names=names,
+            known_texts=texts,
+            records=contrast_records,
+            require_groups=False,
         )
         edited_chunks: dict[str, list[Chunk]] = {}
         # Each edited set is named on its own: its files carry the originals' names.
@@ -775,7 +882,11 @@ def evaluate(
         for label, value in edited_items.items():
             # Edits are meant to resemble their originals, so they are not deduplicated.
             edited_chunks[label] = read(
-                value, seen=set(), role=f"<{label}>", names=edited_names[label]
+                value,
+                seen=set(),
+                role=f"<{label}>",
+                names=edited_names[label],
+                require_groups=False,
             )
             overlap = {chunk.path for chunk in edited_chunks[label] if chunk.path} & seen
             if overlap:
@@ -795,14 +906,40 @@ def evaluate(
             f"{SYNTAX_INSTALL} and run again",
             step,
         )
+        # The drafts pool as the writer's texts do, and each edited set as its originals did,
+        # so an edited window pairs with its original window by name.
+        cut = _chunked(reference_chunks, settings, pooling, notes, calibrated=True, records=records)
+        originals = _chunked(
+            contrast_chunks,
+            settings,
+            cut.pooled is not None,
+            notes,
+            role="original ",
+            following=True,
+            records=contrast_records,
+        )
+        edited_windows = {
+            label: _chunked(
+                chunks, settings, originals.pooled is not None, [], like=originals.pooled
+            ).windows
+            for label, chunks in edited_chunks.items()
+        }
+        # An edited set that covers only some texts of a pooled window is compared with
+        # that window rebuilt from just those texts.
+        covered: dict[str, list[Chunk]] = {}
+        if originals.pooled is not None:
+            for label, chunks in edited_chunks.items():
+                kept = _covered(contrast_chunks, chunks)
+                if len(kept) < len(contrast_chunks):
+                    covered[label] = pool(
+                        kept, settings.window_words, like=originals.pooled
+                    ).windows
         step(Phase.EVALUATE)
         report = evaluate_rewording(
-            _windowed(reference_chunks, settings.window_words),
-            _windowed(contrast_chunks, settings.window_words),
-            {
-                label: _windowed(chunks, settings.window_words)
-                for label, chunks in edited_chunks.items()
-            },
+            cut.windows,
+            originals.windows,
+            edited_windows,
+            covered=covered,
             parser=parser,
             min_words=settings.min_words,
             contrast_label=contrast_label,
@@ -816,6 +953,7 @@ def evaluate(
                 },
                 # top_k shapes only a reference's saved distributions, which this never saves.
                 **{name: value for name, value in settings.to_report().items() if name != "top_k"},
+                "pool_used": cut.pooled is not None,
             },
         )
         step(Phase.DONE)
@@ -840,15 +978,26 @@ def _notes_on_error(notes: list[Note]) -> Iterator[None]:
         raise wrapped from error
 
 
-def _thin_reference(report: ReferenceReport, settings: Settings) -> list[Note]:
-    """Why a reference may be too small to trust, each with its fix."""
+def _thin_reference(
+    report: ReferenceReport, settings: Settings, windows: Sequence[Chunk] = ()
+) -> list[Note]:
+    """Why a reference may be too small to trust, each with its fix. ``windows``, the
+    chunks measured, show when one document holds most of them, so that its held-out range
+    rests on the few windows of the others."""
     documents = report["document_count"]
     thin: list[Note] = []
 
     def note(message: str, setting: str | None = None) -> None:
         thin.append(Note(message, NoteCode.THIN_REFERENCE, setting=setting))
 
-    if documents < ENOUGH_DOCUMENTS:
+    if documents < ENOUGH_DOCUMENTS and settings.group_field and len(windows) > 1:
+        note(
+            f"it comes from {_plural(documents, 'document')}, so it has no held-out "
+            "calibration and cannot learn a contrast: every record has the same "
+            f"{settings.group_field}; leave out group_field, or group by a finer field",
+            "group_field",
+        )
+    elif documents < ENOUGH_DOCUMENTS:
         note(
             f"it comes from {_plural(documents, 'document')}, so it has no held-out "
             "calibration and cannot learn a contrast; add more of the writer's documents"
@@ -864,6 +1013,21 @@ def _thin_reference(report: ReferenceReport, settings: Settings) -> list[Note]:
             f"more by adding documents or using {smaller}",
             "window_words",
         )
+    # The windows' own held-out range needs only two documents, but a document holding
+    # most windows is judged against the others' few; hold that to the rule each shorter
+    # length is held to (``calibration``).
+    sizes = Counter(map(chunk_document, windows))
+    if len(sizes) >= ENOUGH_DOCUMENTS:
+        largest = max(sizes.values())
+        rest = len(windows) - largest
+        few = rest < MIN_CALIBRATION_PIECES or len(sizes) < MIN_CALIBRATION_DOCUMENTS
+        if largest > rest and few:
+            note(
+                f"one document holds {largest:,} of its {_plural(len(windows), 'chunk')}, so "
+                f"its held-out range rests on the other {_plural(rest, 'chunk')}, where a "
+                f"range needs {MIN_CALIBRATION_PIECES} from {MIN_CALIBRATION_DOCUMENTS} or "
+                "more documents; add documents of a similar size, or split that one"
+            )
     if report["word_count"] < ENOUGH_WORDS:
         note(
             f"it has {_plural(report['word_count'], 'word')}; aim for {ENOUGH_WORDS:,} or "
@@ -1015,6 +1179,9 @@ def _read(
     names: SourceNames,
     input_format: str = AUTO,
     known_texts: dict[str, str] | None = None,
+    group_field: str | None = None,
+    require_groups: bool = True,
+    records: Records | None = None,
 ) -> list[Chunk]:
     """Chunks from each input, in order, skipping files an earlier path (tracked in
     ``seen`` by real path) already gave. ``Text`` inputs get ``role`` as their source, so
@@ -1024,9 +1191,19 @@ def _read(
     With ``known_texts`` (see ``drop_duplicates``), documents whose text repeats one read
     before, here or in an earlier role, are dropped with a note: twins on both sides of
     held-out calibration would make it look too tight. That is a separate check from a file
-    given twice, which is recognized by its path."""
+    given twice, which is recognized by its path. Grouped JSONL records are compared one by
+    one, before they are pooled.
+
+    With ``group_field``, JSONL records without a value in it are noted. An input where no
+    record has one is an error naming the fields the records do have (the field is likely
+    misspelled); with ``require_groups`` False (drafts, which rarely carry the writer's
+    threads), it is read ungrouped instead, each record a document of its own, with a note.
+    A group value found in several inputs typed one by one is noted too, since each input's
+    records are separate documents. ``records`` gathers what the JSONL records held, for the
+    pooling note."""
     texts = iter(_text_chunks([item for item in items if isinstance(item, Text)], role))
     chunks: list[Chunk] = []
+    inputs_with: Counter[str] = Counter()  # how many inputs each group value is found in
     for item in items:
         if isinstance(item, Chunk):
             chunks.append(item)
@@ -1037,9 +1214,26 @@ def _read(
         value = os.fspath(item)
         require_path(value)
         contributed = value in names.roots
+        found = Records(group_field)
         loaded = load_chunks(
-            [value], text_field, names=names, input_format=input_format, notes=notes
+            [value],
+            text_field,
+            names=names,
+            input_format=input_format,
+            notes=notes,
+            records=found,
         )
+        if group_field is not None and _check_groups(
+            value, found, group_field, notes, require_groups
+        ):
+            found = Records()
+            loaded = load_chunks(
+                [value], text_field, names=names, input_format=input_format, records=found
+            )
+        elif group_field is not None:
+            inputs_with.update(found.values.get(group_field, set()))
+        if records is not None:
+            records.add(found)
         files = {chunk.path for chunk in loaded if chunk.path is not None}
         repeated = files & seen
         if repeated and repeated == files:
@@ -1057,6 +1251,16 @@ def _read(
             )
         chunks += [chunk for chunk in loaded if chunk.path not in repeated]
         seen |= files
+    shared = sorted(group for group, count in inputs_with.items() if count > 1)
+    if shared:
+        notes.append(
+            Note(
+                f"records with the same {group_field} (such as {shared[0]!r}) are in more than "
+                "one input, and each input's records are separate documents; to keep a group "
+                "together, give the folder that holds them",
+                NoteCode.GROUPING,
+            )
+        )
     if known_texts is not None:
         chunks, note = drop_duplicates(chunks, known_texts)
         if note:
@@ -1085,6 +1289,213 @@ def _locations(items: Sequence[Input], names: SourceNames) -> dict[str, str]:
                 if Path(file).is_relative_to(expand_path(value).resolve()):
                     locations[source] = os.path.join(value, inner)
     return locations
+
+
+def _check_groups(
+    value: str, found: Records, group_field: str, notes: list[Note], required: bool
+) -> bool:
+    """Note the records of one input with no value in ``group_field``. When none has one,
+    refuse the input if ``required``, naming the fields its records have; otherwise note it
+    and return True: the caller reads it ungrouped."""
+    if not found.missing:
+        return False
+    if found.missing == found.count:
+        if required:
+            fields = ", ".join(sorted(found.values)) or "none besides the text"
+            raise StyleProfileError(
+                f"{value}: no record has a value in the group field {group_field!r}; its "
+                f"records have the fields {fields}",
+                code="group_field",
+            )
+        notes.append(
+            Note(
+                f"{value}: no record has a {group_field}, so each record is read as a "
+                "document of its own",
+                NoteCode.MISSING_GROUP,
+            )
+        )
+        return True
+    notes.append(
+        Note(
+            f"{value}: {found.missing:,} of {_plural(found.count, 'record')} have no "
+            f"{group_field}, so they are read as one document, {group_id(group_field, None)}",
+            NoteCode.MISSING_GROUP,
+        )
+    )
+    return False
+
+
+def _pooling(settings: Settings) -> Literal["auto"] | bool:
+    """Whether ``settings`` pool texts: ``"auto"`` leaves it to their median length. Called
+    before any input is read, so an impossible setting fails first."""
+    if not settings.window_words:
+        if settings.pool is True:
+            _invalid(
+                "window_words", "window_words must be above 0 to pool texts into windows of it"
+            )
+        return False
+    return settings.pool
+
+
+@dataclass(frozen=True)
+class _Cut:
+    """Texts cut for measuring: the windows; how they were pooled (None when not); and
+    whether the median text is under a quarter of a window."""
+
+    windows: list[Chunk]
+    pooled: Pooled | None
+    short: bool
+
+
+def _noun(chunks: Sequence[Chunk], records: Records | None) -> str:
+    """What the texts are, for notes: records, files of a folder, or texts."""
+    if records is not None and chunks and records.count >= len(chunks):
+        return "record"
+    if chunks and all(chunk.folder for chunk in chunks):
+        return "file"
+    return "text"
+
+
+def _chunked(
+    chunks: list[Chunk],
+    settings: Settings,
+    pooled: Literal["auto"] | bool,
+    notes: list[Note],
+    *,
+    role: str = "",
+    calibrated: bool = False,
+    following: bool = False,
+    like: Pooled | None = None,
+    records: Records | None = None,
+) -> _Cut:
+    """The chunks to measure: windowed, or, when ``pooled`` and pooling joins any texts,
+    pooled (see ``profile.pool``) with a note saying so.
+
+    ``"auto"`` pools only when the median text is short and pooling still leaves
+    ``ENOUGH_CHUNKS`` windows: a handful of short texts joined into one or two windows would
+    lose held-out calibration altogether. A set that pools because another did
+    (``following``: the contrast drafts) pools only if it keeps ``ENOUGH_DOCUMENTS``
+    documents. ``role`` (``"contrast "``) names the set in the note; ``calibrated`` marks
+    the writer's texts, whose notes say why they pooled or did not, what that means for
+    held-out calibration, and what is wrong with a group field that cannot work. Given
+    ``like``, the chunks pool as that set did, without a note."""
+    if not settings.window_words:
+        return _Cut(chunks, None, False)
+    noun = _noun(chunks, records)
+    if calibrated and settings.group_field:
+        notes += _grouping_notes(chunks, settings, pooled)
+    joined = pool(chunks, settings.window_words, like, auto=pooled == AUTO, join=bool(pooled))
+    if like is not None:
+        return _Cut(joined.windows, joined, joined.short)
+    if not pooled or not joined.together:
+        # Not pooled, or nothing to join (one text, or long ones): windows as ``window``
+        # makes them, and no note.
+        return _Cut(joined.windows, None, joined.short)
+    if pooled == AUTO and len(joined.windows) < ENOUGH_CHUNKS:
+        if calibrated:
+            notes.append(
+                Note(
+                    f"the median {noun} is under a quarter of a window, but joining them "
+                    f"would make only {_plural(len(joined.windows), 'window')}, too few to "
+                    "calibrate, so each is kept on its own; use pool to join them anyway",
+                    NoteCode.POOLED,
+                    setting="pool",
+                )
+            )
+        return _Cut(_windowed(chunks, settings.window_words), None, joined.short)
+    if following and len(set(map(chunk_document, joined.windows))) < min(
+        ENOUGH_DOCUMENTS, len(set(map(chunk_document, chunks)))
+    ):
+        return _Cut(_windowed(chunks, settings.window_words), None, joined.short)
+    count = len(chunks)
+    texts = (
+        _plural(count, role + noun)
+        if joined.together == count
+        else f"{joined.together:,} of {_plural(count, role + noun)}"
+    )
+    message = (
+        f"joined {texts} into {_plural(len(joined.windows), 'window')} of about "
+        f"{settings.window_words:,} words"
+    )
+    setting = None
+    if settings.pool == AUTO and calibrated:
+        message += f", since the median {noun} is under a quarter of a window"
+    grouped = settings.group_field is not None and any(map(is_grouped, chunks))
+    if grouped:
+        message += f", never across {settings.group_field} groups"
+    elif calibrated:
+        message += (
+            ". With no group_field, each window counts as one document for held-out "
+            f"calibration: if the {noun}s come from different threads or authors, and "
+            "especially if those are interleaved, its ranges are too narrow and verdicts on "
+            "new text can be far too harsh"
+        )
+        candidates = records.group_fields() if records is not None else []
+        if candidates:
+            shown = ", ".join(f"{name} ({values:,} values)" for name, values in candidates[:3])
+            first = candidates[0][0]
+            message += (
+                f". These records have {shown}: pass group_field {first} if each value is a "
+                "separate source"
+            )
+        setting = "group_field"
+    notes.append(Note(message, NoteCode.POOLED, setting=setting))
+    return _Cut(joined.windows, joined, joined.short)
+
+
+def _grouping_notes(
+    chunks: Sequence[Chunk], settings: Settings, pooled: Literal["auto"] | bool
+) -> list[Note]:
+    """What is wrong with a group field that groups the writer's records into groups too
+    small to pool. One group, which leaves nothing to hold out, is a thin reference
+    (``_thin_reference``)."""
+    field = settings.group_field
+    sizes: Counter[str] = Counter()
+    for chunk in chunks:
+        sizes[chunk_document(chunk)] += len(words(chunk.text))
+    median = statistics.median(sizes.values()) if sizes else 0
+    if pooled and len(sizes) > 1 and median < settings.window_words / 4:
+        return [
+            Note(
+                f"most {field} groups are short (a median of {median:,.0f} words), so "
+                "pooling has little to join and their records are measured nearly alone; "
+                "group by a coarser field, or leave out group_field",
+                NoteCode.GROUPING,
+                setting="group_field",
+            )
+        ]
+    return []
+
+
+def _covered(originals: Sequence[Chunk], edited: Sequence[Chunk]) -> list[Chunk]:
+    """The original texts an edited set has copies of (``cover_key``: a record by its id, a
+    grouped record by its group and own id), also when one set was read from a folder and
+    the other from a file given directly (``bare_key``)."""
+    keys: set[tuple[str, str | None]] = set()
+    for chunk in edited:
+        key, record = cover_key(chunk)
+        keys.add((key, record))
+        if (short := bare_key(key)) is not None:
+            keys.add((short, record))
+
+    def covers(chunk: Chunk) -> bool:
+        key, record = cover_key(chunk)
+        short = bare_key(key)
+        return (key, record) in keys or (short is not None and (short, record) in keys)
+
+    return [chunk for chunk in originals if covers(chunk)]
+
+
+def _pooling_mismatch(cut: _Cut, reference_pooled: bool) -> list[str]:
+    """A warning for texts pooled into windows against a reference that was not pooled:
+    they read closer to it than they are. The other way round needs none: each short text is
+    judged at its own length against the reference's length calibration, or abstains."""
+    if cut.pooled is not None and not reference_pooled:
+        return [
+            "these texts were joined into windows, but the reference's were not, so they "
+            "read closer to it than they are; score them without pooling"
+        ]
+    return []
 
 
 def _windowed(chunks: list[Chunk], window_words: int) -> list[Chunk]:

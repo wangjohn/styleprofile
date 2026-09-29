@@ -87,6 +87,10 @@ class InputSettings(TypedDict, total=False):
     text_field: str | None
     syntax: Literal["auto"] | bool
     input_format: str
+    group_field: str | None
+    pool: Literal["auto"] | bool
+    # Whether short texts were joined into windows (``pool`` is what was asked).
+    pool_used: bool
     # Paths as given, and ``Text`` or ``Chunk`` inputs by name.
     inputs: list[str]
 

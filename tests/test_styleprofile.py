@@ -1016,13 +1016,14 @@ def test_directories_read_jsonl_and_skip_hidden_and_vendored_folders(tmp_path: P
     posts = tmp_path / "posts"
     posts.mkdir()
     (posts / "all.jsonl").write_text(json.dumps({"id": "p1", "text": AUTHOR}) + "\n", "utf-8")
-    assert [chunk.id for chunk in load_chunks([str(posts)])] == ["p1"]
+    # A record found in a folder is named with its file, since ids often restart per file.
+    assert [chunk.id for chunk in load_chunks([str(posts)])] == ["all.jsonl:p1"]
 
     for hidden in (".git", "node_modules", ".venv/lib"):
         (posts / hidden).mkdir(parents=True)
         (posts / hidden / "README.md").write_text(GENERIC, encoding="utf-8")
     (posts / "notes.md").write_text(AUTHOR, encoding="utf-8")
-    assert [chunk.id for chunk in load_chunks([str(posts)])] == ["p1", "notes.md"]
+    assert [chunk.id for chunk in load_chunks([str(posts)])] == ["all.jsonl:p1", "notes.md"]
 
     empty = tmp_path / "empty"
     (empty / ".git").mkdir(parents=True)
@@ -1444,7 +1445,7 @@ def test_metrics_lists_the_registry_by_area(
     assert ("\nPunctuation\n" in out) is (syntax is not True)
 
 
-@pytest.mark.parametrize("command", ["build", "score", "show", "metrics"])
+@pytest.mark.parametrize("command", ["build", "score", "show", "metrics", "evaluate"])
 def test_each_command_has_short_help_with_an_example(
     capsys: pytest.CaptureFixture[str], command: str
 ) -> None:

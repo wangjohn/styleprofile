@@ -27,8 +27,9 @@ from styleprofile.profile import (
     Chunk,
     ContrastFit,
     StyleProfileError,
-    base_id,
+    bare_key,
     build_contrast_reference,
+    pair_key,
     z_against_reference,
 )
 from styleprofile.schema import (
@@ -69,10 +70,11 @@ NGRAM = 13
 
 
 def match_key(chunk: Chunk) -> str:
-    """What pairs an edited chunk with its original: its file name (or JSONL id) with any
-    window suffix removed. Folders are compared by relative path, so ``a/x.md`` and
-    ``b/x.md`` pair with each other and with nothing else."""
-    return base_id(chunk.id)
+    """What pairs an edited chunk with its original (``pair_key``): its file name with any
+    window suffix removed, or for a JSONL record its file name and id (``a.jsonl:17``).
+    Folders are compared by relative path, so ``a/x.md`` and ``b/x.md`` pair with each
+    other and with nothing else."""
+    return pair_key(chunk)
 
 
 def _stem(key: str) -> str:
@@ -81,15 +83,28 @@ def _stem(key: str) -> str:
 
 
 def _renamed(chunks: Sequence[Chunk], originals: set[str]) -> list[Chunk]:
-    """Edited chunks named like their original when only the extension differs: an edited
-    ``x.html`` pairs with the original ``x.md`` when no other original is ``x``."""
+    """Edited chunks named like their original when only the extension differs (an edited
+    ``x.html`` pairs with the original ``x.md`` when no other original is ``x``), or when
+    one set's records were read from a folder and the other's from a file given directly
+    (``a.jsonl:17`` and ``17``, when that id is unique: ``bare_key``)."""
     by_stem: dict[str, list[str]] = defaultdict(list)
+    by_bare: dict[str, list[str]] = defaultdict(list)
     for key in originals:
         by_stem[_stem(key)].append(key)
+        if (short := bare_key(key)) is not None:
+            by_bare[short].append(key)
     renamed: list[Chunk] = []
     for chunk in chunks:
         key = match_key(chunk)
-        candidates = by_stem.get(_stem(key), [])
+        short = bare_key(key)
+        if key in originals:
+            candidates = [key]
+        elif short is not None and short in originals:
+            candidates = [short]
+        elif len(by_bare.get(key, [])) == 1:
+            candidates = by_bare[key]
+        else:
+            candidates = by_stem.get(_stem(key), [])
         if key not in originals and len(candidates) == 1:
             window_suffix = chunk.id[len(key) :]
             chunk = Chunk(candidates[0] + window_suffix, chunk.source, chunk.text)
@@ -254,11 +269,15 @@ def evaluate_rewording(
     contrast_label: str = "LLM",
     retrain: bool = False,
     settings: Mapping[str, Any] | None = None,
+    covered: Mapping[str, Sequence[Chunk]] | None = None,
 ) -> EvaluationReport:
     """Score edited copies of the contrast drafts without leaking; see the module docstring.
 
     ``edited`` maps a label (``light``, ``humanize``) to that set's chunks, windowed the same
-    way as the contrast drafts. With ``retrain``, also report the cross-validated AUC when
+    way as the contrast drafts. When the drafts were pooled into windows, ``covered`` maps a
+    label to the original windows rebuilt from only the texts that set edited, so a set that
+    edits some texts of a window is compared with just those originals: its rewrite share,
+    length and signal survival. With ``retrain``, also report the cross-validated AUC when
     the edited drafts join the contrast set, each lineage (an original and its edits) held
     out together.
     """
@@ -359,14 +378,22 @@ def evaluate_rewording(
                 f"{min_words} prose words (e.g. {too_short[0]!r}), so they are not scored"
             )
         present = set(documents)
-        covered = [index for index, doc in enumerate(fit.contrast_documents) if doc in present]
+        same_drafts = [index for index, doc in enumerate(fit.contrast_documents) if doc in present]
         result["partial"] = len(present) < len(names)
         if result["partial"]:
             result["original_auc_same_drafts"] = auc(
-                [learned.contrast_scores[index] for index in covered], learned.reference_scores
+                [learned.contrast_scores[index] for index in same_drafts],
+                learned.reference_scores,
             )
-        survival[set_label] = (z_rows, [fit.contrast_z[index] for index in covered])
-        result["edits"] = edit_statistics(original_texts, _texts(chunks))
+        rebuilt = (covered or {}).get(set_label)
+        if rebuilt is not None:
+            before = _texts(rebuilt)
+            _, before_z = z_against_reference(profile, rebuilt, parser, min_words)
+        else:
+            before = original_texts
+            before_z = [fit.contrast_z[index] for index in same_drafts]
+        survival[set_label] = (z_rows, before_z)
+        result["edits"] = edit_statistics(before, _texts(chunks))
         sets[set_label] = result
 
     # The settings are recorded as given, whatever their keys.

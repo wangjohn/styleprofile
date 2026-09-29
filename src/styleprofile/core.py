@@ -56,6 +56,15 @@ class NoteCode(StrEnum):
     """A folder walk left out static-site output and template folders."""
     DUPLICATES = "duplicates"
     """Documents repeating another's text word for word were dropped."""
+    POOLED = "pooled"
+    """Short texts were joined into windows (the message says how many, and why), or were
+    short but too few to join."""
+    MISSING_GROUP = "missing_group"
+    """Some records have no value in the group field, so they are read as one group."""
+    SHORT_TEXTS = "short_texts"
+    """Texts scored one by one are short, so each is judged on little text."""
+    GROUPING = "grouping"
+    """The group field groups records into groups too short to pool."""
 
 
 @dataclass(frozen=True)

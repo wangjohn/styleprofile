@@ -114,7 +114,10 @@ say) fails with a message pointing to `Text`.
 
 Every input is cut into windows, `Chunk`s included. Re-windowing chunks you already cut
 is harmless (they keep their documents); pass `Settings(window_words=0)` to use them as
-they are.
+they are. Short texts are pooled as on the command line: the `Text` inputs of one call, like
+the records of one JSONL file, the files of one folder (or chunks sharing a source), are
+joined in order into windows when most are short (see `pool` below). Files and records are the documents;
+`Settings(group_field="thread")` groups JSONL records into documents by that field, and each chunk carries its document in `Chunk.document`.
 
 ## Settings
 
@@ -131,10 +134,14 @@ they are.
 ```
 
 `Settings` holds `window_words` (0 turns windowing off), `min_words`, `text_field` for
-JSONL, `syntax`, `top_k` and `input_format`. A profile records them verbatim, and
-`profile.settings` reads them back. `Profile.score(inputs, settings=None, **overrides)`
-inherits them, except that it uses spaCy only when the profile has syntax metrics and
-reads drafts with `input_format="auto"`. Pass whole `Settings` to replace them, or keyword
+JSONL, `syntax`, `top_k`, `input_format`, `group_field` (the JSONL field that groups
+records into documents) and `pool` (`"auto"`, `True` or `False`: join short texts into
+windows; `"auto"` does when the median text is under a quarter of a window). A profile
+records them verbatim, plus `pool_used`, and `profile.settings` reads them back.
+`Profile.score(inputs, settings=None, **overrides)` inherits them, except that it uses
+spaCy only when the profile has syntax metrics, reads drafts with `input_format="auto"`,
+and scores each draft on its own (`pool=False`; pass `pool=True` to judge short drafts as
+one batch). Pass whole `Settings` to replace them, or keyword
 overrides (`window_words=0`) to change single fields, as `styleprofile score` takes flags.
 Leave a keyword out to inherit it; the keywords are typed (`api.SettingsOverrides`), so a
 type checker catches a misspelled one. A different window size or syntax setting is warned
@@ -152,7 +159,8 @@ The library never prints.
   `Evaluation`, describing the run. `code` is a `NoteCode`: syntax metrics left out, an
   input given twice, an overridden setting, a reference too thin to trust (one note per
   reason), how inputs were read (HTML or JSONL detected, HTML with no text, documents or
-  static-site folders a walk skipped), or duplicate documents dropped. The CLI prints
+  static-site folders a walk skipped), duplicate documents dropped, short
+  texts pooled into windows, records with no group, or short drafts scored one by one. The CLI prints
   them as `note:` lines. They aren't saved.
 - **`warnings`**: a tuple of strings saved in the report, about the text itself, such as
   short chunks or mismatched settings.

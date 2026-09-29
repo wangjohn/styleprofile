@@ -35,6 +35,72 @@ is `stdin`. When two inputs would give the same name to different files, the lat
 numbered: `posts (2)`, or `notes (2).md` for a file, and `settings.inputs` records the names
 chosen. Documents are told apart by the files they were read from, not by these names.
 
+### Documents, windows and pooling
+
+A *document* is the unit held-out calibration leaves out: each of its windows is scored
+against a reference built without it, so what counts as one decides how honest the
+held-out ranges are. Each chunk carries its document (`Chunk.document`), set when it is
+read and kept through windowing and pooling; ids such as `post#w2` only name chunks for
+people. The documents are:
+
+- **a file** (Markdown, text or HTML), or stdin;
+- **a JSONL record**, when no group field is given;
+- **a group of records**, with `--group-field thread`: the records of one input (a file,
+  or every file of a folder) that share a value. Records with no value (missing, null or
+  blank) are one more group, `thread=(none)`. Values compare as text;
+- **a pooled window**, when short texts without a group field are joined: see below.
+
+Windowing works within a document: a long text is split into windows at paragraph breaks.
+Short texts are *pooled*, joined in order into windows of about the same size:
+
+- A group's records are joined into windows `thread=t1#w1`, `thread=t1#w2`, ... of that
+  group's document, wherever the records sit in its input.
+- Without a group field, consecutive short records of one JSONL file, or consecutive short
+  files of one folder input (in sorted order), or `Text` inputs, are joined, and each
+  window (`c0012..c0019`, its first and last text) becomes a document of its own. Nothing
+  is joined across two inputs you typed.
+
+Length calibration (above) cuts its shorter pieces from a pooled window along the texts it
+was joined from, since those are what people score. At each length it takes single records
+(or files) of at least that length, whole or cut if they hold one and a half pieces, the
+way the texts judged at that length are selected; only when there are fewer than 20 such
+pieces from 3 documents does it fall back to runs of whole records up to the length. Pieces
+cut across record boundaries, or runs of shorter records, would stand in for one long
+comment with several short ones, and shift the paragraph measures of sentence shape: runs put
+batches of the writer's own comments, judged one by one, in "somewhat different" sentence
+shape 8.7% of the time over 20 references; single records, 2.6% over 32.
+
+Pooled windows as documents are honest only when neighbouring texts are no more alike than
+any two. When records from different threads are interleaved, each window mixes threads,
+the between-thread variation averages out, and the reference's spread shrinks: a draft
+from one thread then looks far away. In a test of 20 threads of 40 comments by one writer,
+33–85% of a new thread's windows landed above the calibrated 95th percentile with
+interleaved records (3–14% when contiguous), against 2–8% with `--group-field thread`. The
+`build` note says so and suggests fields named like a source (a thread, conversation,
+channel, subject, reply or parent; else an author, user or sender) with 2 or more values,
+and at most a third as many as records.
+
+Pooling is on by default when the median text has under a quarter of a window of prose
+words and pooling leaves at least 15 windows; below that, `build` notes that it held back.
+`--pool` and `--no-pool` force it either way. Word-for-word duplicates are dropped first:
+whole files, and JSONL records one by one even when a group is the document. The contrast
+set pools when the writer's texts do, so the two stay alike in length. `score` inherits
+the group field but judges each text on its own, at its own length (so a record under 75
+words abstains), unless given `--pool`; pooled drafts against a reference that was not
+pooled read too close, and it warns. `evaluate` joins each edited set into the same
+windows as its originals, record by record, pairing a record with its original by its id,
+with its file's path when it is read from a folder (`2024/a.jsonl:17`), since ids often
+restart in each file; grouped windows pair by their group (`thread=t1`), whichever files
+hold its records.
+
+Contrast drafts and their edits need not carry the writer's group field: an input where
+no record has it is read ungrouped, each record a document of its own, with a note (the
+writer's own texts must have it, since its absence there is likely a typo). `build` also
+flags group fields that cannot work: one group (nothing to hold out), groups too short to
+pool, a group found in several inputs typed one by one (each input's records are separate
+documents, so name the folder), and one document holding most windows, so that the
+others' few windows carry the calibration.
+
 ## Two scores
 
 Two scores answer two questions:
