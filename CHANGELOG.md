@@ -86,11 +86,12 @@ then `styleprofile setup` for the parser-based metrics.
   against thresholds `build` sets from the writer's own documents (#21). It is opt-in
   because it raises false alarms: on synthetic corpora remixed from the sample essays, a
   paragraph of the writer's own drifted falsely in up to 4% of held-out documents on the
-  reference's own topics, but **21% (28% of long ones) under a wide topic shift with
-  spaCy**, and more is to be expected on a real writer's new topics. It also misses things:
-  a run of two or three spliced LLM blocks was found 76–99% of the time and a single block
-  57–76%, but **a single short paragraph often goes unnoticed** (17–52% found under 30
-  words), so "no paragraph drifts" does not mean the text is clean. Treat what it lists as a
+  reference's own topics and up to 6% under narrower topic shifts, but **33% (30% of long
+  ones) under a wide topic shift with spaCy**, and more is to be expected on a real
+  writer's new topics. It also misses things: a run of two or three spliced LLM blocks was
+  found 76–100% of the time and a single block 57–74%, but **a single short paragraph often
+  goes unnoticed** (17–48% found under 30 words), so "no paragraph drifts" does not mean the
+  text is clean. Treat what it lists as a
   lead to read, not a finding. It needs a reference big enough to set thresholds, and
   without `--contrast` it rarely catches an LLM passage.
 

@@ -48,7 +48,7 @@ and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdic
 **Experimental:** `passages=True` also reads each document in spans of 100 words or more to
 show where it drifts (see [Where it drifts](../README.md#where-it-drifts-experimental)). It is
 off by default: on writer text of topics the reference never saw, it found a paragraph
-drifting in up to about a quarter of the writer's own documents (see
+drifting in up to about a third of the writer's own documents (see
 [method.md](method.md#where-a-draft-drifts)). `result.passages` holds one `Passage` per
 paragraph, in order: its `lines` (first and last line of its prose), `words`, `excerpt`, the
 figures of the lower of its two spans (`delta`, `verdict`, `likeness`, `likeness_verdict`),

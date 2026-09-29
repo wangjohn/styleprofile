@@ -416,7 +416,7 @@ class Profile(_Result[ReferenceReport]):
         ``passages=True`` (experimental, off by default) also reads each document in
         overlapping spans of 100 words or more to show where it drifts
         (``ScoreResult.passages``). On writer text of topics the reference never saw, it
-        found a paragraph drifting in up to about a quarter of the writer's own documents
+        found a paragraph drifting in up to about a third of the writer's own documents
         (docs/method.md, "Where a draft drifts"), so treat what it finds as a lead to read.
         """
         notes: list[Note] = []

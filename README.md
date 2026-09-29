@@ -204,7 +204,7 @@ and the resolution floors.
 ### Where it drifts (experimental)
 
 **Experimental, and off by default.** On writer text of a topic the reference never saw, it
-found a paragraph drifting in up to about a quarter of the writer's own documents (the table
+found a paragraph drifting in up to about a third of the writer's own documents (the table
 below), so it runs only when you ask for it with `--by-paragraph` (`passages=True` in the
 library), and what it finds is a lead to read, not a finding.
 
@@ -239,15 +239,16 @@ window reading clearly different.)
 
 Measured on synthetic corpora remixed from the sample essays (A on the reference's own
 topics; B, C and D on topics it never saw, D the widest shift), the share of the writer's
-own held-out documents with a paragraph drifting falsely:
+own held-out documents with a paragraph drifting falsely (with spaCy, as measured for
+0.2.0, after the change to the nominalization metric):
 
 | | A | B | C | D |
 |---|---|---|---|---|
-| single documents, without / with spaCy | 4% / 2% | 0% / 0% | 3% / 0% | 0% / **21%** |
-| 4–10 documents joined, without / with spaCy | 0% / 0% | 0% / 0% | 3% / 1% | 0% / **28%** |
+| single documents, without / with spaCy | 4% / 2% | 0% / 6% | 3% / 0% | 0% / **33%** |
+| 4–10 documents joined, without / with spaCy | 0% / 0% | 0% / 0% | 3% / 0% | 0% / **30%** |
 
-A run of two or three LLM blocks spliced in was found 76–99% of the time, and a single block
-57–76%. **A single short paragraph is often missed** (17–52% found under 30 words), and so
+A run of two or three LLM blocks spliced in was found 76–100% of the time, and a single
+block 57–74%. **A single short paragraph is often missed** (17–48% found under 30 words), and so
 is one paragraph in a long document, so "no paragraph drifts" does not mean the text is
 clean. Those corpora are synthetic and optimistic: expect more false drift on a real
 writer's new topics. [docs/method.md](https://github.com/wangjohn/styleprofile/blob/main/docs/method.md#where-a-draft-drifts) has the full
