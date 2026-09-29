@@ -7,12 +7,15 @@ approximate.
 
 from __future__ import annotations
 
+import json
 import re
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
+from importlib.resources import files
+from importlib.util import find_spec
 from typing import Any
 
 from styleprofile.core import StyleProfileError
@@ -24,6 +27,15 @@ _CLAUSE_DEPS = frozenset({"advcl", "ccomp", "relcl", "acl", "xcomp", "csubj"})
 _PASSIVE_DEPS = frozenset({"nsubjpass", "auxpass", "csubjpass"})
 _NOMINALIZATION = re.compile(r"(?:tion|sion|ment|ness|ity|ance|ence)s?$")
 _MIN_SENTENCE_WORDS = 3
+# Texts per spaCy batch. On the medium benchmark corpus (500-word windows), speed hardly
+# depends on it (11.8s to 12.9s for every size from 2 to 32), but memory grows with it: a
+# process parsing peaks at 200 MB with 2, 280 MB with 4, 650 MB with 16 (the old value) and
+# 1.7 GB with 64.
+BATCH_SIZE = 4
+# The pipeline components the metrics read: tokens, tags (``tag_`` and, through the attribute
+# ruler, ``pos_``) and the dependency parse, which also sets sentence boundaries. Everything
+# else is left out of the load entirely (``exclude``), not just switched off.
+EXCLUDED = ("ner", "lemmatizer", "senter")
 
 
 class SyntaxUnavailableError(StyleProfileError):
@@ -33,32 +45,91 @@ class SyntaxUnavailableError(StyleProfileError):
         super().__init__(message, code="syntax_unavailable")
 
 
-@dataclass(frozen=True)
 class Parser:
-    nlp: Any
-    model: str
-    model_version: str
-    spacy_version: str
+    """The spaCy parser: its model's name and versions, and the pipeline itself (``nlp``),
+    which a lazily made parser (``load_parser(lazy=True)``) loads only when something first
+    parses in this process, since worker processes load their own."""
+
+    def __init__(
+        self,
+        nlp: Any,
+        model: str,
+        model_version: str,
+        spacy_version: str,
+        *,
+        loader: Callable[[], Any] | None = None,
+    ) -> None:
+        self._nlp = nlp
+        self._loader = loader
+        self.model = model
+        self.model_version = model_version
+        self.spacy_version = spacy_version
+
+    @property
+    def nlp(self) -> Any:
+        if self._nlp is None:
+            assert self._loader is not None
+            self._nlp = self._loader()
+        return self._nlp
+
+    @property
+    def loaded(self) -> bool:
+        return self._nlp is not None
 
     def docs(self, texts: Iterable[str]) -> Iterator[Any]:
         """Each text parsed once, as a spaCy ``Doc``."""
-        yield from self.nlp.pipe(texts, batch_size=16)
+        yield from self.nlp.pipe(texts, batch_size=BATCH_SIZE)
 
     def parse(self, texts: Iterable[str]) -> Iterator[tuple[Metrics, Counter[str]]]:
         for doc in self.docs(texts):
             yield syntax_metrics(doc), pos_trigrams(doc)
 
+    def used(self) -> dict[str, str]:
+        """The model and versions, as a report records them (``syntax_used``)."""
+        return {
+            "model": self.model,
+            "model_version": self.model_version,
+            "spacy_version": self.spacy_version,
+        }
 
-def load_parser(model: str = DEFAULT_MODEL) -> Parser:
+
+_MISSING = (
+    "syntax metrics need spaCy and {model!r}; install the `syntax` extra "
+    "(pip install 'styleprofile[syntax]') or profile without syntax metrics"
+)
+
+
+def _load(model: str) -> Any:
     try:
         spacy = import_module("spacy")
-        nlp = spacy.load(model, disable=["ner", "lemmatizer"])
+        nlp = spacy.load(model, exclude=list(EXCLUDED))
     except (ImportError, OSError) as error:
-        raise SyntaxUnavailableError(
-            f"syntax metrics need spaCy and {model!r}; install the `syntax` extra "
-            "(pip install 'styleprofile[syntax]') or profile without syntax metrics"
-        ) from error
+        raise SyntaxUnavailableError(_MISSING.format(model=model)) from error
     nlp.max_length = 5_000_000
+    return nlp
+
+
+def _installed_meta(model: str) -> tuple[str, str] | None:
+    """The model's version (from its ``meta.json``, as the loaded model reports it) and
+    spaCy's, without importing either; None when they cannot be read that way."""
+    try:
+        if find_spec("spacy") is None or find_spec(model) is None:
+            return None
+        meta = json.loads((files(model) / "meta.json").read_text(encoding="utf-8"))
+        return str(meta.get("version", "")), version("spacy")
+    except (ImportError, OSError, ValueError, PackageNotFoundError, ModuleNotFoundError):
+        return None
+
+
+def load_parser(model: str = DEFAULT_MODEL, *, lazy: bool = False) -> Parser:
+    """spaCy's ``model``, loaded now, or with ``lazy`` only when first used in this process
+    (its name and versions are read from its package; if they cannot be, it loads now)."""
+    if lazy:
+        found = _installed_meta(model)
+        if found is not None:
+            return Parser(None, model, *found, loader=lambda: _load(model))
+    nlp = _load(model)
+    spacy = import_module("spacy")
     return Parser(nlp, model, str(nlp.meta.get("version", "")), str(spacy.__version__))
 
 

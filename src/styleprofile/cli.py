@@ -7,6 +7,7 @@ Commands:
     styleprofile show writer.json
     styleprofile metrics
     styleprofile evaluate posts/ --contrast llm-drafts/ --edited light=edits/
+    styleprofile cache --clear
 """
 
 from __future__ import annotations
@@ -18,11 +19,13 @@ import shlex
 import shutil
 import sys
 import textwrap
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
 from styleprofile import __version__, api
+from styleprofile import cache as caching
 from styleprofile.api import (
     AUTO,
     DEFAULT_TOP_K,
@@ -39,6 +42,7 @@ from styleprofile.core import (
     LikenessVerdict,
     Note,
     NoteCode,
+    Progress,
     StyleProfileError,
     Verdict,
 )
@@ -49,6 +53,7 @@ from styleprofile.display import (
     not_judged,
     severity,
 )
+from styleprofile.measure import AUTO_JOBS
 from styleprofile.metrics import describe
 from styleprofile.profile import (
     EVALUATION,
@@ -60,6 +65,7 @@ from styleprofile.profile import (
 )
 from styleprofile.schema import FailedDocument, FailLevels
 from styleprofile.split import SPLIT_ON
+from styleprofile.status import StatusLine
 
 PROG = "styleprofile"
 # Advice for library errors, which name the problem but never a flag.
@@ -108,6 +114,7 @@ FLAGS = {
     "group_field": "--group-field",
     "pool": "--pool",
     "split_on": "--split-on",
+    "jobs": "--jobs",
 }
 
 
@@ -228,6 +235,22 @@ def _add_input_flags(parser: argparse.ArgumentParser, *, inherited: bool) -> Non
     )
 
 
+def _add_run_flags(parser: argparse.ArgumentParser) -> None:
+    """Flags that change how fast a run goes, never its numbers."""
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        metavar="N",
+        help=f"spaCy processes (default 0: by CPUs and memory, max {AUTO_JOBS})",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help=f"measure every text again (see `{PROG} cache`)",
+    )
+
+
 def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
     parser = argparse.ArgumentParser(
         prog=PROG,
@@ -279,6 +302,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         help="name of the contrast set in reports (default: LLM)",
     )
     _add_input_flags(build, inherited=False)
+    _add_run_flags(build)
     build.add_argument(
         "--top-k",
         type=int,
@@ -429,7 +453,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     evaluate.add_argument(
         "--retrain",
         action="store_true",
-        help="also report the AUC with the edits added to the contrast set",
+        help="also report the AUC with the edits in the contrast set",
     )
     evaluate.add_argument(
         "--contrast-label",
@@ -444,6 +468,19 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         "--json", action="store_true", help="print the report as JSON on stdout, and nothing else"
     )
     _add_input_flags(evaluate, inherited=False)
+    _add_run_flags(evaluate)
+
+    cache = commands.add_parser(
+        "cache",
+        **_help_parser(
+            "Show where the measurement cache is and how large, or delete it. Builds and "
+            "scores keep every text's measurements there, so measuring a text again is "
+            f"instant; the cache holds at most {caching.MAX_BYTES // 2**20:,} MB, dropping "
+            "the least recently used entries first.",
+            f"{PROG} cache --clear",
+        ),
+    )
+    cache.add_argument("--clear", action="store_true", help="delete the cache")
     return parser, dict(commands.choices)
 
 
@@ -517,18 +554,37 @@ def _warn(text: str, color: bool) -> str:
     return f"\033[33m{text}\033[0m" if color else text
 
 
+@contextmanager
+def _status(shown: bool = True) -> Iterator[Callable[[Progress], None] | None]:
+    """A progress callback drawing one updating line on stderr, when it is a terminal (and
+    ``shown``); otherwise None, so piped and redirected output never carries it. The line is
+    erased when the run ends or fails, before anything else is printed."""
+    if not (shown and sys.stderr.isatty()) or os.environ.get("TERM") == "dumb":
+        yield None
+        return
+    line = StatusLine(sys.stderr)
+    try:
+        yield line
+    finally:
+        line.clear()
+
+
 def _run_build(args: argparse.Namespace) -> int:
     settings = _settings(args)
     typed = [*args.inputs, *(args.contrast or [])]
     _inputs_exist(typed)
     _refuse_overwrite(args.output, typed)
-    profile = api.build(
-        args.inputs,
-        settings,
-        contrast=args.contrast,
-        contrast_label=args.contrast_label,
-        keep_chunks=args.keep_chunks,
-    )
+    with _status() as progress:
+        profile = api.build(
+            args.inputs,
+            settings,
+            contrast=args.contrast,
+            contrast_label=args.contrast_label,
+            keep_chunks=args.keep_chunks,
+            progress=progress,
+            jobs=args.jobs,
+            cache=not args.no_cache,
+        )
     _notes(profile.notes)
     # Files found inside a folder are known only once it has been read.
     _refuse_overwrite(args.output, typed, profile.sources)
@@ -774,7 +830,8 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["pool"] = args.pool
     if args.split_on is not None:
         overrides["split_on"] = args.split_on
-    result = profile.score(samples, passages=args.by_paragraph, **overrides)
+    with _status(not (args.json or args.quiet)) as progress:
+        result = profile.score(samples, progress=progress, passages=args.by_paragraph, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     failed = _failed(args, result)
@@ -874,14 +931,18 @@ def _run_evaluate(args: argparse.Namespace) -> int:
     _inputs_exist(typed)
     if args.output:
         _refuse_overwrite(args.output, typed)
-    result = api.evaluate(
-        args.inputs,
-        args.contrast,
-        dict(args.edited),
-        settings,
-        contrast_label=args.contrast_label,
-        retrain=args.retrain,
-    )
+    with _status(not args.json) as progress:
+        result = api.evaluate(
+            args.inputs,
+            args.contrast,
+            dict(args.edited),
+            settings,
+            contrast_label=args.contrast_label,
+            retrain=args.retrain,
+            progress=progress,
+            jobs=args.jobs,
+            cache=not args.no_cache,
+        )
     _notes(result.notes)
     if args.output:
         _refuse_overwrite(args.output, typed, result.sources)
@@ -897,12 +958,32 @@ def _run_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_cache(args: argparse.Namespace) -> int:
+    path, size, entries, problem = caching.describe()
+    held = f"{entries:,} {'entry' if entries == 1 else 'entries'}, {size / 2**20:,.1f} MB"
+    if args.clear:
+        if caching.clear():
+            print(f"deleted the measurement cache ({held})")
+        else:
+            print(f"the measurement cache is already empty ({path})")
+        return 0
+    print(f"measurement cache: {path}")
+    limit = caching.MAX_BYTES // 2**20
+    if caching.disabled_by_environment():
+        print(f"  off: {caching.ENVIRONMENT} is set")
+    elif problem:
+        print(f"  unavailable: {problem}")
+    print(f"  {held} (at most about {limit:,} MB)" if size else "  empty")
+    return 0
+
+
 RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "build": _run_build,
     "score": _run_score,
     "show": _run_show,
     "metrics": _run_metrics,
     "evaluate": _run_evaluate,
+    "cache": _run_cache,
 }
 
 

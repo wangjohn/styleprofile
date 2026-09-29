@@ -20,6 +20,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from styleprofile.measure import Measurer
 from styleprofile.profile import (
     EVALUATION,
     EVALUATION_VERSION,
@@ -270,6 +271,7 @@ def evaluate_rewording(
     retrain: bool = False,
     settings: Mapping[str, Any] | None = None,
     covered: Mapping[str, Sequence[Chunk]] | None = None,
+    measurer: Measurer | None = None,
 ) -> EvaluationReport:
     """Score edited copies of the contrast drafts without leaking; see the module docstring.
 
@@ -305,6 +307,7 @@ def evaluate_rewording(
         # Drafts and edits are windowed as the reference is, and the AUCs compare chunk
         # scores directly, so nothing here reads the calibration for shorter texts.
         calibrate_lengths=False,
+        measurer=measurer,
     )
     learned = fit.learned
     documents_by_key = {
@@ -353,7 +356,7 @@ def evaluate_rewording(
                 f"contrast drafts (matched by name, ignoring the extension), e.g. {unmatched[0]!r}",
                 code="unmatched_edits",
             )
-        kept_chunks, z_rows = z_against_reference(profile, chunks, parser, min_words)
+        kept_chunks, z_rows = z_against_reference(profile, chunks, parser, min_words, measurer)
         documents = [documents_by_key[match_key(chunk)] for chunk in kept_chunks]
         scores = fold_scores(z_rows, documents, learned.contrast_folds)
         edited_z[set_label] = z_rows

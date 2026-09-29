@@ -25,15 +25,18 @@ import functools
 import math
 import random
 import statistics
-from collections import defaultdict
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from array import array
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate, groupby, islice
+from itertools import accumulate, groupby, islice, repeat
 from operator import itemgetter, mul
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, overload
 
 from styleprofile.core import DISTANCES, LIKENESSES, Verdict
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
+from styleprofile.rows import MetricRows
+from styleprofile.rows import key as _key
 from styleprofile.schema import (
     AucConfidence,
     Bootstrap,
@@ -136,7 +139,7 @@ def z_score(
 
 def _values(metrics: Metrics) -> dict[Key, float]:
     return {
-        (group, name): value
+        _key(group, name): value
         for group, values in metrics.items()
         if group not in UNSCORED_GROUPS
         for name, value in values.items()
@@ -150,7 +153,7 @@ def held_out_z(
     floor: Mapping[Key, float],
     *,
     others: tuple[Sequence[Metrics], Sequence[str]] | None = None,
-) -> list[ZScores]:
+) -> Sequence[ZScores]:
     """Each chunk's z-scores against the chunks from every other source.
 
     With ``others`` (more texts and their sources, such as shorter pieces cut from these
@@ -158,29 +161,222 @@ def held_out_z(
     its own. Running sums keep this linear in the number of chunks, so a corpus of
     thousands of comments costs about as much as profiling it.
     """
-    values = [_values(metrics) for metrics in chunk_metrics]
+    if others is None:
+        return held_out(chunk_metrics, sources, floor)[0]
+    return held_out(chunk_metrics, sources, floor, others)[1]
+
+
+def held_out(
+    chunk_metrics: Sequence[Metrics],
+    sources: Sequence[str],
+    floor: Mapping[Key, float],
+    others: tuple[Sequence[Metrics], Sequence[str]] | None = None,
+) -> tuple[ZRows, list[ZScores]]:
+    """``held_out_z`` of the chunks and, given ``others``, of the others too, from one pass
+    over the chunks' sums. The chunks' z-scores come back as ``ZRows``, and each chunk's
+    values are made from its metrics when needed rather than kept for every chunk."""
+    values = _LazyValues(chunk_metrics)
     total, parts = _sums(values, sources)
-    if others is not None:
-        values, sources = [_values(metrics) for metrics in others[0]], others[1]
-    scored: list[ZScores] = []
-    for chunk_values, source in zip(values, sources, strict=True):
-        own = parts.get(source, {})
+    held = ZRows(_scored_keys(chunk_metrics[0]) if chunk_metrics else ())
+    _held_z(values, sources, total, parts, floor, held, own_rows=True)
+    pieces: list[ZScores] = []
+    if others is not None and others[0]:
+        _held_z(_LazyValues(others[0]), others[1], total, parts, floor, pieces)
+    return held, pieces
+
+
+def _scored_keys(metrics: Metrics) -> list[Key]:
+    """The scored metrics' keys, in the order a chunk's values and z-scores list them."""
+    return [
+        _key(group, name)
+        for group, values in metrics.items()
+        if group not in UNSCORED_GROUPS
+        for name in values
+    ]
+
+
+class _LazyValues(Sequence[dict[Key, float]]):
+    """Each chunk's scored values (``_values``), made when asked for rather than kept (from
+    ``MetricRows`` without rebuilding each chunk's dicts)."""
+
+    def __init__(self, metrics: Sequence[Metrics]) -> None:
+        self._metrics = metrics
+
+    def __len__(self) -> int:
+        return len(self._metrics)
+
+    def __iter__(self) -> Iterator[dict[Key, float]]:
+        return map(self.__getitem__, range(len(self._metrics)))
+
+    def _one(self, index: int) -> dict[Key, float]:
+        if isinstance(self._metrics, MetricRows):
+            found = self._metrics.scored_values(index)
+            if found is not None:
+                return found
+        return _values(self._metrics[index])
+
+    @overload
+    def __getitem__(self, index: int) -> dict[Key, float]: ...
+    @overload
+    def __getitem__(self, index: slice) -> list[dict[Key, float]]: ...
+    def __getitem__(self, index: int | slice) -> dict[Key, float] | list[dict[Key, float]]:
+        if isinstance(index, slice):
+            return [self._one(position) for position in range(*index.indices(len(self)))]
+        return self._one(index)
+
+
+class ZRows(Sequence[ZScores]):
+    """Rows of z-scores held compactly: an array of doubles per row over ``keys``, NaN where
+    the row has no z. A row reads back as exactly the dict it was made from (same keys, same
+    order, same floats); one whose keys do not follow ``keys``' order is kept as its dict.
+    As dicts, 20,000 chunks' z-scores took about 150 MB; as arrays, 25 MB."""
+
+    def __init__(self, keys: Sequence[Key]) -> None:
+        self.keys = tuple(keys)
+        self._index = {key: position for position, key in enumerate(self.keys)}
+        self._blank = array("d", [math.nan]) * len(self.keys)
+        self._rows: list[array[float] | ZScores] = []
+        # ``_sums`` of these rows, by (by_source, sources).
+        self.sums: dict[tuple[bool, tuple[str, ...]], tuple[Sums, _Parts]] = {}
+
+    def append(self, z_scores: ZScores) -> None:
+        self.sums.clear()
+        row = array("d", self._blank)
+        last = -1
+        for key, z in z_scores.items():
+            position = self._index.get(key)
+            if position is None or position <= last or z != z:
+                self._rows.append(dict(z_scores))
+                return
+            row[position] = z
+            last = position
+        self._rows.append(row)
+
+    def array(self, index: int) -> array[float] | None:
+        """Row ``index`` as its array (NaN where it has no z), or None when it is kept as its
+        dict."""
+        row = self._rows[index]
+        return None if isinstance(row, dict) else row
+
+    def pairs(self, index: int) -> list[tuple[Key, float]]:
+        """Row ``index``'s (key, z) pairs in order, without making its dict."""
+        row = self._rows[index]
+        if isinstance(row, dict):
+            return list(row.items())
+        return [(key, z) for key, z in zip(self.keys, row, strict=True) if z == z]
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    @overload
+    def __getitem__(self, index: int) -> ZScores: ...
+    @overload
+    def __getitem__(self, index: slice) -> list[ZScores]: ...
+    def __getitem__(self, index: int | slice) -> ZScores | list[ZScores]:
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(len(self)))]
+        row = self._rows[index]
+        if isinstance(row, dict):
+            return row
+        return {key: z for key, z in zip(self.keys, row, strict=True) if z == z}
+
+
+def _held_z(
+    values: Sequence[Mapping[Key, float]],
+    sources: Sequence[str],
+    total: Sums,
+    parts: _Parts,
+    floor: Mapping[Key, float],
+    out: ZRows | list[ZScores],
+    *,
+    own_rows: bool = False,
+) -> None:
+    """Each row's z-scores against ``total`` less its own source's part: the arithmetic of
+    ``z_score`` over the leave-one-source-out mean and spread, written out, since it runs
+    for every metric of every chunk."""
+    stats = {key: (sums[0], sums[1], sums[2], floor.get(key, 0.0)) for key, sums in total.items()}
+    isclose, sqrt, copysign = math.isclose, math.sqrt, math.copysign
+    for index, (chunk_values, source) in enumerate(zip(values, sources, strict=True)):
+        # A source of one row is summed from that row as its part would be (0.0 + v): the
+        # row being scored when these are the rows summed (``own_rows``).
+        found_index = parts.single_index(source)
+        single = (
+            None
+            if found_index is None
+            else chunk_values
+            if own_rows and found_index == index
+            else parts.row(found_index)
+        )
+        own = {} if single is not None else parts.get(source, {})
         chunk_z: ZScores = {}
+        if single is chunk_values:
+            _held_z_alone(chunk_values, stats, chunk_z)
+            out.append(chunk_z)
+            continue
         for key, value in chunk_values.items():
-            if key not in total:
+            found = stats.get(key)
+            if found is None:
                 continue
-            mine = own.get(key, _EMPTY)
-            n = total[key][0] - mine[0]
+            count, first, second, least = found
+            if single is not None:
+                mine_value = single.get(key)
+                if mine_value is None:
+                    n, sum1, sum2 = count, first, second
+                else:
+                    n = count - 1.0
+                    sum1 = first - (0.0 + mine_value)
+                    sum2 = second - (0.0 + mine_value * mine_value)
+            else:
+                mine = own.get(key, _EMPTY)
+                n, sum1, sum2 = count - mine[0], first - mine[1], second - mine[2]
             if n < 2:
                 continue
-            mean = (total[key][1] - mine[1]) / n
-            variance = (total[key][2] - mine[2] - n * mean * mean) / (n - 1)
-            sd = math.sqrt(variance) if variance > 1e-12 * max(1.0, mean * mean) else 0.0
-            z = z_score(value, mean, sd, int(n), floor.get(key, 0.0))
-            if z is not None:
-                chunk_z[key] = z
-        scored.append(chunk_z)
-    return scored
+            mean = sum1 / n
+            variance = (sum2 - n * mean * mean) / (n - 1)
+            sd = sqrt(variance) if variance > 1e-12 * max(1.0, mean * mean) else 0.0
+            # z_score, as it reads for n of 2 or more.
+            if isclose(value, mean, rel_tol=1e-6, abs_tol=1e-6):
+                chunk_z[key] = 0.0
+                continue
+            spread = max(sd or 0.0, least)
+            if spread > 0:
+                chunk_z[key] = (value - mean) / spread
+            else:
+                chunk_z[key] = copysign(UNSEEN_Z, value - mean)
+        out.append(chunk_z)
+
+
+def _held_z_alone(
+    values: Mapping[Key, float],
+    stats: Mapping[Key, tuple[float, float, float, float]],
+    out: ZScores,
+) -> None:
+    """``_held_z`` for a row that is its source's only one, so its part is itself: the same
+    arithmetic, in a loop of its own since it is most of the work for a corpus of short
+    documents. ``max(a, b)`` is written ``b if b > a else a``, which is what it returns."""
+    isclose, sqrt, copysign = math.isclose, math.sqrt, math.copysign
+    for key, value in values.items():
+        found = stats.get(key)
+        if found is None:
+            continue
+        count, first, second, least = found
+        n = count - 1.0
+        if n < 2:
+            continue
+        mean = (first - (0.0 + value)) / n
+        variance = ((second - (0.0 + value * value)) - n * mean * mean) / (n - 1)
+        square = mean * mean
+        sd = sqrt(variance) if variance > 1e-12 * (square if square > 1.0 else 1.0) else 0.0
+        if isclose(value, mean, rel_tol=1e-6, abs_tol=1e-6):
+            out[key] = 0.0
+            continue
+        spread = sd or 0.0
+        if least > spread:
+            spread = least
+        if spread > 0:
+            out[key] = (value - mean) / spread
+        else:
+            out[key] = copysign(UNSEEN_Z, value - mean)
 
 
 def reliability(held: Sequence[ZScores], sources: Sequence[str]) -> dict[Key, float]:
@@ -384,30 +580,100 @@ Sums = dict[Key, list[float]]
 _EMPTY = (0.0, 0.0, 0.0)
 
 
+class _Parts(Mapping[str, Mapping[Key, Sequence[float]]]):
+    """Each source's [count, sum, sum of squares] per metric (see ``_sums``). A source with
+    one row, which is every source of a corpus of comments, is summed from that row when
+    asked for rather than kept: kept for 20,000 sources, the sums took gigabytes."""
+
+    def __init__(
+        self,
+        rows: Sequence[Mapping[Key, float]],
+        several: dict[str, Sums],
+        single: dict[str, int],
+    ) -> None:
+        self._rows = rows
+        self._several = several
+        self._single = single
+
+    def single_index(self, source: str) -> int | None:
+        """The row of a source that has only one, by position, else None."""
+        return self._single.get(source)
+
+    def row(self, index: int) -> Mapping[Key, float]:
+        return self._rows[index]
+
+    def __getitem__(self, source: str) -> Mapping[Key, Sequence[float]]:
+        part = self._several.get(source)
+        if part is not None:
+            return part
+        index = self._single.get(source)
+        if index is None:
+            return {}
+        # As summing from zero gives them: 0.0 + z, not z (they differ for -0.0).
+        return {key: (1.0, 0.0 + z, 0.0 + z * z) for key, z in self._rows[index].items()}
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._several
+        yield from self._single
+
+    def __len__(self) -> int:
+        return len(self._several) + len(self._single)
+
+
 def _sums(
     rows: Sequence[Mapping[Key, float]], sources: Sequence[str], *, by_source: bool = True
-) -> tuple[Sums, dict[str, Sums]]:
+) -> tuple[Sums, _Parts]:
     """[count, sum, sum of squares] per metric, overall and (unless not ``by_source``) per
-    source."""
+    source (``_Parts``). For ``ZRows`` they are worked out once per set of sources: the
+    reference's held-out z-scores are summed by the Delta range, the reliability and the
+    contrast alike. Callers only read them."""
+    if isinstance(rows, ZRows):
+        memo = (by_source, tuple(sources))
+        found = rows.sums.get(memo)
+        if found is None:
+            found = rows.sums[memo] = _sums_of(rows, sources, by_source=by_source)
+        return found
+    return _sums_of(rows, sources, by_source=by_source)
+
+
+def _sums_of(
+    rows: Sequence[Mapping[Key, float]], sources: Sequence[str], *, by_source: bool
+) -> tuple[Sums, _Parts]:
     total: Sums = defaultdict(lambda: [0.0, 0.0, 0.0])
-    parts: dict[str, Sums] = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0.0]))
-    for chunk_z, source in zip(rows, sources, strict=True):
-        own = parts[source] if by_source else None
-        for key, z in chunk_z.items():
-            squared = z * z
+    for chunk_z in _row_pairs(rows):
+        for key, z in chunk_z:
             sums = total[key]
             sums[0] += 1
             sums[1] += z
-            sums[2] += squared
-            if own is not None:
-                sums = own[key]
-                sums[0] += 1
-                sums[1] += z
-                sums[2] += squared
-    return total, parts
+            sums[2] += z * z
+    several: dict[str, Sums] = {}
+    single: dict[str, int] = {}
+    if by_source:
+        for source, positions in _by_source(sources).items():
+            if len(positions) == 1:
+                single[source] = positions[0]
+                continue
+            own: Sums = defaultdict(lambda: [0.0, 0.0, 0.0])
+            for index in positions:
+                for key, z in rows.pairs(index) if isinstance(rows, ZRows) else rows[index].items():
+                    sums = own[key]
+                    sums[0] += 1
+                    sums[1] += z
+                    sums[2] += z * z
+            several[source] = own
+    elif len(rows) != len(sources):
+        raise ValueError("rows and sources differ in length")
+    return total, _Parts(rows, several, single)
 
 
-def _less(sums: Sequence[float], part: Mapping[Key, list[float]], key: Key) -> list[float]:
+def _row_pairs(rows: Sequence[Mapping[Key, float]]) -> Iterator[Iterable[tuple[Key, float]]]:
+    """Each row's (key, value) pairs in order; ``ZRows`` without making their dicts."""
+    if isinstance(rows, ZRows):
+        return map(rows.pairs, range(len(rows)))
+    return (row.items() for row in rows)
+
+
+def _less(sums: Sequence[float], part: Mapping[Key, Sequence[float]], key: Key) -> list[float]:
     """``sums`` without one source's ``part`` of metric ``key``."""
     removed = part.get(key)
     return list(sums) if removed is None else [a - b for a, b in zip(sums, removed, strict=True)]
@@ -432,28 +698,39 @@ def _fold_without(
     reference: Sums,
     contrast: Sums,
     full: tuple[dict[Key, float], dict[Key, float]],
-    reference_part: Mapping[Key, list[float]] | None = None,
-    contrast_part: Mapping[Key, list[float]] | None = None,
+    reference_part: Mapping[Key, Sequence[float]] | None = None,
+    contrast_part: Mapping[Key, Sequence[float]] | None = None,
 ) -> tuple[dict[Key, float], dict[Key, float]]:
     """``_fold`` of the totals less one source's part, given ``full``, the fold of the whole
     totals. Only the metrics the part has change, so only they are recomputed: with thousands
     of one-comment sources that is a few metrics each rather than every metric."""
     reference_part, contrast_part = reference_part or {}, contrast_part or {}
     effects, rms = dict(full[0]), dict(full[1])
+    sqrt = math.sqrt
     for key in {*reference_part, *contrast_part}:
-        if key not in reference:
+        sums = reference.get(key)
+        if sums is None:
             continue
         # Removing a part only lowers counts, so a metric either keeps its place in the full
         # fold (and the order likeness sums in) or drops out; none is added.
-        n, total, squares = _less(reference[key], reference_part, key)
+        removed = reference_part.get(key)
+        if removed is None:
+            n, total, squares = sums
+        else:
+            n, total, squares = sums[0] - removed[0], sums[1] - removed[1], sums[2] - removed[2]
         if n < 1:
             effects.pop(key, None)
             rms.pop(key, None)
             continue
-        rms[key] = math.sqrt(squares / n)
-        count, contrast_total, _ = _less(contrast.get(key, (0.0, 0.0, 0.0)), contrast_part, key)
+        spread = rms[key] = sqrt(squares / n)
+        other = contrast.get(key, _EMPTY)
+        removed = contrast_part.get(key)
+        if removed is None:
+            count, contrast_total = other[0], other[1]
+        else:
+            count, contrast_total = other[0] - removed[0], other[1] - removed[1]
         if count >= 1:
-            effects[key] = (contrast_total / count - total / n) / max(rms[key], 1.0)
+            effects[key] = (contrast_total / count - total / n) / max(spread, 1.0)
         else:
             effects.pop(key, None)
     return effects, rms
@@ -483,7 +760,7 @@ def held_out_effects(
 
 
 def _rms_without(
-    total: Sums, full: Mapping[Key, float], part: Mapping[Key, list[float]]
+    total: Sums, full: Mapping[Key, float], part: Mapping[Key, Sequence[float]]
 ) -> dict[Key, float]:
     """``_rms`` of ``total`` less one source's ``part``, given ``full``, the rms of the whole
     total; only the metrics the part has are recomputed."""
@@ -553,14 +830,18 @@ def resampled_aucs(
         [(score, 0, document) for document, scores in enumerate(reference) for score in scores]
         + [(score, 1, document) for document, scores in enumerate(contrast) for score in scores]
     )
-    # Each chunk's document on its side, or a sentinel that is never drawn (weight 0).
+    # The reference chunks' documents in rank order, and for each contrast chunk its document
+    # and how many reference chunks rank below it (ties rank reference chunks first).
     reference_count, contrast_count = len(reference), len(contrast)
-    reference_documents = [
-        document if not is_contrast else reference_count for _, is_contrast, document in ranked
-    ]
-    contrast_documents = [
-        document if is_contrast else contrast_count for _, is_contrast, document in ranked
-    ]
+    reference_documents: list[int] = []
+    contrast_documents: list[int] = []
+    contrast_below: list[int] = []
+    for _, is_contrast, document in ranked:
+        if is_contrast:
+            contrast_documents.append(document)
+            contrast_below.append(len(reference_documents))
+        else:
+            reference_documents.append(document)
     # Groups of tied scores holding both sides: (reference documents, contrast documents).
     mixed: list[tuple[list[int], list[int]]] = []
     for _, tied in groupby(ranked, key=itemgetter(0)):
@@ -572,24 +853,27 @@ def resampled_aucs(
     reference_range, contrast_range = range(reference_count), range(contrast_count)
     rng = random.Random(seed)
     while True:
-        reference_draws = _draws(rng, reference_range)
-        contrast_draws = _draws(rng, contrast_range)
-        below = list(map(reference_draws.__getitem__, reference_documents))
-        above = list(map(contrast_draws.__getitem__, contrast_documents))
-        wins = float(sum(map(mul, above, accumulate(below))))
+        # How often each document was drawn (a document not drawn is not counted: 0).
+        reference_draws = _draws(rng, reference_range).get
+        contrast_draws = _draws(rng, contrast_range).get
+        # The running reference weight below each contrast chunk, from one running sum over
+        # the reference chunks: the same whole numbers as summing over every chunk.
+        below = [0, *accumulate(map(reference_draws, reference_documents, repeat(0)))]
+        above = list(map(contrast_draws, contrast_documents, repeat(0)))
+        wins = float(sum(map(mul, above, map(below.__getitem__, contrast_below))))
         for reference_tied, contrast_tied in mixed:
-            tied = sum(map(reference_draws.__getitem__, reference_tied))
-            wins -= sum(map(contrast_draws.__getitem__, contrast_tied)) * tied / 2
-        yield wins / (sum(above) * sum(below))
+            tied = sum(map(reference_draws, reference_tied, repeat(0)))
+            wins -= sum(map(contrast_draws, contrast_tied, repeat(0))) * tied / 2
+        yield wins / (sum(above) * below[-1])
 
 
-def _draws(rng: random.Random, documents: range) -> list[int]:
-    """How many times each document is drawn in one resample of ``len(documents)``, plus a
-    final 0 for the sentinel that marks the other side's chunks."""
-    drawn = [0] * (len(documents) + 1)
-    for document in rng.choices(documents, k=len(documents)):
-        drawn[document] += 1
-    return drawn
+def _draws(rng: random.Random, documents: range) -> Counter[int]:
+    """How many times each document is drawn in one resample of ``len(documents)``; a
+    document not drawn is not in it."""
+    # What ``rng.choices(documents, k=count)`` draws (one ``random()`` each, floored times
+    # the count), counted in C rather than in a Python loop.
+    count = len(documents)
+    return Counter(map(int, map(mul, islice(iter(rng.random, None), count), repeat(count + 0.0))))
 
 
 class Interval(NamedTuple):
@@ -725,12 +1009,19 @@ def held_out_deltas(held: Sequence[ZScores], sources: Sequence[str]) -> HeldDelt
     total, parts = _sums(held, sources)
     full = delta_weights(_rms(total))
     scored: list[tuple[float | None, dict[str, float]]] = [(None, {})] * len(held)
+    alone = _DeltaWithoutOwn(total, held.keys if isinstance(held, ZRows) else None)
     for source, positions in _by_source(sources).items():
+        if len(positions) == 1:
+            index = positions[0]
+            scored[index] = alone.delta(held, index)
+            continue
         # Weights learned without this source: only the metrics it has differ from the full
         # weights, so only they are recomputed.
         weights = dict(full)
-        for key in parts[source]:
-            n, _, squares = _less(total[key], parts[source], key)
+        part = parts[source]
+        for key, removed in part.items():
+            sums = total[key]
+            n, squares = sums[0] - removed[0], sums[2] - removed[2]
             if n >= 1:
                 weights[key] = 1.0 / max(math.sqrt(squares / n), 1.0) ** 2
             else:
@@ -750,6 +1041,61 @@ def held_out_deltas(held: Sequence[ZScores], sources: Sequence[str]) -> HeldDelt
             areas[group].append(amount)
             area_sources[group].append(source)
     return HeldDeltas(overall, overall_sources, dict(areas), dict(area_sources))
+
+
+def _pairs(rows: Sequence[Mapping[Key, float]], index: int) -> Iterable[tuple[Key, float]]:
+    return rows.pairs(index) if isinstance(rows, ZRows) else rows[index].items()
+
+
+class _DeltaWithoutOwn:
+    """``delta`` of a source's only chunk with the weights learned without it: what
+    ``held_out_deltas`` computes by copying the weights and replacing every metric the chunk
+    has, done in one pass over the chunk, with each metric's totals looked up once. The
+    arithmetic is the same, step for step."""
+
+    def __init__(self, total: Sums, keys: Sequence[Key] | None) -> None:
+        self._total = total
+        # For rows kept as arrays: each metric's (group, count without the chunk, sum of
+        # squares), by position; None for a metric no row has.
+        self._columns: list[tuple[str, float, float] | None] | None = None
+        if keys is not None:
+            self._columns = [
+                (key[0], counts[0] - 1.0, counts[2]) if (counts := total.get(key)) else None
+                for key in keys
+            ]
+
+    def delta(
+        self, rows: Sequence[Mapping[Key, float]], index: int
+    ) -> tuple[float | None, dict[str, float]]:
+        sqrt = math.sqrt
+        sums: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        if self._columns is not None and isinstance(rows, ZRows) and (row := rows.array(index)):
+            for column, z in zip(self._columns, row, strict=True):
+                if z != z or column is None:
+                    continue
+                group, n, squares = column
+                if n >= 1:
+                    weight: float = 1.0 / max(sqrt((squares - (0.0 + z * z)) / n), 1.0) ** 2
+                    size = abs(z)
+                else:
+                    weight, size = 1.0, min(abs(z), UNSEEN_Z)
+                entry = sums[group]
+                entry[0] += weight * size
+                entry[1] += weight
+        else:
+            for key, z in _pairs(rows, index):
+                counts = self._total[key]
+                n = counts[0] - 1.0
+                if n >= 1:
+                    weight = 1.0 / max(sqrt((counts[2] - (0.0 + z * z)) / n), 1.0) ** 2
+                    size = abs(z)
+                else:
+                    weight, size = 1.0, min(abs(z), UNSEEN_Z)
+                entry = sums[key[0]]
+                entry[0] += weight * size
+                entry[1] += weight
+        by_group = {group: amount / weight for group, (amount, weight) in sums.items() if weight}
+        return (statistics.fmean(by_group.values()) if by_group else None), by_group
 
 
 def calibrate_delta(
@@ -833,7 +1179,7 @@ class CrossValidated:
     rms: dict[Key, float]
     reference_scores: list[float]
     contrast_scores: list[float]
-    contrast_folds: dict[str, Fold]
+    contrast_folds: Mapping[str, Fold]
     cross_validated: bool
 
 
@@ -858,26 +1204,25 @@ def cross_validate(
     # Each reference source's fold is used for its own chunks and then dropped, so thousands
     # of one-comment sources never hold thousands of folds at once.
     reference_scores = [0.0] * len(reference_held)
+    alone = _LikenessWithoutOwn(effects, reference_total, contrast_total, reference_held)
     for source, positions in _by_source(reference_sources).items():
+        if len(positions) == 1:
+            reference_scores[positions[0]] = alone.score(reference_held, positions[0])
+            continue
         fold = _fold_without(
             reference_total, contrast_total, (effects, rms), reference_part=reference_parts[source]
         )
         for index in positions:
             reference_scores[index] = likeness(reference_held[index], *fold)[0]
     cross_validated = len(set(contrast_sources)) > 1
-    contrast_folds = {
-        source: (
-            _fold_without(
-                reference_total,
-                contrast_total,
-                (effects, rms),
-                contrast_part=contrast_parts[source],
-            )
-            if cross_validated
-            else (effects, rms)
-        )
-        for source in set(contrast_sources)
-    }
+    contrast_folds = _Folds(
+        set(contrast_sources),
+        reference_total,
+        contrast_total,
+        contrast_parts,
+        (effects, rms),
+        cross_validated=cross_validated,
+    )
     return CrossValidated(
         effects=effects,
         rms=rms,
@@ -886,6 +1231,110 @@ def cross_validate(
         contrast_folds=contrast_folds,
         cross_validated=cross_validated,
     )
+
+
+class _Folds(Mapping[str, Fold]):
+    """Each contrast document's fold (``_fold_without`` its part), made when asked for rather
+    than kept: a contrast set of thousands of drafts would otherwise hold thousands of
+    folds. Without ``cross_validated`` every document gets the full fold."""
+
+    def __init__(
+        self,
+        sources: set[str],
+        reference: Sums,
+        contrast: Sums,
+        parts: _Parts,
+        full: Fold,
+        *,
+        cross_validated: bool,
+    ) -> None:
+        self._sources = sources
+        self._reference, self._contrast, self._parts = reference, contrast, parts
+        self._full = full
+        self._cross_validated = cross_validated
+
+    def __getitem__(self, source: str) -> Fold:
+        if source not in self._sources:
+            raise KeyError(source)
+        if not self._cross_validated:
+            return self._full
+        return _fold_without(
+            self._reference, self._contrast, self._full, contrast_part=self._parts[source]
+        )
+
+    def __contains__(self, source: object) -> bool:
+        return source in self._sources
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._sources)
+
+    def __len__(self) -> int:
+        return len(self._sources)
+
+
+class _LikenessWithoutOwn:
+    """``likeness(z_scores, *fold)[0]`` for a reference source's only chunk, where ``fold`` is
+    ``_fold_without`` of that source (``effects`` being the full fold's): every metric the
+    chunk has is refitted without it, so only those count, in the full fold's order. The
+    arithmetic is the same, step for step, with what does not depend on the chunk (its
+    metric's totals less one count, the contrast's mean) worked out once; the contributions
+    are summed largest first, as ``likeness`` sorts them."""
+
+    def __init__(
+        self,
+        effects: Mapping[Key, float],
+        reference: Sums,
+        contrast: Sums,
+        rows: Sequence[Mapping[Key, float]],
+    ) -> None:
+        # (key, count without the chunk, sum, sum of squares, contrast mean) of each metric
+        # that can have an effect without one chunk, in the full fold's order.
+        self._metrics: list[tuple[Key, float, float, float, float]] = []
+        for key in effects:
+            counts = reference[key]
+            n = counts[0] - 1.0
+            other = contrast.get(key, _EMPTY)
+            if n < 1 or other[0] < 1:
+                continue
+            self._metrics.append((key, n, counts[1], counts[2], other[1] / other[0]))
+        # With rows kept as arrays, each metric's z is read by position, all in one call.
+        self._pick: Callable[[array[float]], Sequence[float]] | None = None
+        if isinstance(rows, ZRows) and len(self._metrics) >= 2:
+            index = {key: position for position, key in enumerate(rows.keys)}
+            positions = [index.get(key) for key, *_ in self._metrics]
+            if None not in positions:
+                self._pick = itemgetter(*positions)  # type: ignore[arg-type]
+
+    def score(self, rows: Sequence[Mapping[Key, float]], index: int) -> float:
+        sqrt, copysign = math.sqrt, math.copysign
+        present: list[tuple[float, float, float]] = []
+        row = rows.array(index) if isinstance(rows, ZRows) else None
+        values: Sequence[float]
+        if row is not None and self._pick is not None:
+            values = self._pick(row)
+        else:
+            z_scores = dict(_pairs(rows, index))
+            values = [z_scores.get(key, math.nan) for key, *_ in self._metrics]
+        for (_, n, first, second, contrast_mean), z in zip(self._metrics, values, strict=True):
+            if z != z:
+                continue
+            total = first - (0.0 + z)
+            spread = sqrt((second - (0.0 + z * z)) / n)
+            # max(spread, 1.0), as max returns it (the first of equals).
+            scale = 1.0 if spread < 1.0 else spread
+            effect = (contrast_mean - total / n) / scale
+            present.append((effect, z, scale))
+        denominator = sum(effect * effect for effect, _, _ in present)
+        if not denominator:
+            return 0.0
+        shares = []
+        for effect, z, scale in present:
+            signed = copysign(1.0, effect) * z
+            toward = (signed if signed > 0.0 else 0.0) / scale
+            if toward:
+                shares.append(effect * effect * toward / denominator)
+        shares.sort(reverse=True)
+        return sum(shares)
 
 
 def fold_scores(

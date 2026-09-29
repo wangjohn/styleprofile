@@ -36,6 +36,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Generic, Literal, TypedDict, TypeVar, Unpack, cast
 
+from styleprofile.cache import MeasurementCache, disabled_by_environment
 from styleprofile.calibration import (
     MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
@@ -61,6 +62,7 @@ from styleprofile.display import (
 from styleprofile.drift import Passage
 from styleprofile.evaluate import evaluate_rewording
 from styleprofile.formats import INPUT_FORMATS
+from styleprofile.measure import Measurer, check_jobs
 from styleprofile.profile import (
     REFERENCE,
     TEXT_FIELDS,
@@ -120,6 +122,8 @@ from styleprofile.weighting import FLOOR_DOCUMENTS
 AUTO = "auto"
 # How the command line names standard input, apart from a file called ``stdin``.
 STDIN_SHOWN = "<stdin>"
+# ``jobs``: pick the number of parser processes (see ``measure.Measurer``).
+AUTO_JOBS = 0
 DEFAULT_WINDOW_WORDS = 500
 DEFAULT_TOP_K = 300
 SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
@@ -383,6 +387,8 @@ class Profile(_Result[ReferenceReport]):
         *,
         progress: ProgressCallback | None = None,
         passages: bool = False,
+        jobs: int = AUTO_JOBS,
+        cache: bool = False,
         **overrides: Unpack[SettingsOverrides],
     ) -> ScoreResult:
         """Score drafts against this profile.
@@ -402,7 +408,9 @@ class Profile(_Result[ReferenceReport]):
         A window size or syntax setting unlike the profile's is warned about in the report,
         since z-scores assume chunks like the reference's; another ``min_words`` gets a
         note. A ``text_field`` given here is the only one read; the profile's is tried
-        first, then the defaults.
+        first, then the defaults. ``jobs`` is as for ``build``. Scoring reads and writes the
+        measurement cache only with ``cache=True``: a draft is quick to measure, and what it
+        would leave there (pattern counts of its text) should not stay behind unasked.
 
         ``passages=True`` (experimental, off by default) also reads each document in
         overlapping spans of 100 words or more to show where it drifts
@@ -411,7 +419,7 @@ class Profile(_Result[ReferenceReport]):
         (docs/method.md, "Where a draft drifts"), so treat what it finds as a lead to read.
         """
         notes: list[Note] = []
-        with _notes_on_error(notes):
+        with _notes_on_error(notes), _measurer(progress, jobs, cache) as measurer:
             base = settings
             if base is None:
                 base = dataclasses.replace(
@@ -505,9 +513,11 @@ class Profile(_Result[ReferenceReport]):
                 },
                 read_in_parts=chunks if passages and cut.pooled is None else None,
                 pooled=passages and cut.pooled is not None,
+                measurer=measurer,
             )
             report["warnings"] += _pooling_mismatch(cut, reference_pooled)
             step(Phase.DONE)
+            _finish(measurer, notes)
             return ScoreResult(
                 report,
                 notes=notes,
@@ -822,6 +832,8 @@ def build(
     contrast_label: str = "LLM",
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
+    jobs: int = AUTO_JOBS,
+    cache: bool = True,
 ) -> Profile:
     """Build a reference profile from a writer's texts, as ``styleprofile build`` does.
 
@@ -833,9 +845,18 @@ def build(
     The profile keeps summaries only; ``keep_chunks`` also saves every chunk's metrics, for
     debugging. It is an option of this build rather than a ``Settings`` field: it changes
     what is saved, not how texts are read or cut, and scoring has nothing to inherit from it.
+
+    ``jobs`` and ``cache`` are options of the run too, since they change how fast it goes and
+    never a number in the profile. ``jobs`` is how many processes run the spaCy parser: 0
+    (the default) picks one per CPU, up to 4, once there are 50,000 words to parse, and only
+    where worker processes can start (see ``measure.workers_can_start``: a script needs an
+    ``if __name__ == "__main__":`` guard); 1 parses in this process. With ``cache`` (the
+    default), chunks measured by an earlier run are read from the measurement cache and new
+    ones are added to it (see ``styleprofile.cache``); ``cache=False`` neither reads nor
+    writes it. ``progress`` is called as each phase starts and as each chunk is measured.
     """
     notes: list[Note] = []
-    with _notes_on_error(notes):
+    with _notes_on_error(notes), _measurer(progress, jobs, cache) as measurer:
         pooling = _pooling(settings)
         step = _progress(progress)
         step(Phase.READ)
@@ -916,6 +937,7 @@ def build(
                 "contrast_split_used": list(contrast_cut.split) if contrast_cut else [],
             },
             keep_chunks=keep_chunks,
+            measurer=measurer,
         )
         # Saved, so ``show`` repeats them: what stand-in documents mean for this reference.
         report["warnings"] += [*cut.warnings, *(contrast_cut.warnings if contrast_cut else ())]
@@ -924,6 +946,7 @@ def build(
         sources = _sources([*chunks, *(contrast_chunks or [])])
         # Keep the profile exactly as it is saved (floats rounded), so scoring it before or
         # after a save and load gives the same numbers.
+        _finish(measurer, notes)
         return Profile(json.loads(dumps_report(report)), notes=notes, sources=sources)
 
 
@@ -936,14 +959,17 @@ def evaluate(
     contrast_label: str = "LLM",
     retrain: bool = False,
     progress: ProgressCallback | None = None,
+    jobs: int = AUTO_JOBS,
+    cache: bool = True,
 ) -> Evaluation:
     """Stress-test contrast likeness against edited drafts, as ``styleprofile evaluate``
     does: build a reference with ``contrast`` (the original drafts), then score each set in
     ``edited`` (label to edited copies, matched to their originals by name) with the weights
-    learned without their original. ``settings.top_k`` does not apply here.
+    learned without their original. ``settings.top_k`` does not apply here. ``jobs`` and
+    ``cache`` are as for ``build``.
     """
     notes: list[Note] = []
-    with _notes_on_error(notes):
+    with _notes_on_error(notes), _measurer(progress, jobs, cache) as measurer:
         step = _progress(progress)
         step(Phase.READ)
         pooling = _pooling(settings)
@@ -1068,11 +1094,13 @@ def evaluate(
                 "pool_used": cut.pooled is not None,
                 "split_used": list(cut.split),
             },
+            measurer=measurer,
         )
         report["warnings"] += cut.warnings
         step(Phase.DONE)
         loaded = [*reference_chunks, *contrast_chunks]
         loaded += [chunk for chunks in edited_chunks.values() for chunk in chunks]
+        _finish(measurer, notes)
         return Evaluation(report, notes=notes, sources=_sources(loaded))
 
 
@@ -1167,6 +1195,33 @@ def _plural(count: int, word: str) -> str:
 
 def _resolved(path: str | os.PathLike[str]) -> Path:
     return expand_path(os.fspath(path)).resolve()
+
+
+@contextmanager
+def _measurer(progress: ProgressCallback | None, jobs: int, cache: bool) -> Iterator[Measurer]:
+    """The run's ``Measurer``, closed (workers stopped, cache written) when the run ends."""
+    check_jobs(jobs)
+    store = MeasurementCache() if cache and not disabled_by_environment() else None
+    measurer = Measurer(cache=store, jobs=jobs, progress=progress)
+    try:
+        yield measurer
+    finally:
+        measurer.close()
+
+
+def _finish(measurer: Measurer, notes: list[Note]) -> None:
+    """Stop the run's workers and write its cache, noting when the cache could not be used:
+    otherwise the only sign would be that rebuilding stays slow."""
+    measurer.close()
+    store = measurer.cache
+    if store is not None and store.problem is not None:
+        notes.append(
+            Note(
+                f"the measurement cache at {store.path} could not be used ({store.problem}), "
+                "so this run measured everything and saved nothing for the next",
+                NoteCode.CACHE_UNAVAILABLE,
+            )
+        )
 
 
 def _progress(callback: ProgressCallback | None) -> Callable[[Phase], None]:
@@ -1997,8 +2052,10 @@ def _windowed(chunks: list[Chunk], window_words: int) -> list[Chunk]:
 
 @cache
 def _default_parser() -> Parser:
-    """The spaCy parser, loaded once per process: loading takes about a second."""
-    return load_parser()
+    """The spaCy parser, made once per process. Its model loads (about a second, and 150 MB)
+    only when this process parses: when worker processes do all the parsing, or every
+    chunk comes from the measurement cache, it never does."""
+    return load_parser(lazy=True)
 
 
 def _parser(

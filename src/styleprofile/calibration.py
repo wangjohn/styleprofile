@@ -54,8 +54,8 @@ from styleprofile.weighting import (
     centre,
     delta_level,
     flatten,
+    held_out,
     held_out_deltas,
-    held_out_z,
     intraclass_correlation,
     likeness_step,
     likeness_words,
@@ -296,9 +296,7 @@ def held_out_pieces(
 ) -> list[ZScores]:
     """Each piece's z-scores against the windows of every other document, as a draft of its
     length is scored against the whole reference."""
-    return held_out_z(
-        window_metrics, window_documents, floor, others=(piece_metrics, piece_documents)
-    )
+    return held_out(window_metrics, window_documents, floor, (piece_metrics, piece_documents))[1]
 
 
 Pieces = tuple[Sequence[ZScores], Sequence[str], Sequence[float]]

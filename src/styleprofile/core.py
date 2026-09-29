@@ -54,6 +54,8 @@ class NoteCode(StrEnum):
     """A folder walk skipped documents it cannot read (Word, PDF, ...)."""
     SKIPPED_DIRS = "skipped_dirs"
     """A folder walk left out static-site output and template folders."""
+    CACHE_UNAVAILABLE = "cache_unavailable"
+    """The measurement cache could not be opened, read or written, so the run did without."""
     DUPLICATES = "duplicates"
     """Documents repeating another's text word for word were dropped."""
     POOLED = "pooled"
@@ -91,24 +93,39 @@ class Note:
 class Phase(StrEnum):
     """The phases a run reports to its ``progress`` callback. Every run goes ``READ``,
     ``LOAD_PARSER`` (only when it uses spaCy), then its own work (``BUILD``, ``SCORE`` or
-    ``EVALUATE``), then ``DONE``."""
+    ``EVALUATE``), then ``DONE``. Within its work it reports ``MEASURE`` for its chunks (the
+    writer's, or the drafts'), then for a reference ``CALIBRATE`` and, with a contrast set,
+    ``MEASURE_CONTRAST`` and ``CONTRAST``."""
 
     READ = "read"
     LOAD_PARSER = "load_parser"
     BUILD = "build"
     SCORE = "score"
     EVALUATE = "evaluate"
+    MEASURE = "measure"
+    """Measuring chunks, reported as each one is done (``done`` of ``total``)."""
+    CALIBRATE = "calibrate"
+    """The reference's held-out calibration, overall and for shorter texts."""
+    MEASURE_CONTRAST = "measure_contrast"
+    """Measuring the contrast set's chunks, reported as ``MEASURE`` is."""
+    CONTRAST = "contrast"
+    """Learning what separates the writer from the contrast set."""
     DONE = "done"
 
 
 @dataclass(frozen=True)
 class Progress:
-    """Where a run is. ``done`` and ``total`` count a phase's work (chunks, say) and are
-    None for a phase that does not count it; every phase is reported once at its start."""
+    """Where a run is. Every phase is reported once at its start. ``MEASURE`` and
+    ``MEASURE_CONTRAST`` are also reported after each chunk: ``done`` of ``total`` chunks, and
+    ``words``, the prose words in the chunks done so far. ``parsing`` says whether those chunks
+    go through the spaCy parser, which makes measuring about ten times slower. Other phases
+    leave the counts None."""
 
     phase: Phase
     done: int | None = None
     total: int | None = None
+    words: int | None = None
+    parsing: bool = False
 
 
 class Verdict(StrEnum):

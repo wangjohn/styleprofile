@@ -314,7 +314,7 @@ def block_word_count(block: Block) -> int:
         return 0
     tally = _Tally(blocks=[], paragraphs=[])
     _read_block(block.raw, tally, block.continues_list)
-    return sum(len(words(text)) for text in tally.blocks)
+    return sum(len(WORD.findall(text)) for text in tally.blocks)
 
 
 def plain_sentences(block: Block) -> list[str] | None:
@@ -407,7 +407,9 @@ def hapax_share(tokens: Sequence[str], block: int = 100) -> float | None:
     return _mean(shares)
 
 
-def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
+def surface_metrics(
+    markdown: str, parsed: Prose | None = None, tokens: list[str] | None = None
+) -> Metrics:
     """All parser-free metrics for one chunk, grouped by stylistic level, as the registry in
     ``styleprofile.metrics`` defines them.
 
@@ -415,14 +417,15 @@ def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
     """
     parsed = parsed or prose(markdown)
     text = parsed.text
-    tokens = words(text)
+    tokens = words(text) if tokens is None else tokens
     word_count = len(tokens)
     per_1k = 1000 / word_count if word_count else None
     # Phrase patterns are written with straight apostrophes; curly ones must match too.
     plain = text.replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
 
     sentence_texts = [sentence for block in parsed.blocks for sentence in sentences(block)]
-    lengths = [len(words(sentence)) for sentence in sentence_texts]
+    # Counting words needs no folding: as many as ``words`` gives.
+    lengths = [len(WORD.findall(sentence)) for sentence in sentence_texts]
     paragraph_sentence_counts = [len(sentences(paragraph)) for paragraph in parsed.paragraphs]
     mean_length = _mean(lengths)
     length_sd = statistics.pstdev(lengths) if lengths else None
@@ -445,7 +448,7 @@ def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
         "short_sentences_pct": _pct(sum(n <= SHORT_SENTENCE_WORDS for n in lengths), len(lengths)),
         "long_sentences_pct": _pct(sum(n >= LONG_SENTENCE_WORDS for n in lengths), len(lengths)),
         "paragraph_sentences_mean": _mean(paragraph_sentence_counts),
-        "paragraph_words_mean": _mean([len(words(p)) for p in parsed.paragraphs]),
+        "paragraph_words_mean": _mean([len(WORD.findall(p)) for p in parsed.paragraphs]),
         "one_sentence_paragraphs_pct": _pct(
             sum(count == 1 for count in paragraph_sentence_counts),
             len(paragraph_sentence_counts),
@@ -507,12 +510,15 @@ def surface_metrics(markdown: str, parsed: Prose | None = None) -> Metrics:
     return grouped(values, syntax=False)
 
 
-def masked_bigrams(text: str) -> Counter[str]:
+def masked_bigrams(text: str, tokens: list[str] | None = None) -> Counter[str]:
     """Transitions between function words, with every content word masked to one symbol.
 
     ``text`` is prose, as ``prose(markdown).text`` returns it.
     """
-    tokens = [token if token in _FUNCTION_SET else MASK for token in words(text)]
+    tokens = [
+        token if token in _FUNCTION_SET else MASK
+        for token in (words(text) if tokens is None else tokens)
+    ]
     return Counter(
         f"{left} {right}" for left, right in pairwise(tokens) if (left, right) != (MASK, MASK)
     )
@@ -521,7 +527,7 @@ def masked_bigrams(text: str) -> Counter[str]:
 def char_trigrams(text: str) -> Counter[str]:
     """Character trigrams of prose text (``prose(markdown).text``), case-folded."""
     text = re.sub(r"\s+", " ", text.casefold())
-    return Counter(text[index : index + 3] for index in range(len(text) - 2))
+    return Counter(map("".join, zip(text, text[1:], text[2:], strict=False)))
 
 
 def jensen_shannon(sample: dict[str, float], reference: dict[str, float]) -> float | None:
