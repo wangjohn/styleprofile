@@ -154,14 +154,139 @@ different". So every verdict is read against the writer's own range *at the text
   long enough to judge; the rest are left out of the verdict, the means, the differences,
   the arrows and the signals, and a warning names them and says why. If none is long
   enough, it is "too short to judge" and its numbers are indicative. The mean is read
-  against a pooled bound, which the output prints: the mean of the chunks' medians plus the
-  root sum of squares of their (95% bound − median) over n, which for n chunks of one
-  length is the usual median + (bound − median) / sqrt(n).
+  against a bound for a mean, which the output prints (see below).
 - **`evaluate` stays on window calibration.** It builds its reference without the shorter
   lengths: its drafts and edited drafts are windowed exactly like the reference, its AUCs
   compare chunk scores directly and need no verdict bound, and its per-draft counts judge
   window-sized chunks. An edited set much shorter than its originals is visible in its
   length ratio.
+
+### A mean over many chunks
+
+The headline, each area and likeness read the mean of the n judged chunks against a bound
+for that mean, built from each chunk's range at its own length:
+
+- **Centred on the mean, not the median.** Held-out Deltas are skewed to the right, so their
+  median sits below their mean, and a mean over many chunks settles on the mean. Every
+  stored range (the windows', each length's, overall, per area and for likeness) therefore
+  also stores `mean`: an upper confidence bound on its held-out mean, the mean plus t
+  standard errors, with the standard error from n_eff as for the 95% bound and t the 90%
+  quantile of Student's t with one degree of freedom fewer than there are documents (1.89
+  for 3 documents, 1.53 for 5, 1.28 for many), so a mean from few documents is set higher
+  rather than trusted as exact. n_eff uses the within-document similarity of the range's
+  documents, floored at 0.2 below 10 documents: the pooled pieces' for a length's overall
+  range, the windows' own for theirs, and each area's own for an area. The centre is not capped at the 95%
+  bound: a heavy-tailed range can have its mean above its 95th percentile, and a long run
+  still converges to the mean.
+- **Narrowing with n, but not to nothing.** Each chunk's spread is s = 95% bound − centre.
+  The chunks of one run share part of their variation, which does not average away: a run
+  from one document, or on one topic, sits at that document's or topic's offset, and every
+  run shares whatever sets its text apart from the calibration pieces (its format, how it
+  was cut). Each range stores that share, r (`similarity`): the within-document similarity
+  (intraclass correlation) of its own held-out values, at least 0.2 below 10 documents,
+  and never below 0.05. The bound is the mean of the centres plus
+  sqrt(Σ (1 − r) s² + (Σ sqrt(r) s)²) / n, the spread of a mean of values that share r of
+  their variation; for n chunks of one range that is centre + s × sqrt(r + (1 − r) / n).
+- **One chunk is unchanged**: its bound is its own 95% bound. The floors of 0.5 (Delta and
+  areas) and 0.25 (likeness) still apply.
+- **Refused when missing.** A reference built before ranges stored `mean` and
+  `similarity` (or a score report made against one) is refused as outdated and must be
+  rebuilt, since reading its median instead would bring the bug back.
+
+Before, the bound was the mean of the chunks' medians plus the root sum of squares of their
+(95% bound − median) over n, which closes in on the median as n grows. On the synthetic
+corpus, the writer's own held-out chunks (439 of them, 75 to 300 words, cut as runs of
+sentences) have a mean Delta of 0.855 and a median-centred bound of 0.837 over all of them:
+the median is 0.810, 0.045 below the mean, and the spread term, 0.027, is smaller than that
+gap. The gap is there at every length (0.015–0.065), so it is the skew, not the mixing of
+lengths; the value and the bound average the same chunks with the same weights, and the
+conservative 95% bound only widens the spread term. Centring on the mean alone
+(0.869 + 0.024 = 0.893) fixes the headline there, but not the areas or a run whose text
+differs a little in kind: cutting held-out text as whole paragraphs rather than runs of
+sentences moves an area's mean by up to about a tenth of its spread (which the least r,
+0.05, sqrt 0.22, covers), and a writer whose documents each keep to one topic has runs on
+one topic whose punctuation, function words and voice sit up to a quarter of a spread
+from the centre. With one r of 0.05 for every range, 10–14% of such runs of 20–50 chunks
+read "somewhat different" in some area; with each range's own r, 4.5–5% (0.5–7.2% in an
+independent review's harness, whose cutters also start spans mid-sentence). The cost is
+detection of a small minority of LLM chunks (below): in that harness a batch of 20 with 10%
+LLM chunks read "somewhat different" or worse in 47–97% of batches, against 79–97% with one
+r of 0.05 and 98–100% before.
+
+The tests' own acceptance numbers, against a synthetic reference of 80 documents: disjoint
+batches (none sharing a chunk) of the writer's own held-out chunks from 300 other
+documents, cut by the tests' own cutters to lengths drawn from 75 to 300 words (runs of
+sentences / whole paragraphs); before is the median-centred bound on the same chunks:
+
+| batch | batches | "somewhat different" or worse, before → after | any area "somewhat" or worse, before → after |
+|---|---|---|---|
+| 1 | 1,646 / 1,454 | 2.2 / 1.5% → unchanged | 13.2 / 10.4% → unchanged |
+| 5 | 329 / 290 | 2.1 / 0.3% → 0.3 / 0.0% | 18.2 / 12.4% → 7.3 / 4.8% |
+| 20 | 82 / 72 | 3.7 / 0.0% → 0.0 / 0.0% | 32.9 / 15.3% → 1.2 / 0.0% |
+| 50 | 32 / 29 | 12.5 / 0.0% → 0.0 / 0.0% | 81.2 / 27.6% → 0.0 / 0.0% |
+| 200 | 8 / 7 | 87.5 / 0.0% → 0.0 / 0.0% | 100 / 42.9% → 0.0 / 0.0% |
+
+Batches of held-out LLM chunks cut the same way read "clearly different" or lean LLM in
+every batch of 5, 20 and 50, before and after. Against 3,000 generated comments joined ten
+to a document, the 38 of 300 held-out comments long enough to judge (35 of them close
+alone) read "somewhat different" together before (Delta 1.17 against a bound of 1.12) and
+close now. Their sentence shape still reads "somewhat different": a comment is one
+paragraph while the pieces cut from joined comments span several, a shift of 0.4 of that
+area's spread, which is the calibration's to match rather than the bound's to absorb.
+
+#### The trade-off: a few very different chunks among many
+
+The pooled headline answers whether the run as a whole is like the writer. Once a bound
+for a mean no longer closes in on the median, a small minority of very different chunks
+moves the mean too little to cross it. In the review's harness (400 random batches of
+held-out chunks with 10% LLM chunks mixed in), the headline read "somewhat different" or
+worse, before → at the revision with one r of 0.05 for every range:
+
+| chunks | n = 20 | n = 50 | n = 200 |
+|---|---|---|---|
+| spans that keep paragraph breaks | 97.5% → 78.8% | 100% → 97.8% | 100% → 100% |
+| ~100-word records, scored one by one | 70.2% → 14.8% | 99.0% → 11.8% | 100% → 5.0% |
+| single paragraphs | 62.0% → 8.8% | 97.5% → 7.8% | 100% → 1.5% |
+| against a 4-document reference | 87.2% → 25.5% | 100% → 22.0% | — |
+
+Each range's own r is never less than 0.05, so these are upper bounds now: at this
+revision the records row reads 2.5%, 0.2% and 0.0%. With 30% LLM chunks the headline
+still reads "somewhat different" or worse in 99–100% of batches, though "clearly different"
+or "leans LLM" far less often (35% of 30% batches on one topic-clustered corpus, and about
+1% against 4- or 5-document references). This is intended: the headline is not the place
+to catch a few chunks. The user never misses them, though:
+
+- **Chunks flagged on their own are counted beside the headline.** A chunk is flagged
+  when, judged at its own length, it reads "clearly different" or worse, or leans toward
+  the contrast set or more. Whenever a run has more chunks than documents and some are
+  flagged, the headline says how many ("close   Delta 1.08; 2 of 17 chunks read clearly
+  different or lean LLM on their own (see below)"), `-q` ends its line with "(2 of 17
+  chunks read clearly different or lean LLM)", the report's verdict and each document
+  record `flagged`, and the library has `ScoreResult.flagged` and `DocumentResult.flagged`.
+  With one chunk per document the per-document table and its count line already say it.
+- **The chunk lists always name them.** "Most LLM-like chunks" and "Least like the
+  reference" put the flagged chunks first (`--all` lists every one).
+- **Exit codes.** `--fail-above` and `--fail-likeness` judge each document's verdict, as a
+  whole; `--fail-flagged N` fails a document with N or more flagged chunks
+  (`ScoreResult.failing(flagged=N)`), and every `failed:` line and JSON `failed` entry
+  gives the count whichever check failed.
+- **The By area view** still reads such a mixture as different in 81–100% of batches
+  against 80-document references, but less against small ones: 64% and 76% (n = 20, 50)
+  against a 4-document reference, 40% and 39% against a 5-document one, since each range's
+  r is at least 0.2 below 10 documents. **Drift passages** (plan PR 12) will point at the
+  passages within a document.
+
+On the tests' own chunks, every writer batch of 20 or 50 with 10% LLM chunks named a
+flagged chunk, and the headline read "somewhat different" or worse in 78–100% of them.
+
+**Chance flags.** The writer's own chunks are flagged rarely, 0–0.14% of held-out chunks in
+the review's harness, but a long run has many chances: runs of 200 of the writer's own
+chunks name at least one in 15–27% of batches, and runs of 50 in 0–8%. So a flagged chunk
+in a long document is a pointer to read, not proof, and `--fail-flagged 1` on documents of
+a hundred windows or more will sometimes fail the writer's own text; choose N by length.
+The note does not say how many to expect by chance: that rate depends on the reference and
+on how the text is cut (it varies nearly tenfold across the harness's corpora), and a
+reference does not yet store its own held-out flag rate to quote.
 
 ### How well it holds
 
@@ -189,9 +314,9 @@ of sentences that split paragraphs.
 
 Every z uses a spread of at least half of one occurrence per chunk for counts (5% of the
 mean for other metrics), so a habit that is almost always absent cannot turn one use into
-dozens of standard deviations. Verdicts compare an average over n chunks with a band
-1/sqrt(n) as wide as a single chunk's, since averages vary less. That band never narrows
-below 0.5 for Delta and its areas (half a standard deviation per metric), so an area the
-writer never varies in, like Markdown in plain essays, cannot turn a trace into "very
-different". Likeness counts only the part of each z toward the contrast drafts, about half
-of |z| for noise, so its band never narrows below 0.25.
+dozens of standard deviations. Verdicts compare an average over n chunks with a band that
+narrows as n grows, since averages vary less (see "A mean over many chunks"). That band
+never narrows below 0.5 for Delta and its areas (half a standard deviation per metric), so
+an area the writer never varies in, like Markdown in plain essays, cannot turn a trace into
+"very different". Likeness counts only the part of each z toward the contrast drafts, about
+half of |z| for noise, so its band never narrows below 0.25.

@@ -15,7 +15,9 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import random
 import re
+import statistics
 import sys
 from collections.abc import Callable, Sequence
 from functools import cache
@@ -31,7 +33,6 @@ from styleprofile.calibration import (
     MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
     MIN_JUDGED_WORDS,
-    SIMILARITY_FLOOR,
     Lengths,
     chunk_level,
     chunk_likeness_level,
@@ -39,8 +40,9 @@ from styleprofile.calibration import (
     enough,
     plan_pieces,
     similarity,
+    verdict,
 )
-from styleprofile.cli import main
+from styleprofile.cli import EXIT_FAILED, main
 from styleprofile.core import StyleProfileError
 from styleprofile.profile import (
     VERSION,
@@ -48,20 +50,29 @@ from styleprofile.profile import (
     build_reference,
     load_chunks,
     load_reference,
+    load_report,
     score,
     window,
     write_report,
 )
-from styleprofile.schema import ReferenceReport, ScoreReport
+from styleprofile.schema import ReferenceReport, ScoredChunk, ScoreReport
 from styleprofile.surface import prose, words
 from styleprofile.weighting import (
     DISTANCE_WORDS,
+    MIN_CEILING,
+    MIN_RUN_SIMILARITY,
+    SIMILARITY_FLOOR,
     TOO_SHORT,
+    centre,
+    delta_level,
     effective_count,
     intraclass_correlation,
     mean_ceiling,
     pooled_ceiling,
     quantile,
+    run_similarity,
+    t_quantile,
+    upper_mean,
     upper_quantile,
 )
 
@@ -126,14 +137,20 @@ def _score(texts: Sequence[str], reference: ReferenceReport) -> ScoreReport:
     return score(chunks, reference, parser=None, settings={"window_words": WINDOW})
 
 
-def _generate(out: Path) -> Path:
-    """The benchmark's medium corpus (bench/gen.py), written to ``out``."""
+@cache
+def _bench() -> Any:
+    """The benchmark's corpus generator, bench/gen.py."""
     spec = importlib.util.spec_from_file_location("bench_gen", ROOT / "bench" / "gen.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # its dataclasses look their module up by name
     spec.loader.exec_module(module)
-    return module.generate("medium", out)
+    return module
+
+
+def _generate(out: Path) -> Path:
+    """The benchmark's medium corpus (bench/gen.py), written to ``out``."""
+    return _bench().generate("medium", out)
 
 
 @pytest.fixture(scope="module")
@@ -348,13 +365,87 @@ def test_calibration_interpolates_between_lengths() -> None:
     assert at[100].scale and all(factor > 1 for factor in at[100].scale.values())
 
 
+def _stats(median: float, mean: float, p95: float, similarity: float = 0.05) -> dict[str, float]:
+    return {"median": median, "mean": mean, "p95": p95, "similarity": similarity}
+
+
 def test_pooled_ceiling_is_mean_ceiling_for_equal_ranges() -> None:
-    stats = {"median": 0.7, "p95": 1.1}
-    for count in (1, 4, 9):
-        assert pooled_ceiling([stats] * count) == pytest.approx(mean_ceiling(stats, count))
-    short, long = {"median": 1.1, "p95": 2.1}, {"median": 0.7, "p95": 0.95}
-    mixed = pooled_ceiling([short, long])
-    assert mixed == pytest.approx(0.9 + (1.0**2 + 0.25**2) ** 0.5 / 2)
+    for r in (MIN_RUN_SIMILARITY, 0.2):
+        stats = _stats(0.7, 0.75, 1.15, r)
+        for count in (2, 4, 9):
+            assert pooled_ceiling([stats] * count) == pytest.approx(mean_ceiling(stats, count))
+            assert mean_ceiling(stats, count) == pytest.approx(
+                0.75 + 0.4 * (r + (1 - r) / count) ** 0.5
+            )
+    # Ranges of different lengths, each with its own share: sqrt of the sum of (1 - r) s^2
+    # plus the square of the sum of sqrt(r) s, over n.
+    short, long = _stats(1.1, 1.2, 2.2, 0.2), _stats(0.7, 0.7, 0.95, 0.05)
+    independent = 0.8 * 1.0**2 + 0.95 * 0.25**2
+    shared = (0.2**0.5 * 1.0 + 0.05**0.5 * 0.25) ** 2
+    assert pooled_ceiling([short, long]) == pytest.approx(0.95 + (independent + shared) ** 0.5 / 2)
+
+
+def test_one_chunk_is_read_against_its_own_bound() -> None:
+    """Pooling changes nothing for a single chunk: its bound is its own 95% bound, whatever
+    its centre and run similarity."""
+    for stats in (_stats(0.7, 0.8, 1.3), _stats(0.7, 1.0, 1.3, 0.5), _stats(0.7, 1.6, 1.3)):
+        assert pooled_ceiling([stats]) == pytest.approx(1.3)
+    assert pooled_ceiling([_stats(0.1, 0.12, 0.2)]) == 0.5  # the floor
+
+
+def test_a_long_run_is_read_against_the_mean_not_the_median() -> None:
+    """Held-out Deltas are skewed to the right, so their mean sits above their median; the
+    bound for a mean over many chunks settles near the mean, never at the median, and keeps
+    the share of one chunk's spread that the chunks of one run have in common."""
+    for r in (MIN_RUN_SIMILARITY, 0.3):
+        ceiling = pooled_ceiling([_stats(0.8, 0.9, 1.5, r)] * 10_000)
+        assert ceiling == pytest.approx(0.9 + 0.6 * r**0.5, abs=1e-3)
+    # A heavy-tailed range can have its mean above its 95th percentile: a long run is read
+    # against the mean itself, not capped at the 95% bound.
+    heavy = _stats(0.0, 0.4, 0.3)
+    assert centre(heavy) == 0.4
+    assert pooled_ceiling([heavy] * 50, floor=0.0) == pytest.approx(0.4)
+
+
+def test_the_mean_is_an_upper_confidence_bound() -> None:
+    """The stored centre is the held-out mean plus t standard errors: the standard error
+    from the effective number of values, and t the 90% quantile of Student's t with one
+    degree of freedom fewer than there are documents, so few documents set it higher."""
+    assert t_quantile(0.9, 2) == pytest.approx(1.8856, abs=1e-4)
+    assert t_quantile(0.9, 4) == pytest.approx(1.5332, abs=1e-3)
+    assert t_quantile(0.9, 10_000) == pytest.approx(1.2816, abs=1e-3)
+    values = [0.5, 0.7, 0.9, 1.1, 1.3, 0.6, 0.8, 1.0, 1.2, 1.4]
+    sd = statistics.stdev(values)
+    apart = [f"d{index}" for index in range(10)]
+    assert upper_mean(values, apart, icc=0.0) == pytest.approx(
+        statistics.fmean(values) + t_quantile(0.9, 9) * sd / 10**0.5
+    )
+    together = ["a"] * 5 + ["b"] * 5
+    assert upper_mean(values, together, icc=0.5) == pytest.approx(
+        statistics.fmean(values)
+        + t_quantile(0.9, 1) * sd / effective_count(values, together, 0.5) ** 0.5
+    )
+    assert upper_mean(values, together, icc=0.5) > upper_mean(values, apart, icc=0.0)
+    stored = _reference()["calibration"]["by_length"]["75"]["delta"]
+    assert stored["median"] < stored["mean"] < stored["p95"]
+
+
+def test_each_range_stores_how_alike_a_runs_chunks_are() -> None:
+    """Every range stores its run similarity: the within-document similarity of its own
+    held-out values, at least 0.05, and at least the floor of 0.2 below 10 documents."""
+    values = [1.0, 1.1, 2.0, 2.1, 3.0, 3.1] * 2
+    groups = [f"d{index // 2}" for index in range(12)]
+    assert run_similarity(values, groups) == pytest.approx(intraclass_correlation(values, groups))
+    assert run_similarity([1.0, 2.0, 1.0, 2.0], ["a", "a", "b", "b"]) == SIMILARITY_FLOOR
+    many = [float(index % 2) for index in range(40)]
+    assert run_similarity(many, [f"d{index // 2}" for index in range(40)]) == MIN_RUN_SIMILARITY
+    reference = _reference()  # seven documents: every share at least the floor
+    delta = reference["calibration"]["delta"]
+    ranges = [delta, *delta["by_group"].values()]
+    for entry in reference["calibration"]["by_length"].values():
+        if "delta" in entry:
+            ranges += [entry["delta"], *entry["delta"]["by_group"].values()]
+    assert all(SIMILARITY_FLOOR <= item["similarity"] <= 1 for item in ranges)
 
 
 def test_a_profile_from_before_length_calibration_is_refused(tmp_path: Path) -> None:
@@ -369,6 +460,29 @@ def test_a_profile_from_before_length_calibration_is_refused(tmp_path: Path) -> 
         assert error.value.code == "outdated"
         with pytest.raises(StyleProfileError, match="rebuild it"):
             _score([BEES], reference)
+
+
+@pytest.mark.parametrize("key", ["mean", "similarity"])
+def test_a_profile_from_before_stored_means_is_refused(tmp_path: Path, key: str) -> None:
+    """A reference whose ranges lack the held-out mean (or the run similarity) would read a
+    pooled mean against its median, the bug the mean fixes, so it is refused as outdated,
+    and so is a score report made against one."""
+    reference: Any = _reference()  # edited to lack a key, so no longer a ReferenceReport
+    del reference["calibration"]["delta"][key]
+    path = tmp_path / "no-mean.json"
+    write_report(reference, path)
+    with pytest.raises(StyleProfileError, match="read the held-out mean; rebuild it") as error:
+        load_reference(path)
+    assert error.value.code == "outdated"
+    with pytest.raises(StyleProfileError, match="rebuild it"):
+        _score([BEES], reference)
+    report: Any = _score([BEES], _reference())
+    del report["reference"]["baseline"]["calibration"]["delta"][key]
+    saved = tmp_path / "score.json"
+    write_report(report, saved)
+    with pytest.raises(StyleProfileError, match="score it again") as error:
+        load_report(saved)
+    assert error.value.code == "outdated"
 
 
 # Too short to judge.
@@ -597,16 +711,23 @@ def examples_rates() -> Rates:
 
 
 @pytest.fixture(scope="module")
-def synthetic_rates(corpus: Path) -> Rates:
-    """A synthetic writer of 80 documents with 20 contrast drafts, scored on 40 held-out
-    documents and 10 held-out drafts."""
+def synthetic_reference(corpus: Path) -> ReferenceReport:
+    """A synthetic writer of 80 documents with 20 contrast drafts."""
     writer = sorted((corpus / "writer").glob("*.md"))
     drafts = sorted((corpus / "contrast").glob("*.md"))
-    reference = build_reference(
+    return build_reference(
         window(load_chunks([str(path) for path in writer[:80]]), WINDOW),
         parser=None,
         contrast=window(load_chunks([str(path) for path in drafts[:20]]), WINDOW),
     )
+
+
+@pytest.fixture(scope="module")
+def synthetic_rates(corpus: Path, synthetic_reference: ReferenceReport) -> Rates:
+    """The synthetic writer scored on 40 held-out documents and 10 held-out drafts."""
+    writer = sorted((corpus / "writer").glob("*.md"))
+    drafts = sorted((corpus / "contrast").glob("*.md"))
+    reference = synthetic_reference
     own: Counts = {}
     llm: Counts = {}
     _count(reference, [path.read_text(encoding="utf-8") for path in writer[80:120]], own)
@@ -638,6 +759,387 @@ def test_llm_drafts_cut_to_150_words_are_still_flagged(
 
 def test_min_judged_words_is_the_shortest_length() -> None:
     assert min(CALIBRATION_LENGTHS) == MIN_JUDGED_WORDS
+
+
+# Acceptance: the pooled verdict over many short chunks of mixed length.
+
+# How many chunks each batch pools.
+BATCHES = (5, 20, 50, 200)
+# At most this share of batches of the writer's own chunks may read "somewhat different"
+# or worse overall, or "leans LLM" or worse on likeness; and, from 20 chunks on, in any
+# area. A pooled verdict must not be harsher than the chunks it pools.
+MAX_POOLED_FALSE_POSITIVES = 0.05
+# At least this share of batches of LLM chunks must still read "clearly different" or
+# worse, or "leans LLM" or worse.
+MIN_POOLED_DETECTION = 0.95
+# Batches of the writer's own chunks drawn from one topic, and how many of each size.
+TOPIC_BATCHES = (20, 50)
+TOPIC_TRIALS = 200
+
+
+def cut_mixed(text: str, rng: random.Random, *, whole: bool) -> list[str]:
+    """Pieces of mixed length, each aiming at a length drawn log-uniformly from 75 to 300
+    words: whole paragraphs, or greedy runs of sentences that split paragraphs."""
+    low, high = MIN_JUDGED_WORDS, 4 * MIN_JUDGED_WORDS
+
+    def aim() -> float:
+        return low * (high / low) ** rng.random()
+
+    pieces: list[str] = []
+    current: list[list[str]] = []
+    count, target = 0, aim()
+
+    def flush() -> None:
+        nonlocal current, count, target
+        pieces.append("\n\n".join(" ".join(part) for part in current if part))
+        current, count, target = [], 0, aim()
+
+    for paragraph in _paragraphs(text):
+        if whole:
+            current.append(paragraph)
+            count += sum(len(sentence.split()) for sentence in paragraph)
+            if count >= target:
+                flush()
+            continue
+        current.append([])
+        for sentence in paragraph:
+            if count >= target:
+                flush()
+                current.append([])
+            current[-1].append(sentence)
+            count += len(sentence.split())
+    return pieces
+
+
+def _held_out_documents(folder: Path, count: int, seed: int) -> list[str]:
+    """``count`` documents of about 1,000 words drawn by the benchmark's generator from the
+    sample essays in ``folder`` with a seed of their own, in memory: text in the synthetic
+    writer's (or LLM's) manner that no reference here was built from."""
+    bench = _bench()
+    material = bench._pool(folder)
+    rng = random.Random(seed)
+    return [bench._document(rng, material, 1000) for _ in range(count)]
+
+
+def _judged(
+    reference: ReferenceReport, texts: Sequence[str], cutter: Callable[[str], list[str]]
+) -> list[ScoredChunk]:
+    """The judged chunks of ``texts``, each cut by ``cutter``, scored once; a chunk's source
+    is its document."""
+    chunks = [
+        Chunk(f"d{document}#{index}", f"d{document}", piece)
+        for document, text in enumerate(texts)
+        for index, piece in enumerate(cutter(text))
+    ]
+    report = score(chunks, reference, parser=None)
+    return [row for row in report["chunks"] if row["reference"]["calibration"]["judged"]]
+
+
+Judged = tuple[list[ScoredChunk], list[ScoredChunk]]
+
+
+@pytest.fixture(scope="module")
+def mixed_chunks(synthetic_reference: ReferenceReport) -> dict[str, Judged]:
+    """Per cutter, the judged chunks of 300 held-out writer documents and 80 held-out LLM
+    drafts, cut into pieces of mixed length and each scored once, in random order."""
+    writer = _held_out_documents(WRITER, 300, seed=101)
+    drafts = _held_out_documents(DRAFTS, 80, seed=102)
+    found: dict[str, Judged] = {}
+    for name, whole in (("sentences", False), ("paragraphs", True)):
+        rng = random.Random(1)
+
+        def cutter(text: str, rng: random.Random = rng, whole: bool = whole) -> list[str]:
+            return cut_mixed(text, rng, whole=whole)
+
+        own, llm = (_judged(synthetic_reference, texts, cutter) for texts in (writer, drafts))
+        random.Random(2).shuffle(own)
+        random.Random(3).shuffle(llm)
+        found[name] = (own, llm)
+    return found
+
+
+def _disjoint(rows: Sequence[ScoredChunk], count: int) -> list[list[ScoredChunk]]:
+    """``rows`` in consecutive batches of ``count``, none sharing a chunk, so each batch is
+    an observation of its own."""
+    return [list(rows[start : start + count]) for start in range(0, len(rows) - count + 1, count)]
+
+
+def _rates(batches: Sequence[Sequence[ScoredChunk]]) -> dict[str, float]:
+    """How often ``batches`` read somewhat different or worse overall and in any area,
+    leaning LLM, and clearly different or leaning LLM; and how often they flag a chunk."""
+    totals = dict.fromkeys(("overall", "area", "likeness", "flagged", "chunk"), 0)
+    for batch in batches:
+        pooled = verdict(batch, "LLM")
+        level = pooled["delta"]["level"] or 0
+        likeness = (pooled["likeness"] or {}).get("level") or 0
+        totals["overall"] += level >= SOMEWHAT
+        totals["area"] += any(
+            (area["level"] or 0) >= SOMEWHAT for area in pooled["by_group"].values()
+        )
+        totals["likeness"] += likeness >= LEANS
+        totals["flagged"] += level >= CLEARLY or likeness >= LEANS
+        totals["chunk"] += pooled["flagged"] > 0
+    return {key: value / len(batches) for key, value in totals.items()}
+
+
+@pytest.mark.parametrize("cutter", ["sentences", "paragraphs"])
+def test_pooled_verdicts_over_the_writers_short_chunks_stay_close(
+    cutter: str, mixed_chunks: dict[str, Judged]
+) -> None:
+    """Disjoint batches of 5 to 200 of the writer's own held-out chunks, 75 to 300 words
+    each: the pooled verdict reads "somewhat different" or worse at most 5% of the time. It
+    read so for 62% of batches of 200 when the bound for a mean closed in on the pieces'
+    median, which lies below their mean."""
+    own, _ = mixed_chunks[cutter]
+    assert len(own) >= 1400
+    for row in own:
+        # Each chunk alone is judged against its own 95% bound, as before pooling changed.
+        stored = row["reference"]["calibration"]["delta"]
+        assert stored is not None
+        expected = delta_level(row["reference"]["delta"] or 0.0, max(stored["p95"], MIN_CEILING))
+        assert chunk_level(row) == expected
+    for count in BATCHES:
+        batches = _disjoint(own, count)
+        assert len(batches) >= 7
+        rates = _rates(batches)
+        assert rates["overall"] <= MAX_POOLED_FALSE_POSITIVES, (count, len(batches), rates)
+        assert rates["likeness"] <= MAX_POOLED_FALSE_POSITIVES, (count, len(batches), rates)
+        if count >= 20:
+            assert rates["area"] <= MAX_POOLED_FALSE_POSITIVES, (count, len(batches), rates)
+
+
+@pytest.mark.parametrize("cutter", ["sentences", "paragraphs"])
+def test_pooled_verdicts_over_llm_chunks_are_still_flagged(
+    cutter: str, mixed_chunks: dict[str, Judged]
+) -> None:
+    """Disjoint batches of LLM chunks read clearly different or lean LLM; mixed three to
+    seven into writer batches they still read somewhat different or worse; and one to
+    nine, too few to move the mean much, are still named: the verdict counts them."""
+    own, llm = mixed_chunks[cutter]
+    for count in (5, 20, 50):
+        batches = _disjoint(llm, count)
+        assert len(batches) >= 5
+        rates = _rates(batches)
+        assert rates["flagged"] >= MIN_POOLED_DETECTION, (count, rates)
+    for count in (20, 50):
+        for share, key in ((0.3, "overall"), (0.1, "chunk")):
+            mixes = count * share
+            batches = [
+                writer + llm[index * round(mixes) : (index + 1) * round(mixes)]
+                for index, writer in enumerate(_disjoint(own, count - round(mixes)))
+                if (index + 1) * round(mixes) <= len(llm)
+            ]
+            assert len(batches) >= 5
+            rates = _rates(batches)
+            assert rates[key] >= MIN_POOLED_DETECTION, (count, share, rates)
+
+
+def _topical(count: int, seed: int) -> list[tuple[str, str]]:
+    """``count`` documents of about 1,000 words that each keep to one topic, as (topic,
+    text): every paragraph comes from one of the sample essays, copied whole or recombined
+    from its sentences, and about one in ten is a list or quote from it."""
+    essays: dict[str, tuple[list[str], list[str], list[str]]] = {}
+    for path in sorted(WRITER.glob("*.md")):
+        blocks = [
+            block.strip()
+            for block in path.read_text(encoding="utf-8").split("\n\n")
+            if block.strip() and not block.startswith("#")
+        ]
+        plain = [
+            block
+            for block in blocks
+            if not block.startswith(("-", "*", ">", "|", "1.")) and len(block.split()) >= 8
+        ]
+        other = [block for block in blocks if block not in plain]
+        sentences = [
+            sentence
+            for block in plain
+            for sentence in _SENTENCE.split(" ".join(block.split()))
+            if len(sentence.split()) >= 3
+        ]
+        essays[path.stem] = (plain, other, sentences)
+    rng = random.Random(seed)
+    documents: list[tuple[str, str]] = []
+    for _ in range(count):
+        topic = rng.choice(sorted(essays))
+        plain, other, sentences = essays[topic]
+        parts: list[str] = []
+        target = rng.uniform(700, 1300)
+        while sum(len(part.split()) for part in parts) < target:
+            roll = rng.random()
+            if other and roll < 0.1:
+                parts.append(rng.choice(other))
+            elif roll < 0.55:
+                parts.append(" ".join(rng.choice(sentences) for _ in range(rng.randint(2, 7))))
+            else:
+                parts.append(rng.choice(plain))
+        documents.append((topic, "\n\n".join(parts)))
+    return documents
+
+
+def test_runs_on_one_topic_read_close_in_every_area() -> None:
+    """A writer whose documents each keep to one topic: a run of 20 or 50 chunks from
+    documents on one topic shares that topic's offset, which does not average away, and
+    in punctuation, function words and voice it is large. Each range's run similarity (the
+    within-document similarity of its held-out values) keeps any area from reading
+    "somewhat different" in more than about 5% of such runs; one global share of 0.05 let
+    9-11% through."""
+    reference_documents = _topical(80, seed=201)
+    reference = build_reference(
+        window(
+            [Chunk(f"r{i}", f"r{i}", text) for i, (_, text) in enumerate(reference_documents)],
+            WINDOW,
+        ),
+        parser=None,
+    )
+    held = _topical(300, seed=202)
+    rng = random.Random(4)
+    chunks = [
+        Chunk(f"h{document}#{index}", topic, piece)
+        for document, (topic, text) in enumerate(held)
+        for index, piece in enumerate(cut_mixed(text, rng, whole=False))
+    ]
+    report = score(chunks, reference, parser=None)
+    by_topic: dict[str, list[ScoredChunk]] = {}
+    for row in report["chunks"]:
+        if row["reference"]["calibration"]["judged"]:
+            by_topic.setdefault(row["source"], []).append(row)
+    assert len(by_topic) == 7
+    draw = random.Random(5)
+    for count in TOPIC_BATCHES:
+        topics = sorted(topic for topic, rows in by_topic.items() if len(rows) >= 2 * count)
+        assert len(topics) == 7
+        batches = [draw.sample(by_topic[draw.choice(topics)], count) for _ in range(TOPIC_TRIALS)]
+        rates = _rates(batches)
+        assert rates["overall"] <= MAX_POOLED_FALSE_POSITIVES, (count, rates)
+        assert rates["area"] <= MAX_POOLED_FALSE_POSITIVES, (count, rates)
+
+
+def test_the_writers_own_comments_pool_to_close() -> None:
+    """The case that found the bug, without pooling: 3,000 generated comments of about 50
+    words (bench/gen.py), joined ten to a document, make the reference, and 300 held-out
+    comments are scored one by one. 38 are long enough to judge and 35 of them read close
+    alone; the headline over all 38 read "somewhat different" (Delta 1.17 against a bound
+    of 1.12, the pieces' median 0.99 plus their spread over sqrt(38)). It reads close."""
+    bench = _bench()
+    material = bench._pool(WRITER)
+    rng = random.Random(5)
+    train = [bench._comment(rng, material, 50) for _ in range(3000)]
+    seen = set(train)
+    held: list[str] = []
+    while len(held) < 300:
+        text = bench._comment(rng, material, 50)
+        if text not in seen:
+            seen.add(text)
+            held.append(text)
+    documents = [
+        Chunk(f"w{index}", f"w{index}", "\n\n".join(train[index : index + 10]))
+        for index in range(0, len(train), 10)
+    ]
+    reference = build_reference(window(documents, WINDOW), parser=None)
+    report = _score(held, reference)
+    judged = [row for row in report["chunks"] if row["reference"]["calibration"]["judged"]]
+    levels = [chunk_level(row) for row in judged]
+    assert len(judged) == 38
+    assert levels.count(0) == 35
+    assert report["reference"]["verdict"]["verdict"] == sp.Verdict.CLOSE
+
+
+def _essays_and_a_draft(tmp_path: Path) -> tuple[Path, Path, list[str]]:
+    """The reference (the sample essays, 500-word windows, with the LLM drafts as contrast),
+    a run of the seven essays with one LLM draft at the end, and the essays."""
+    reference = tmp_path / "writer.json"
+    write_report(_reference(), reference)
+    essays = [path.read_text(encoding="utf-8") for path in sorted(WRITER.glob("*.md"))]
+    draft = (DRAFTS / "old-maps.md").read_text(encoding="utf-8")
+    run = tmp_path / "run.md"
+    run.write_text("\n\n".join([*essays, draft]), encoding="utf-8")
+    return reference, run, essays
+
+
+def test_a_few_flagged_chunks_are_named_beside_a_close_headline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The headline judges the mean of a run's chunks, which answers whether the run as a
+    whole is like the writer; a few very different chunks among many close ones move it
+    little. So whenever a judged chunk is flagged on its own, the headline says how many,
+    ``-q`` ends its line with them, and the chunk lists name them: the writer's seven
+    essays with one LLM draft at the end, cut at 250 words, read close overall, and the
+    draft's two windows are named."""
+    reference, run, essays = _essays_and_a_draft(tmp_path)
+    args = [str(run), str(reference), "--no-syntax", "--window-words", "250"]
+    assert main(["score", *args]) == 0
+    text = capsys.readouterr().out
+    assert re.search(
+        r"Overall: close   Delta \d\.\d\d; 2 of 17 chunks read clearly different or lean "
+        r"LLM on their own \(see below\)\n",
+        text,
+    ), text
+    least = text.split("Least like the reference\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert sorted(line.rsplit("  ", 1)[1] for line in least[:2]) == ["run.md#w16", "run.md#w17"]
+    assert main(["score", "-q", *args]) == 0
+    assert capsys.readouterr().out.endswith(
+        " (2 of 17 chunks read clearly different or lean LLM)\n"
+    )
+
+    # The essays alone: nothing is flagged, and nothing is added.
+    alone = tmp_path / "essays.md"
+    alone.write_text("\n\n".join(essays), encoding="utf-8")
+    assert main(["score", "-q", str(alone), str(reference), "--no-syntax"]) == 0
+    assert "clearly different" not in capsys.readouterr().out
+    assert _score(["\n\n".join(essays)], _reference())["reference"]["verdict"]["flagged"] == 0
+
+
+def test_fail_flagged_catches_a_few_off_voice_chunks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--fail-above and --fail-likeness judge each document as a whole, so a close run
+    with two very different chunks passes them; --fail-flagged N fails a document with N or
+    more chunks flagged on their own, and the failed: line and the JSON's failed entry give
+    the count whichever check failed. The library's fail policy is the same."""
+    reference, run, _ = _essays_and_a_draft(tmp_path)
+    args = [str(run), str(reference), "--no-syntax", "--window-words", "250", "-q"]
+    assert main(["score", *args, "--fail-above", "clearly", "--fail-likeness", "leans"]) == 0
+    capsys.readouterr()
+
+    assert main(["score", *args, "--fail-flagged", "2"]) == EXIT_FAILED
+    assert capsys.readouterr().err.endswith(
+        f"failed: {run}: 2 of 17 chunks read clearly different or lean LLM\n"
+    )
+    assert main(["score", *args, "--fail-flagged", "3"]) == 0
+    capsys.readouterr()
+
+    # Failing on likeness, the line and the JSON still carry the count.
+    report = tmp_path / "report.json"
+    failing = [*args, "--fail-flagged", "3", "--fail-likeness", "few", "-o", str(report)]
+    assert main(["score", *failing]) == EXIT_FAILED
+    assert capsys.readouterr().err.endswith(
+        f"failed: {run}: likeness a few LLM traits; 2 of 17 chunks read clearly different "
+        "or lean LLM\n"
+    )
+    saved: Any = load_report(report)
+    assert saved["fail"] == {"above": None, "likeness": "few", "flagged": 3}
+    assert saved["failed"] == [
+        {
+            "name": "run.md",
+            "path": "run.md",
+            "delta": None,
+            "likeness": "a few LLM traits",
+            "flagged": 2,
+            "chunks_judged": 17,
+        }
+    ]
+
+    result = sp.Profile.load(reference).score(run, syntax=False, window_words=250)
+    (document,) = result.documents
+    assert document.flagged == 2
+    assert result.failing(flagged=2) == (document,)
+    assert result.failing(flagged=3) == ()
+    assert result.failing(sp.Verdict.CLEARLY_DIFFERENT, sp.LikenessVerdict.LEANS) == ()
+
+    with pytest.raises(SystemExit):
+        main(["score", *args, "--fail-flagged", "0"])
+    assert "must be a whole number of 1 or more" in capsys.readouterr().err
 
 
 # spaCy.

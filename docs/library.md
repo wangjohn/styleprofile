@@ -88,9 +88,13 @@ Each `DocumentResult` has:
 
 The JSON report has the same under `documents` (typed by `schema.DocumentEntry`), apart
 from `location` and `shown`.
-`result.failing(above, likeness)` gives the documents that reach a Delta or likeness
-verdict, as `styleprofile score --fail-above` and `--fail-likeness` check; a document with
-no verdict (too short to judge, or not comparable) never does.
+`result.failing(above, likeness, flagged)` gives the documents that reach a Delta or
+likeness verdict, or that have at least `flagged` chunks reading clearly different or
+leaning toward the contrast set on their own (`document.flagged`), as `styleprofile score
+--fail-above`, `--fail-likeness` and `--fail-flagged` check; a document with no verdict
+(too short to judge, or not comparable) never does. The verdicts judge each document as a
+whole, which a few very different chunks among many close ones move little: `flagged`
+catches those.
 
 ## Inputs
 

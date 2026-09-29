@@ -60,6 +60,28 @@ MIN_CEILING = 0.5
 # |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
 # the reference's own held-out likeness is near zero or averaged over very many chunks.
 LIKENESS_MIN_CEILING = MIN_CEILING / 2
+# With few documents the within-document similarity of pieces (their intraclass
+# correlation) is poorly estimated even pooled over the lengths, and an estimate that
+# happens to be low calls the pieces more independent than they are. Below FLOOR_DOCUMENTS
+# documents it is taken as at least SIMILARITY_FLOOR, a little above the 0.17 measured on
+# the synthetic corpus. In a simulation of 3 to 9 documents with true similarities of 0 to
+# 0.4, among references that pass as calibrated, the share whose bound is exceeded more
+# than 7.5% of the time falls from 7.5% with each length's own estimate to 2.6% (worst case
+# 49% to 12%); a floor of 0.3 would reach 0.9% but calibrate half as many small
+# references (see docs/method.md).
+FLOOR_DOCUMENTS = 10
+SIMILARITY_FLOOR = 0.2
+# How alike the chunks of one run are taken to be, beyond chance: the share of a chunk's
+# variation that every chunk of the run shares, so that it does not average away. Each
+# range stores its own (``run_similarity``): the intraclass correlation by document of that
+# range's held-out values (its windows' or its pieces' Delta, overall or in one area, or
+# their likeness), floored as above below FLOOR_DOCUMENTS documents, and never below
+# MIN_RUN_SIMILARITY. A run of one document, or one topic, shares that document's or
+# topic's offset; and every run shares whatever sets its text apart from the calibration
+# pieces (its format, how it was cut): on the synthetic corpus, cutting held-out text as
+# whole paragraphs or as runs of sentences moves an area's mean by up to a tenth of its
+# spread, which MIN_RUN_SIMILARITY (sqrt 0.22) covers (see docs/method.md).
+MIN_RUN_SIMILARITY = 0.05
 # Calibration pieces come many to a document, so their 95th percentile is read as an upper
 # confidence bound: one-sided, at this many standard errors of the quantile's share (90%).
 UPPER_Z = 1.2816
@@ -253,6 +275,69 @@ def upper_quantile(
     percentile that is the sample maximum below about 31 effective values."""
     effective = max(effective_count(values, groups, icc), 1.0)
     return quantile(values, min(share + z * math.sqrt(share * (1 - share) / effective), 1.0))
+
+
+def t_quantile(share: float, df: int) -> float:
+    """The ``share`` quantile of Student's t with ``df`` degrees of freedom (at least 1):
+    exact for 1 and 2, and the Cornish-Fisher expansion in 1/df beyond (Abramowitz and
+    Stegun 26.7.5), within 0.002 of the exact value from 3 at the shares used here."""
+    df = max(df, 1)
+    if df == 1:
+        return math.tan(math.pi * (share - 0.5))
+    if df == 2:
+        return (2 * share - 1) / math.sqrt(2 * share * (1 - share))
+    z = statistics.NormalDist().inv_cdf(share)
+    terms = (
+        (z**3 + z) / 4,
+        (5 * z**5 + 16 * z**3 + 3 * z) / 96,
+        (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / 384,
+        (79 * z**9 + 776 * z**7 + 1482 * z**5 - 1920 * z**3 - 945 * z) / 92160,
+    )
+    return z + sum(term / df ** (power + 1) for power, term in enumerate(terms))
+
+
+# The one-sided share an upper confidence bound covers, as UPPER_Z does for a normal.
+UPPER_SHARE = 0.9
+
+
+def upper_mean(values: Sequence[float], groups: Sequence[str], icc: float | None = None) -> float:
+    """An upper confidence bound on the mean of ``values``: the mean plus t standard errors,
+    the standard error from n_eff (``effective_count``) and t the 90% quantile of Student's t
+    with one degree of freedom fewer than there are documents (``groups``), since documents,
+    not values, are what vary independently. It is the centre a mean over many chunks is
+    read against (``pooled_ceiling``): held-out Deltas are skewed to the right, so their
+    mean sits above their median, and a mean over many chunks settles on the mean. A mean
+    estimated from few documents is set higher rather than trusted as exact, as
+    ``upper_quantile`` does for the 95th percentile."""
+    mean = statistics.fmean(values)
+    if len(values) < 2:
+        return mean
+    effective = max(effective_count(values, groups, icc), 1.0)
+    t = t_quantile(UPPER_SHARE, len(set(groups)) - 1)
+    return mean + t * statistics.stdev(values) / math.sqrt(effective)
+
+
+def document_similarity(values: Sequence[float], groups: Sequence[str]) -> float:
+    """How alike values from one document are (``intraclass_correlation``, 0 when it cannot
+    be estimated), at least SIMILARITY_FLOOR below FLOOR_DOCUMENTS documents: a few
+    documents estimate it poorly, and a lucky low estimate would call their values more
+    independent than they are."""
+    estimate = intraclass_correlation(values, groups) or 0.0
+    return max(estimate, SIMILARITY_FLOOR) if len(set(groups)) < FLOOR_DOCUMENTS else estimate
+
+
+def run_similarity(values: Sequence[float], groups: Sequence[str]) -> float:
+    """How much of their variation the chunks of one run are taken to share, for one range
+    (see MIN_RUN_SIMILARITY): the ``document_similarity`` of its held-out values, and never
+    below MIN_RUN_SIMILARITY.
+
+    It is the estimate itself, not an upper confidence bound on it: with a few values per
+    document the bound is two to three times the estimate, and on the synthetic corpora it
+    cut the share of batches with 10% of LLM chunks that read "somewhat different" or worse
+    from 47-100% to 3-100%. Pieces are cut from each window twice (as paragraphs and as
+    excerpts), and the two cuts overlap, which makes pieces of one document look a little
+    more alike than they are: an error on the side of a looser bound."""
+    return max(document_similarity(values, groups), MIN_RUN_SIMILARITY)
 
 
 @dataclass(frozen=True)
@@ -654,15 +739,24 @@ def calibrate_delta(
     """The reference's own Delta range on held-out chunks (``held_out_deltas``, or
     ``deltas`` when already computed), overall and per area.
 
+    Each range has its median, an upper confidence bound on its mean (``upper_mean``), its
+    95th percentile, and ``similarity``: the share of their variation the chunks of one run
+    share, from that range's values (``run_similarity``). The overall mean uses the
+    intraclass correlation ``icc``, by default ``document_similarity`` of the overall
+    values; each area's mean uses its own values' ``document_similarity``, as its run
+    similarity does, since an area can vary by document far more than the whole.
+
     With ``upper`` (for calibration pieces, many per document), each 95th percentile is an
-    upper confidence bound (``upper_quantile``) with the intraclass correlation ``icc``
-    (estimated from the values when None), the overall 99th percentile is added, and
-    ``effective`` records how many independent pieces the overall values are worth.
+    upper confidence bound (``upper_quantile``) with ``icc`` too, the overall 99th
+    percentile is added, and ``effective`` records how many independent pieces the overall
+    values are worth.
     """
     deltas = deltas or held_out_deltas(held, sources)
     overall, overall_sources = deltas.overall, deltas.sources
     if not overall:
         return None
+    if icc is None:
+        icc = document_similarity(overall, overall_sources)
 
     def p95(values: list[float], groups: list[str]) -> float:
         if upper:
@@ -677,13 +771,21 @@ def calibrate_delta(
         }
     return {
         "median": statistics.median(overall),
+        "mean": upper_mean(overall, overall_sources, icc=icc),
         "p95": p95(overall, overall_sources),
+        "similarity": run_similarity(overall, overall_sources),
         **extra,
         "max": max(overall),
         "by_group": {
             group: {
                 "median": statistics.median(values),
+                "mean": upper_mean(
+                    values,
+                    deltas.area_sources[group],
+                    icc=document_similarity(values, deltas.area_sources[group]),
+                ),
                 "p95": p95(values, deltas.area_sources[group]),
+                "similarity": run_similarity(values, deltas.area_sources[group]),
             }
             for group, values in deltas.areas.items()
         },
@@ -822,7 +924,9 @@ def likeness_range(
     return {
         "reference": {
             "median": statistics.median(reference_scores),
+            "mean": upper_mean(reference_scores, piece_sources, icc=icc),
             "p95": upper_quantile(reference_scores, piece_sources, 0.95, icc=icc),
+            "similarity": run_similarity(reference_scores, piece_sources),
         },
         "contrast": {"median": statistics.median(contrast_scores)},
     }
@@ -847,7 +951,13 @@ def summarize_contrast(
         "calibration": {
             "reference": {
                 "median": statistics.median(reference_scores),
+                "mean": upper_mean(
+                    reference_scores,
+                    reference_sources,
+                    icc=document_similarity(reference_scores, reference_sources),
+                ),
                 "p95": quantile(reference_scores, 0.95),
+                "similarity": run_similarity(reference_scores, reference_sources),
                 "max": max(reference_scores),
             },
             "contrast": {
@@ -892,35 +1002,53 @@ def delta_level(delta: float, ceiling: float | None = None) -> int:
     return 0 if delta < 1.0 else 1 if delta < 1.5 else 2 if delta < 2.5 else 3
 
 
-def mean_ceiling(stats: Mapping[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
-    """The usual upper bound for an average over ``count`` chunks.
+def centre(stats: Mapping[str, Any]) -> float:
+    """Where a mean over many chunks settles, as a range stores it: its upper bound on the
+    held-out mean (``upper_mean``). (A reference from before ranges stored it is refused as
+    outdated, ``profile.check_version``.)
 
-    A single chunk is unusual above the held-out 95th percentile; an average over n chunks
-    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median. The
-    bound is never below ``floor``, so a near-zero held-out range cannot make a negligible
-    deviation look large.
-    """
+    It is not capped at the 95% bound. A heavy-tailed range (rare large values, such as an
+    area that is usually absent) can have a mean above its 95th percentile, and a pooled
+    mean still converges to the mean, so capping it would flag a long run of the writer's
+    own text; ``pooled_ceiling`` then reads a long run against the mean itself."""
+    return stats["mean"]
+
+
+def mean_ceiling(stats: Mapping[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
+    """The usual upper bound for an average over ``count`` chunks (``pooled_ceiling`` of
+    ``count`` equal ranges)."""
     if stats.get("p95") is None:
         return None
-    median = stats.get("median", stats["p95"])
-    return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
+    return pooled_ceiling([stats] * max(count, 1), floor)
 
 
 def pooled_ceiling(stats: Sequence[Mapping[str, Any]], floor: float = MIN_CEILING) -> float | None:
-    """``mean_ceiling`` for the mean of several chunks that each have their own range, as
-    chunks of different lengths do.
+    """The usual upper bound for the mean of several chunks, each with the range for its
+    own length.
 
-    Each chunk's spread above its median is taken as (p95 - median); the mean's median is
-    the mean of the medians, and its spread the root sum of squares over n, as for a mean
-    of independent values. With n equal ranges this is ``mean_ceiling(stats, n)``.
+    One chunk is unusual above its 95% bound, p95, which is its bound. A mean over n chunks
+    settles on the mean of their centres (``centre``): held-out Deltas are skewed to the
+    right, so their mean sits above their median, and a bound that closed in on the median
+    would call the writer's own text different once enough of it is pooled. Each chunk's
+    spread about its centre is s = p95 - centre (none when the centre is higher), and the
+    chunks of one run share a part r of their variation that does not average away: each
+    range's ``similarity`` (``run_similarity``). As for equicorrelated values, the mean's
+    spread is sqrt(sum of (1 - r) s^2 + (sum of sqrt(r) s)^2) / n, which for n chunks of one
+    range is s x sqrt(r + (1 - r) / n): it never closes in on the centre entirely. The
+    bound is never below ``floor``, so a near-zero held-out range cannot make a negligible
+    deviation look large.
     """
     if not stats or any(item.get("p95") is None for item in stats):
         return None
-    medians = [item.get("median", item["p95"]) for item in stats]
-    spread = math.sqrt(
-        sum((item["p95"] - median) ** 2 for item, median in zip(stats, medians, strict=True))
-    )
-    return max(statistics.fmean(medians) + spread / len(stats), floor)
+    if len(stats) == 1:
+        return max(stats[0]["p95"], floor)
+    centres = [centre(item) for item in stats]
+    spreads = [max(item["p95"] - middle, 0.0) for item, middle in zip(stats, centres, strict=True)]
+    alike = [item["similarity"] for item in stats]
+    independent = sum((1 - r) * s * s for r, s in zip(alike, spreads, strict=True))
+    shared = sum(math.sqrt(r) * s for r, s in zip(alike, spreads, strict=True))
+    spread = math.sqrt(independent + shared * shared)
+    return max(statistics.fmean(centres) + spread / len(stats), floor)
 
 
 def likeness_level(score: float, calibration: Mapping[str, Any], count: int = 1) -> int:

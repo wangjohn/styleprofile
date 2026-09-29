@@ -154,10 +154,15 @@ class ReportBase(TypedDict):
 
 
 class GroupRange(TypedDict):
-    """A held-out Delta range: typical and 95th percentile."""
+    """A held-out Delta range: typical, the centre a mean over many chunks is read against
+    (an upper confidence bound on the mean, ``weighting.upper_mean``), 95th percentile, and
+    the share of their variation the chunks of one run share (``weighting.run_similarity``,
+    from the windows' held-out values for this range)."""
 
     median: float
+    mean: float
     p95: float
+    similarity: float
 
 
 class DeltaRange(GroupRange):
@@ -241,7 +246,11 @@ class LikenessRange(TypedDict):
     """Held-out likeness of the reference's own chunks."""
 
     median: float
+    # An upper confidence bound on the mean (``weighting.upper_mean``).
+    mean: float
     p95: float
+    # The share of their variation a run's chunks share (``weighting.run_similarity``).
+    similarity: float
     max: float
 
 
@@ -468,6 +477,9 @@ class ScoreVerdict(TypedDict):
     by_group: dict[str, VerdictArea]
     # None without a contrast set (or with no chunk scored for likeness).
     likeness: VerdictLikeness | None
+    # How many judged chunks are flagged on their own (``calibration.chunk_flagged``): the
+    # verdict judges their mean, which a few very different chunks move little.
+    flagged: int
 
 
 class ReferenceScore(TypedDict):
@@ -521,16 +533,21 @@ class DocumentEntry(TypedDict):
     # None without a contrast set.
     likeness: float | None
     likeness_verdict: str | None
+    # As ``ScoreVerdict.flagged``: its judged chunks flagged on their own.
+    flagged: int
     differences: list[DocumentDifference]
     # Only against a reference with a contrast set.
     signals: NotRequired[list[DocumentSignal]]
 
 
 class FailLevels(TypedDict):
-    """The levels ``score --fail-above`` and ``--fail-likeness`` asked for; None if not."""
+    """The levels ``score --fail-above``, ``--fail-likeness`` and ``--fail-flagged`` asked
+    for; None if not."""
 
     above: Literal["somewhat", "clearly", "very"] | None
     likeness: Literal["few", "leans", "like"] | None
+    # The fewest chunks flagged on their own that fail a document.
+    flagged: int | None
 
 
 class FailedDocument(TypedDict):
@@ -541,6 +558,10 @@ class FailedDocument(TypedDict):
     path: str
     delta: str | None
     likeness: str | None
+    # How many of its judged chunks are flagged on their own (``DocumentEntry.flagged``),
+    # whichever check it failed, and how many were judged.
+    flagged: int
+    chunks_judged: int
 
 
 class ScoreReport(ReportBase):
@@ -551,7 +572,7 @@ class ScoreReport(ReportBase):
     # Each document's own verdict, in input order.
     documents: list[DocumentEntry]
     reference: ReferenceScore
-    # Only when ``score`` was given --fail-above or --fail-likeness.
+    # Only when ``score`` was given --fail-above, --fail-likeness or --fail-flagged.
     fail: NotRequired[FailLevels]
     failed: NotRequired[list[FailedDocument]]
 

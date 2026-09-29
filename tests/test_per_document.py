@@ -375,9 +375,17 @@ def test_fail_above_applies_with_json_and_the_full_view(
     argv = ["score", "--json", "--fail-above", "clearly", OWN_TYPED, DRAFT_TYPED, str(saved)]
     assert main(argv) == EXIT_FAILED
     report = json.loads(capsys.readouterr().out)  # stdout stays pure JSON
-    assert report["fail"] == {"above": "clearly", "likeness": None}
+    assert report["fail"] == {"above": "clearly", "likeness": None, "flagged": None}
+    # The entry counts its chunks flagged on their own, whichever check it failed.
     assert report["failed"] == [
-        {"name": "old-maps.md", "path": "old-maps.md", "delta": "very different", "likeness": None}
+        {
+            "name": "old-maps.md",
+            "path": "old-maps.md",
+            "delta": "very different",
+            "likeness": None,
+            "flagged": 1,
+            "chunks_judged": 1,
+        }
     ]
     assert main(["score", "--fail-above", "very", OWN_TYPED, DRAFT_TYPED, str(saved)]) == 3
 
@@ -497,6 +505,7 @@ def _document(name: str, verdict: str, delta: float) -> DocumentEntry:
         "verdict": verdict,
         "likeness": None,
         "likeness_verdict": None,
+        "flagged": 0,
         "differences": [],
     }
 
@@ -557,7 +566,7 @@ def test_failing_is_linear_in_the_number_of_documents(profile: sp.Profile) -> No
     far = result.report["documents"][1]
     assert far["verdict"] == "very different"
     result.report["documents"] = [{**far, "name": f"far-{index}.md"} for index in range(2000)]
-    args = argparse.Namespace(fail_above="clearly", fail_likeness="few")
+    args = argparse.Namespace(fail_above="clearly", fail_likeness="few", fail_flagged=None)
     start = time.perf_counter()
     failed = _failed(args, result)
     # Quadratic, this took about 16 s; linear, a few milliseconds.

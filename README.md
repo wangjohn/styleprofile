@@ -137,6 +137,15 @@ draft fails the run even when the rest are close:
 styleprofile score -q --fail-above clearly --fail-likeness leans drafts/ writer.json
 ```
 
+Those two judge each document **as a whole**: the mean over its chunks (windows), which a
+few off-voice passages in a long document move little. `--fail-flagged N` catches them: it
+fails a document with N or more chunks that read clearly different or lean LLM on their
+own, the chunks the output names under "Least like the reference" and "Most LLM-like
+chunks". The writer's own text flags such a chunk now and then by chance, about one in a
+thousand chunks (0–0.14% in our measurements), so a run of 200 of the writer's own chunks
+names at least one in 15–27% of cases. Choose N by length: 1 suits documents of a few
+windows (blog posts, essays), and 2 or more documents of a hundred windows or more.
+
 `-r writer.json` gives the reference before the drafts instead of last, for tools that append
 file names, such as [pre-commit](https://pre-commit.com). This `.pre-commit-config.yaml`
 checks every staged Markdown file:
@@ -147,34 +156,38 @@ repos:
     hooks:
       - id: styleprofile
         name: styleprofile
-        entry: styleprofile score -q --fail-above clearly -r writer.json
+        entry: styleprofile score -q --fail-above clearly --fail-flagged 1 -r writer.json
         language: system
         types: [markdown]
         require_serial: true  # one run for all the files: spaCy loads once
 ```
 
 A failing commit prints each file's verdict, then a `failed:` line on stderr for each file
-that reached a level, in the order given:
+that reached a level, in the order given, with how many of its chunks are flagged on their
+own whenever it has some:
 
 ```
 posts/old-maps.md: very different (Delta 4.61); LLM-likeness leans LLM (13.83)
 posts/sharpening.md: close (Delta 0.57); LLM-likeness like the reference (0.08)
+posts/long-essay.md: close (Delta 1.08); LLM-likeness a few LLM traits (1.59) (2 of 17 chunks read clearly different or lean LLM)
 failed: posts/old-maps.md: delta very different
+failed: posts/long-essay.md: 2 of 17 chunks read clearly different or lean LLM
 ```
 
 | Exit status | Meaning |
 |---|---|
-| 0 | scored; no document reached a `--fail-above` or `--fail-likeness` level |
+| 0 | scored; no document reached a `--fail-above`, `--fail-likeness` or `--fail-flagged` level |
 | 1 | an error, such as a missing file or an unreadable profile |
 | 2 | invalid command-line usage |
-| 3 | a document reached the `--fail-above` or `--fail-likeness` level |
+| 3 | a document reached the `--fail-above`, `--fail-likeness` or `--fail-flagged` level |
 
 Each document is named as you typed it, and a JSONL record by its file and id
 (`exports/comments.jsonl:17`); standard input is `<stdin>`. A document with no verdict,
 because it is too short to judge (its line says `too short to judge (36 words)`) or has no
 metric in common with the reference, never fails a run. With a fail flag, the JSON report (`--json` or `-o`)
 records the levels asked for under `fail`, and under `failed` each document that reached
-one, with the Delta and likeness verdicts that did; that is the form for scripts to read.
+one, with the Delta and likeness verdicts that did and how many of its judged chunks are
+flagged on their own (`flagged` of `chunks_judged`); that is the form for scripts to read.
 
 ## Getting useful results
 

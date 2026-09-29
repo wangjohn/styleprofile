@@ -34,7 +34,7 @@ from styleprofile.api import (
     Settings,
     SettingsOverrides,
 )
-from styleprofile.calibration import too_short_text
+from styleprofile.calibration import flagged_text, too_short_text
 from styleprofile.core import (
     LikenessVerdict,
     Note,
@@ -79,7 +79,8 @@ NOTE_HINTS = {
     ),
     NoteCode.READ_AS_JSONL: "pass --input-format markdown to read it as prose",
 }
-# `score` exits with this when a document reaches a --fail-above or --fail-likeness level.
+# `score` exits with this when a document reaches a --fail-above, --fail-likeness or
+# --fail-flagged level.
 EXIT_FAILED = 3
 FAIL_ABOVE = {
     "somewhat": Verdict.SOMEWHAT_DIFFERENT,
@@ -93,8 +94,9 @@ FAIL_LIKENESS = {
 }
 SCORE_EXIT_STATUS = f"""\
 exit status: 0 scored, 1 error, 2 usage error, {EXIT_FAILED} a document reached the
---fail-above or --fail-likeness level (named on stderr, in input order); a document with
-no verdict (not comparable, or too short to judge) never does"""
+--fail-above, --fail-likeness or --fail-flagged level (named on stderr, in input order); a
+document with no verdict (not comparable, or too short to judge) never does. A few
+off-voice chunks move a whole document's verdict little: --fail-flagged catches them"""
 # Library errors and notes name a setting (``setting``) as a whole word; the CLI prints the
 # flag that sets it instead.
 FLAGS = {
@@ -102,6 +104,17 @@ FLAGS = {
     "min_words": "--min-words",
     "top_k": "--top-k",
 }
+
+
+def _positive(value: str) -> int:
+    """An argparse type: a whole number of 1 or more."""
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be a whole number of 1 or more, not {value!r}")
+    return number
 
 
 def _path(value: str) -> Path:
@@ -260,7 +273,8 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
             "Score drafts against a reference profile. Window size, minimum words, text field "
             "and syntax come from the reference unless overridden.",
             f"{PROG} score draft.md writer.json\n  "
-            f"{PROG} score -q --fail-above clearly -r writer.json a.md b.md   # a hook or CI",
+            f"{PROG} score -q --fail-above clearly --fail-flagged 1 -r writer.json a.md b.md"
+            "   # a hook or CI",
             usage=f"{PROG} score [options] [-r REFERENCE.json] SAMPLE [SAMPLE ...] "
             "[REFERENCE.json]",
         ),
@@ -294,12 +308,19 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     score_parser.add_argument(
         "--fail-above",
         choices=list(FAIL_ABOVE),
-        help=f"exit {EXIT_FAILED} if a document is at least this different",
+        help=f"exit {EXIT_FAILED} if a whole document is this different or more",
     )
     score_parser.add_argument(
         "--fail-likeness",
         choices=list(FAIL_LIKENESS),
-        help=f"exit {EXIT_FAILED} if a document's likeness reaches this level",
+        help=f"exit {EXIT_FAILED} if a whole document's likeness reaches this",
+    )
+    score_parser.add_argument(
+        "--fail-flagged",
+        type=_positive,
+        metavar="N",
+        help=f"exit {EXIT_FAILED} if a document has N or more chunks that read clearly "
+        "different or lean LLM on their own",
     )
     score_parser.add_argument(
         "--all", action="store_true", help="show every metric and document, not just key ones"
@@ -544,9 +565,11 @@ def _headline(
     *,
     too_short: str | None = None,
     note: str = "",
+    flagged: str = "",
 ) -> str:
     """One line with the same verdict words as the full comparison view; ``too_short``
-    replaces the verdict and figures of a text too short to judge."""
+    replaces the verdict and figures of a text too short to judge, and ``flagged`` ("4 of 40
+    chunks read clearly different or lean LLM") ends it in parentheses."""
     if delta is None:
         return f"{name}: no metrics could be compared with the reference"
     if too_short:
@@ -554,7 +577,14 @@ def _headline(
     parts = [f"{name}: {verdict} (Delta {delta:.2f}{note})"]
     if likeness is not None and likeness_verdict is not None and label:
         parts.append(f"{label}-likeness {likeness_verdict.words(label)} ({likeness:.2f})")
-    return "; ".join(parts)
+    return "; ".join(parts) + (f" ({flagged})" if flagged else "")
+
+
+def _flag_count(flagged: int, judged: int, chunks: int, label: str | None) -> str:
+    """ "4 of 40 chunks read clearly different or lean LLM" for ``-q`` and ``failed:``
+    lines when a verdict over several judged chunks has some flagged on their own, else
+    ""."""
+    return flagged_text(flagged, judged, chunks, label) if flagged and judged > 1 else ""
 
 
 def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
@@ -578,6 +608,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
                 if doc.judged
                 else too_short_text({"chunks": doc.chunks, "words": doc.words}),
                 note=not_judged(doc.chunks, doc.chunks_judged),
+                flagged=_flag_count(doc.flagged, doc.chunks_judged, doc.chunks, label),
             )
             for doc in ranked
         ]
@@ -603,6 +634,9 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
             result.likeness_verdict,
             label,
             note=note,
+            flagged=_flag_count(
+                verdict["flagged"], verdict["chunks_judged"], verdict["chunks"], label
+            ),
         )
     ]
 
@@ -610,16 +644,20 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
 def _failed(
     args: argparse.Namespace, result: ScoreResult
 ) -> list[tuple[DocumentResult, FailedDocument]]:
-    """The documents that reach the --fail-above or --fail-likeness level, in input order,
-    each with what the report records: the verdicts that did (None for a check it passed).
-    Each document is checked once (``api.fails``), so this is linear in their number."""
+    """The documents that reach the --fail-above, --fail-likeness or --fail-flagged level,
+    in input order, each with what the report records: the verdicts that did (None for a
+    check it passed), and how many of its chunks are flagged on their own, whichever check
+    it failed. Each document is checked once (``api.fails``), so this is linear in their
+    number."""
     above = FAIL_ABOVE.get(args.fail_above or "")
     likeness = FAIL_LIKENESS.get(args.fail_likeness or "")
     label = result.contrast_label or ""
     entries: list[tuple[DocumentResult, FailedDocument]] = []
     for doc in result.documents:
-        delta_failed, likeness_failed = api.fails(doc, above, likeness)
-        if not (delta_failed or likeness_failed):
+        delta_failed, likeness_failed, flagged_failed = api.fails(
+            doc, above, likeness, args.fail_flagged
+        )
+        if not (delta_failed or likeness_failed or flagged_failed):
             continue
         entry: FailedDocument = {
             "name": doc.name,
@@ -630,16 +668,23 @@ def _failed(
                 if likeness_failed and doc.likeness_verdict
                 else None
             ),
+            "flagged": doc.flagged,
+            "chunks_judged": doc.chunks_judged,
         }
         entries.append((doc, entry))
     return entries
 
 
-def _failed_line(doc: DocumentResult, entry: FailedDocument) -> str:
-    """``failed: drafts/a.md: delta very different; likeness leans LLM``: one per document,
-    named as ``-q`` names it."""
+def _failed_line(doc: DocumentResult, entry: FailedDocument, label: str | None) -> str:
+    """``failed: drafts/a.md: delta very different; likeness leans LLM; 2 of 17 chunks read
+    clearly different or lean LLM``: one per document, named as ``-q`` names it. The count
+    of chunks flagged on their own is there whenever it has some, whichever check failed;
+    for a document of one judged chunk only when nothing else is, since its verdict is that
+    chunk's own (the JSON entry always has it)."""
     parts = [f"delta {entry['delta']}"] if entry["delta"] else []
     parts += [f"likeness {entry['likeness']}"] if entry["likeness"] else []
+    if entry["flagged"] and (entry["chunks_judged"] > 1 or not parts):
+        parts.append(flagged_text(entry["flagged"], entry["chunks_judged"], doc.chunks, label))
     return f"failed: {doc.shown}: " + "; ".join(parts)
 
 
@@ -672,10 +717,14 @@ def _run_score(args: argparse.Namespace) -> int:
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     failed = _failed(args, result)
-    if args.fail_above or args.fail_likeness:
+    if args.fail_above or args.fail_likeness or args.fail_flagged:
         # Recorded for CI, which reads --json or -o: the levels asked, and who reached them.
         # argparse allows only FAIL_ABOVE's and FAIL_LIKENESS's keys.
-        levels: FailLevels = {"above": args.fail_above, "likeness": args.fail_likeness}
+        levels: FailLevels = {
+            "above": args.fail_above,
+            "likeness": args.fail_likeness,
+            "flagged": args.fail_flagged,
+        }
         result.report["fail"] = levels
         result.report["failed"] = [entry for _, entry in failed]
     if args.output:
@@ -697,7 +746,7 @@ def _run_score(args: argparse.Namespace) -> int:
     if failed:
         sys.stdout.flush()  # keep these after the report when both go to one pipe
         for doc, entry in failed:
-            print(_failed_line(doc, entry), file=sys.stderr)
+            print(_failed_line(doc, entry, result.contrast_label), file=sys.stderr)
         return EXIT_FAILED
     return 0
 
