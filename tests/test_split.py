@@ -410,12 +410,12 @@ def _calibrated(profile: sp.Profile) -> list[str]:
     return sorted((length for length, entry in lengths.items() if "delta" in entry), key=int)
 
 
-def test_a_few_manuscripts_are_split_when_that_calibrates_more(tmp_path: Path) -> None:
+def test_fewer_than_ten_documents_split_at_their_headings(tmp_path: Path) -> None:
     folder = _manuscripts(tmp_path / "books", 3)
     profile = sp.build(folder, SURFACE)
     assert _coded(profile.notes, sp.NoteCode.SPLIT) == [
-        "split 3 texts into 24 documents at their headings: as 3 documents the reference "
-        "could likely calibrate no short length, and split, 75, 150 and 300 words"
+        "split 3 texts into 24 documents at their headings, since 3 documents are too few "
+        "to calibrate well"
     ]
     assert profile.report["document_count"] == 24
     assert _calibrated(profile) == ["75", "150", "300"]
@@ -428,15 +428,27 @@ def test_a_few_manuscripts_are_split_when_that_calibrates_more(tmp_path: Path) -
     assert mixed.report["document_count"] == 25 and "stand-in" not in str(mixed.report["settings"])
 
 
-def test_manuscripts_that_calibrate_already_are_kept_whole_with_a_hint(tmp_path: Path) -> None:
+def test_manuscripts_that_calibrate_already_still_split_like_their_chapters(
+    tmp_path: Path,
+) -> None:
     folder = _manuscripts(tmp_path / "books", 5, chapters=6, words=2400)
-    profile = sp.build(folder, SURFACE)
-    assert profile.report["document_count"] == 5
-    assert _coded(profile.notes, sp.NoteCode.SPLIT) == [
-        "5 texts divide at their headings into 30 parts; they are kept whole, since as 5 "
-        "documents the reference can likely calibrate 75, 150 and 300 words already, and "
-        "split_on heading would split them"
+    assert _calibrated(sp.build(folder, sp.Settings(syntax=False, split_on="none"))) == [
+        "75",
+        "150",
+        "300",
     ]
+    profile = sp.build(folder, SURFACE)
+    assert profile.report["document_count"] == 30
+    chapters = tmp_path / "chapters"
+    chapters.mkdir()
+    for book in sorted(folder.glob("*.md")):
+        for number, text in enumerate(book.read_text(encoding="utf-8").split("\n\n# ")):
+            (chapters / f"{book.stem}-{number:02d}.md").write_text(
+                text if number == 0 else "# " + text, encoding="utf-8"
+            )
+    files = sp.build(chapters, SURFACE)
+    for key in ("summary", "calibration", "reliability"):
+        assert profile.report[key] == files.report[key], key  # type: ignore[literal-required]
 
 
 def test_ten_or_more_documents_are_never_split_automatically(tmp_path: Path) -> None:
@@ -452,14 +464,13 @@ def test_ten_or_more_documents_are_never_split_automatically(tmp_path: Path) -> 
     assert asked.report["document_count"] == 40
 
 
-def test_texts_that_already_calibrate_are_not_split(tmp_path: Path) -> None:
-    # Three long essays that split into two halves each gain no calibrated length.
-    folder = tmp_path / "essays"
+def test_texts_whose_sections_are_short_stay_whole(tmp_path: Path) -> None:
+    # Headings every short paragraph divide nothing: a few such posts are left as they are.
+    folder = tmp_path / "posts"
     folder.mkdir()
     for n in range(3):
-        (folder / f"{n}.md").write_text(
-            f"# A\n\n{_prose(300, n)}\n\n# B\n\n{_prose(300, n + 3)}", encoding="utf-8"
-        )
+        sections = "\n\n".join(f"## Q{q}\n\n{_prose(80, n + q)}" for q in range(8))
+        (folder / f"{n}.md").write_text(sections, encoding="utf-8")
     profile = sp.build(folder, SURFACE)
     assert profile.report["document_count"] == 3
     assert not _coded(profile.notes, sp.NoteCode.SPLIT)

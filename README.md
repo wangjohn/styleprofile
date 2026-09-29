@@ -284,9 +284,9 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   HTML page, whichever gives the fewest parts of at least half a window, never inside code
   blocks or front matter. A novel splits at its chapters, not its scene breaks. `build` says
   so (`note: split book.md into 14 documents at its level-1 headings`), and the reference
-  gets held-out calibration and can take `--contrast`. Two to nine manuscripts are split
-  the same way when that calibrates more short lengths, which it does for up to about
-  three; the note says why. A single file with no such markers is cut into 8 stand-in
+  gets held-out calibration and can take `--contrast`. With fewer than 10 documents, long
+  texts are split at their headings (or rules) the same way, so a few manuscripts get the
+  reference their chapters as separate files would. A single file with no such markers is cut into 8 stand-in
   documents of consecutive text, and the profile keeps a warning: calibration from them is
   less sensitive, so short off-voice passages are caught less often. Headings, rules or
   separate files are better. Ten or more documents are never split; `--split-on heading`

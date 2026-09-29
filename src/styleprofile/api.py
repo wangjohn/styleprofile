@@ -40,7 +40,6 @@ from styleprofile.calibration import (
     MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
     MIN_JUDGED_WORDS,
-    likely_calibrated,
     too_short_text,
 )
 from styleprofile.core import (
@@ -184,9 +183,9 @@ class Settings:
       documents are split at their headings or rules, or, with neither, cut into 8
       (``split.STAND_INS``) stand-in documents of consecutive windows, whose caveat the
       report keeps as a warning; fewer than ``FLOOR_DOCUMENTS`` are split at their headings
-      or rules only, and only when that likely calibrates more short lengths; more are left
-      as they are. JSONL records are never split. Each split is noted. ``Profile.score``
-      does not inherit it, and ``"auto"`` never splits drafts: each is one document unless
+      or rules only, wherever they have them; more are left as they are. JSONL records are
+      never split. Each split is noted. ``Profile.score`` does not inherit it, and
+      ``"auto"`` never splits drafts: each is one document unless
       ``"heading"``, ``"heading:N"`` or ``"rule"`` is asked for, which splits a text into two
       parts or more and gives a manuscript a verdict per chapter.
 
@@ -1545,9 +1544,10 @@ def _split(
       it splits every text it can into at least ``split.MIN_PARTS`` parts, and leaves the
       rest for stand-ins;
     - with fewer than ``FLOOR_DOCUMENTS`` documents (several manuscripts), it splits every
-      text its markers divide into two parts or more, never into stand-ins, when that is
-      likely to calibrate more of the short lengths (``calibration.likely_calibrated``) than
-      the texts as they are, for the writer's texts; the contrast set is left as it is;
+      text its markers divide into two parts or more, never into stand-ins: below that many
+      documents each is worth only a few independent calibration pieces (their similarity
+      is floored), so chapters as documents calibrate more, and more tightly, than their
+      books. This is for the writer's texts; the contrast set is left as it is;
     - with more, it splits nothing.
 
     ``"heading"``, ``"heading:N"`` or ``"rule"`` split any text their markers divide into
@@ -1567,42 +1567,13 @@ def _split(
         else plan_split(chunk.text, size, mode, minimum, plain=_plain(chunk))
         for chunk in chunks
     ]
-    reason = ""
-    if automatic and not few:
-        before = _document_words(chunks)
-        after = _document_words(
-            [
-                Chunk(str(number), "", text, document=f"{chunk_document(chunk)}{_PART}{number}")
-                for chunk, plan in zip(chunks, plans, strict=True)
-                for number, text in enumerate(plan.texts if plan else [chunk.text])
-            ]
-        )
-        now, then = likely_calibrated(before), likely_calibrated(after)
-        if len(then) <= len(now):
-            divide = [plan for plan in plans if plan is not None]
-            if divide and now:
-                # Calibrated already, so left whole; more documents still narrow the
-                # ranges' uncertainty, so say how to get them.
-                where = {plan.kind for plan in divide}
-                markers = "headings or rules" if len(where) > 1 else f"{next(iter(where))}s"
-                texts = _plural(len(divide), "text")
-                notes.append(
-                    Note(
-                        f"{texts} {'divides' if len(divide) == 1 else 'divide'} at their "
-                        f"{markers} into "
-                        f"{sum(len(plan.parts) for plan in divide):,} parts; they are kept "
-                        f"whole, since as {_plural(count, 'document')} the reference can "
-                        f"likely calibrate {_lengths(now)} already, and split_on "
-                        f"{'heading' if 'heading' in where else 'rule'} would split them",
-                        NoteCode.SPLIT,
-                        setting="split_on",
-                    )
-                )
-            return chunks, set(), set()
-        reason = (
-            f": as {_plural(count, 'document')} the reference could likely calibrate "
-            f"{_lengths(now)}, and split, {_lengths(then)}"
-        )
+    # With a few documents, each is worth only a few independent calibration pieces, so the
+    # texts split at their structure whenever it gives more documents.
+    reason = (
+        f", since {_plural(count, 'document')} are too few to calibrate well"
+        if automatic and not few
+        else ""
+    )
     out: list[Chunk] = []
     whole: list[Chunk] = []
     used: set[str] = set()
@@ -1634,7 +1605,7 @@ def _split(
     if len(done) > NOTED_SPLITS or (reason and len(done) > 1):
         where = "headings or rules" if len(used) > 1 else f"{next(iter(used))}s"
         done = [f"split {len(done):,} {role}texts into {parts:,} documents at their {where}"]
-    if reason:
+    if reason and done:
         done = [done[0] + reason]
     notes += [Note(message, NoteCode.SPLIT, setting="split_on") for message in done]
     if done:
@@ -1672,22 +1643,6 @@ NOTED_SPLITS = 3
 def _plain(chunk: Chunk) -> bool:
     """Whether ``chunk`` is a plain-text file, whose chapter lines are headings."""
     return chunk.path is not None and Path(chunk.path).suffix.lower() == ".txt"
-
-
-def _document_words(chunks: Sequence[Chunk]) -> list[int]:
-    """Each document's prose words (``surface.words``), for ``likely_calibrated``."""
-    sizes: Counter[str] = Counter()
-    for chunk in chunks:
-        sizes[chunk_document(chunk)] += len(words(chunk.text))
-    return list(sizes.values())
-
-
-def _lengths(lengths: Sequence[int]) -> str:
-    """Calibrated lengths in words: "75, 150 and 300 words", or "no short length"."""
-    if not lengths:
-        return "no short length"
-    shown = [str(length) for length in lengths]
-    return (", ".join(shown[:-1]) + " and " if len(shown) > 1 else "") + shown[-1] + " words"
 
 
 def _label(chunk: Chunk) -> str:

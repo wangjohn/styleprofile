@@ -283,7 +283,8 @@ def test_a_few_large_documents_without_windows_are_calibrated(corpus: Path) -> N
         )
         for i in range(6)
     ]
-    profile = sp.build(books, sp.Settings(window_words=0, syntax=False))
+    # Kept whole: split at their titles, they would be 48 documents (see test_split).
+    profile = sp.build(books, sp.Settings(window_words=0, syntax=False, split_on="none"))
     lengths = profile.report["calibration"]["by_length"]
     # Every book contributes pieces; six are enough even counted as alike within a book.
     assert all(entry["documents"] == 6 and enough(entry) for entry in lengths.values())

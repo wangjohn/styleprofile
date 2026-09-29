@@ -163,7 +163,7 @@ JSONL, `syntax`, `top_k`, `input_format`, `group_field` (the JSONL field that gr
 records into documents), `pool` (`"auto"`, `True` or `False`: join short texts into
 windows; `"auto"` does when the median text is under a quarter of a window) and `split_on`
 (`"auto"`, `"heading"`, `"heading:N"`, `"rule"` or `"none"`: split long texts into
-documents at their headings or rules; `"auto"` does when the texts are too few documents to
+documents at their headings or rules; `"auto"` does when the texts are fewer than 10 documents, too few to
 calibrate well, as `sp.build(sp.Text(manuscript, "book"))` is, and cuts a lone text with
 neither into stand-ins). A profile records them verbatim, plus `pool_used`, `split_used` and
 `contrast_split_used`, and `profile.settings`

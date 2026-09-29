@@ -376,34 +376,6 @@ def calibrate_length(
     return entry
 
 
-def likely_calibrated(document_words: Sequence[int]) -> tuple[int, ...]:
-    """The ``CALIBRATION_LENGTHS`` a reference of documents of these sizes (prose words)
-    can likely calibrate, before measuring anything: those with pieces from
-    ``MIN_CALIBRATION_DOCUMENTS`` documents worth ``MIN_CALIBRATION_PIECES`` independent
-    ones. Pieces are taken as each document's words over the length (at most
-    ``CALIBRATION_WORDS`` in all, shared in proportion), and alike within a document by
-    ``SIMILARITY_FLOOR``, the least ``calibrate_length`` assumes below ``FLOOR_DOCUMENTS``
-    documents. An estimate, for choosing whether to split texts into more documents: with
-    many pieces to a document, each document is worth about 1 / SIMILARITY_FLOOR pieces, so
-    three long documents calibrate nothing however long they are."""
-    sizes = [words for words in document_words if words > 0]
-    total = sum(sizes)
-    if len(sizes) < MIN_CALIBRATION_DOCUMENTS:
-        return ()
-    share = min(1.0, CALIBRATION_WORDS / total)
-    found: list[int] = []
-    for length in CALIBRATION_LENGTHS:
-        pieces = [words * share / length for words in sizes]
-        count = sum(pieces)
-        if count < MIN_CALIBRATION_PIECES:
-            continue
-        # n0, the adjusted mean group size, as ``weighting.effective_count`` takes it.
-        size = (count - sum(n * n for n in pieces) / count) / (len(pieces) - 1)
-        if count / (1 + max(size - 1, 0) * SIMILARITY_FLOOR) >= MIN_CALIBRATION_PIECES:
-            found.append(length)
-    return tuple(found)
-
-
 def enough(entry: Mapping[str, Any]) -> bool:
     """Whether a length has pieces from enough documents, worth enough independent pieces,
     to be calibrated."""

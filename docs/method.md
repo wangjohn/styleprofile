@@ -114,13 +114,11 @@ so three long documents calibrate no short length however long they are. `build`
 
 - **Fewer than 3 documents:** each Markdown, text or HTML text is split at its structure
   into 3 parts or more, or, with none, cut into stand-ins (below).
-- **Fewer than 10 documents:** texts are split at their structure into 2 parts or more,
-  never into stand-ins, when that likely calibrates more of the 75-, 150- and 300-word
-  lengths than the texts as they are. The estimate (`calibration.likely_calibrated`)
-  counts each document's pieces at each length and discounts them for being alike, as
-  calibration does; the note says what it expects, e.g. "split 3 texts into 36 documents
-  at their headings: as 3 documents the reference could likely calibrate no short length,
-  and split, 75, 150 and 300 words".
+- **Fewer than 10 documents:** long texts are split at their headings (or rules) into 2
+  parts or more, never into stand-ins, e.g. "split 3 texts into 36 documents at their
+  headings, since 3 documents are too few to calibrate well". Chapters as documents give
+  the reference that the chapters as separate files would, which calibrates more lengths,
+  and more tightly, than the books (see the table below).
 - **10 documents or more:** nothing is split. A folder of posts is left as it is.
 
 The contrast set is split only when it is fewer than 3 documents (its AUC resamples, and
@@ -197,14 +195,14 @@ documents cut into pieces (both cuts, all lengths; surface metrics, seed 11):
 | 3 | default (split) | 36 | 75, 150, 300 | 2.7% | 0.1% | 89% / 99% |
 | 3 | `--split-on none` | 3 | none | 3.8% of 213 | 0% | – |
 | 3 | chapters as files | 36 | 75, 150, 300 | 2.7% | 0.1% | 89% / 99% |
-| 5 | default (not split) | 5 | 75, 150, 300 | 0.7% | 0.1% | 80% / 89% |
+| 5 | default (split) | 60 | 75, 150, 300 | 2.1% | 0.1% | 84% / 96% |
+| 5 | `--split-on none` | 5 | 75, 150, 300 | 0.7% | 0.1% | 80% / 89% |
 | 5 | chapters as files | 60 | 75, 150, 300 | 2.1% | 0.1% | 84% / 96% |
 
 (1,349 judged pieces unless noted: an uncalibrated reference judges only pieces near its
-window length.) Split, one to three manuscripts give the same reference as their chapters
-as files. Five manuscripts already calibrate every length, so the default leaves them
-whole; their ranges are wider and they catch fewer short LLM passages than their chapters
-would, and `--split-on heading` gives the chapters' reference.
+window length.) Split, the manuscripts give the same reference as their chapters as files.
+Kept whole, one to three calibrate no short length; five do, but with wider ranges that
+catch fewer short LLM passages.
 
 ## Two scores
 
