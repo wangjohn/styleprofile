@@ -64,6 +64,7 @@ PROG = "styleprofile"
 # Advice for library errors, which name the problem but never a flag.
 HINTS = {
     "text_field": "pass --text-field with the JSONL field that holds the text",
+    "group_field": "pass --group-field with a JSONL field the records have, such as thread",
     "contrast_needs_documents": "add more of the writer's documents, or build without --contrast",
     "score_as_reference": "score against the reference profile made by `styleprofile build`",
     "unmatched_edits": "give each edited file its original's name and relative path",
@@ -103,6 +104,8 @@ FLAGS = {
     "window_words": "--window-words",
     "min_words": "--min-words",
     "top_k": "--top-k",
+    "group_field": "--group-field",
+    "pool": "--pool",
 }
 
 
@@ -178,7 +181,7 @@ def _add_input_flags(parser: argparse.ArgumentParser, *, inherited: bool) -> Non
         type=int,
         default=None if inherited else 1,
         metavar="N",
-        help="drop chunks with fewer prose words than this" + (suffix or " (default: 1)"),
+        help="drop chunks under N prose words" + (suffix or " (default: 1)"),
     )
     parser.add_argument(
         "--text-field",
@@ -190,10 +193,21 @@ def _add_input_flags(parser: argparse.ArgumentParser, *, inherited: bool) -> Non
         "--input-format",
         choices=INPUT_FORMATS,
         default=AUTO,
-        help="how to read inputs: auto picks each file's format from its extension and "
-        "content, and reads stdin as JSONL when every line is a JSON object; the others "
-        "read every input that way, directory contents included (default: auto"
-        + (", not the reference's: drafts are often in another format)" if inherited else ")"),
+        help="read every input as this format (default: auto"
+        + (", not the reference's)" if inherited else ", by each file's extension and content)"),
+    )
+    parser.add_argument(
+        "--group-field",
+        metavar="FIELD",
+        help="group JSONL records into documents by this field" + suffix,
+    )
+    parser.add_argument(
+        "--pool",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="judge short texts as one batch (default: no)"
+        if inherited
+        else "join short texts into windows (default: when most are under a quarter window)",
     )
     parser.add_argument(
         "--no-syntax",
@@ -270,8 +284,8 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     score_parser = commands.add_parser(
         "score",
         **_help_parser(
-            "Score drafts against a reference profile. Window size, minimum words, text field "
-            "and syntax come from the reference unless overridden.",
+            "Score drafts against a reference profile. Window size, minimum words, text field, "
+            "group field and syntax come from the reference unless overridden.",
             f"{PROG} score draft.md writer.json\n  "
             f"{PROG} score -q --fail-above clearly --fail-flagged 1 -r writer.json a.md b.md"
             "   # a hook or CI",
@@ -360,9 +374,8 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     evaluate = commands.add_parser(
         "evaluate",
         **_help_parser(
-            "Stress-test LLM-likeness against edited drafts. Builds a reference with the "
-            "original drafts as contrast, then scores edited copies of those drafts (matched "
-            "to their originals by file name) with the weights learned without their original.",
+            "Stress-test LLM-likeness against edited drafts: score each edited copy of the "
+            "contrast drafts with the weights learned without its original.",
             f"{PROG} evaluate posts/ --contrast llm-drafts/ "
             "--edited light=edits/light humanize=edits/humanize",
             usage=f"{PROG} evaluate [options] INPUT [INPUT ...] --contrast PATH "
@@ -394,7 +407,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     evaluate.add_argument(
         "--retrain",
         action="store_true",
-        help="also report the AUC with the edited drafts added to the contrast set",
+        help="also report the AUC with the edits added to the contrast set",
     )
     evaluate.add_argument(
         "--contrast-label",
@@ -472,6 +485,8 @@ def _settings(args: argparse.Namespace) -> Settings:
         syntax=False if args.no_syntax else AUTO,
         top_k=getattr(args, "top_k", DEFAULT_TOP_K),
         input_format=args.input_format,
+        group_field=args.group_field,
+        pool=AUTO if args.pool is None else args.pool,
     )
 
 
@@ -713,6 +728,10 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["syntax"] = False
     if args.input_format != AUTO:
         overrides["input_format"] = args.input_format
+    if args.group_field:
+        overrides["group_field"] = args.group_field
+    if args.pool is not None:
+        overrides["pool"] = args.pool
     result = profile.score(samples, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
@@ -843,6 +862,7 @@ def _suggest_command(argv: Sequence[str]) -> str:
     guess.add_argument("-r", "--reference")
     for flag in (
         "--text-field",
+        "--group-field",
         "--window-words",
         "--min-words",
         "--input-format",
@@ -861,7 +881,7 @@ def _suggest_command(argv: Sequence[str]) -> str:
     if found is None or not (found.reference or found.output):
         rest = shlex.join(argv)
         return f"`{PROG} build {rest}` or `{PROG} score {rest}`"
-    kept = ["text_field", "window_words", "min_words", "input_format"]
+    kept = ["text_field", "group_field", "window_words", "min_words", "input_format"]
     if found.reference:
         # The reference moves to the last argument; score takes no contrast or --top-k.
         command = ["score", *found.inputs, found.reference]

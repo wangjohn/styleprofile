@@ -193,13 +193,25 @@ class Chunk:
     ``source`` names where it came from as saved in reports: its input's name plus its path
     inside it (see ``load_chunks``), never an absolute path. ``path`` is the file it was read
     from, which identifies its document and recognizes a file given twice; it is never
-    saved.
+    saved. ``folder`` is the input, as typed, of a file (or a JSONL file's records) found
+    in a folder: ``pool`` joins short files only within one folder input. ``document`` is the
+    document it belongs to (see ``chunk_document``), set when it is read and kept through
+    windowing and pooling; a chunk made without one is placed by its file and id.
+    ``parts`` are the texts a pooled window was joined from (whole records or files, or
+    pieces of a long one), in order, so length calibration cuts its pieces where the texts
+    people score begin and end (``calibration.plan_pieces``). ``record`` is a grouped JSONL
+    record's own id (or line), which its id leaves out, so an edited copy of some of a
+    group's records can be compared with just those originals.
     """
 
     id: str
     source: str
     text: str
     path: str | None = field(default=None, compare=False, repr=False)
+    folder: str | None = field(default=None, compare=False, repr=False)
+    document: str | None = field(default=None, compare=False, repr=False)
+    parts: tuple[str, ...] | None = field(default=None, compare=False, repr=False)
+    record: str | None = field(default=None, compare=False, repr=False)
 
 
 def _decode(data: bytes, name: str | Path) -> str:
@@ -221,22 +233,98 @@ def _text_fields(text_field: str | Sequence[str] | None) -> tuple[str, ...]:
     return tuple(text_field) if text_field else TEXT_FIELDS
 
 
+# A field value longer than this is text, never a group; ``Records.values`` skips it.
+GROUP_VALUE_CHARS = 100
+
+
+@dataclass
+class Records:
+    """How ``load_chunks`` reads JSONL records, and what it found in them, for notes.
+
+    ``group_field`` groups records into documents (see ``group_id``); a group spans the
+    files of one input, ``scope``, which ``load_chunks`` sets. ``count`` counts the records
+    read and ``missing`` those with no value in the group field. ``values`` maps every
+    other field (the text field aside) to its distinct short values, so a note can suggest
+    a group field, or name the fields a misspelled one missed.
+    """
+
+    group_field: str | None = None
+    scope: str = ""
+    count: int = 0
+    missing: int = 0
+    values: dict[str, set[str]] = field(default_factory=dict)
+
+    def add(self, other: Records) -> None:
+        """Count ``other``'s records here too."""
+        self.count += other.count
+        self.missing += other.missing
+        for name, found in other.values.items():
+            self.values.setdefault(name, set()).update(found)
+
+    def group_fields(self) -> list[tuple[str, int]]:
+        """Fields that look like they name each record's source: a name like a thread's or
+        conversation's (``_SOURCE_NAMES``), else a writer's (``_WRITER_NAMES``), with 2 or
+        more distinct values and at most a third as many as records. The likeliest first,
+        with each one's number of values. Other fields (a language, an app, a count) are
+        never suggested, however few values they have."""
+
+        def rank(name: str) -> int | None:
+            tokens = [
+                token.lower() for token in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", name)
+            ]
+            named = [token for token in tokens if token not in _NAME_FILLERS]
+            for ranked, names in enumerate((_SOURCE_NAMES, _WRITER_NAMES)):
+                # One source word, and nothing but fillers besides (``in_reply_to_status_id``
+                # yes; ``reply_count`` or ``user_followers`` no).
+                if len(named) == 1 and named[0] in names:
+                    return ranked
+            return None
+
+        found = [
+            (ranked, name, len(values))
+            for name, values in self.values.items()
+            if (ranked := rank(name)) is not None and 2 <= len(values) <= self.count / 3
+        ]
+        return [(name, count) for _, name, count in sorted(found, key=lambda f: (f[0], f[2]))]
+
+
+# Words of field names (split at ``_`` and camelCase) that name where a record belongs
+# (``thread_id``, ``conversationId``, ``in_reply_to_status_id``), and, as a fallback, who
+# wrote it; and the words that may come with them.
+_SOURCE_NAMES = ("thread", "conversation", "channel", "subject", "reply", "parent")
+_WRITER_NAMES = ("author", "user", "sender")
+_NAME_FILLERS = frozenset(
+    {"id", "ids", "name", "key", "uuid", "screen", "handle", "in", "to", "status", "the"}
+)
+
+
 def _jsonl_chunks(
     text: str,
     name: str,
     source: str,
     path: str | None,
     text_field: str | Sequence[str] | None,
+    records: Records | None = None,
+    inside: str | None = None,
+    folder: str | None = None,
     repeated: list[tuple[str, int]] | None = None,
 ) -> list[Chunk]:
     """Read JSONL ``text``: ``name`` labels errors and default ids, ``source`` is saved for
     each record, and ``path`` is the file it came from (None for stdin).
 
-    Each record is its own document. Records that share an id are told apart by line
-    (``same@3``), and each such id and how many records have it is added to ``repeated``;
-    an id that ends like a window suffix is escaped (``literal_id``)."""
+    Each record is its own document, unless ``records.group_field`` groups them: then its
+    id names its group and its line (``thread=t1#r12``, see ``group_id``) instead of its
+    own id. Otherwise records that share an id are told apart by line (``same@3``), and
+    each such id and how many records have it is added to ``repeated``. An id (or group
+    value) that ends like a part suffix is escaped (``literal_id``). A file found in a
+    folder input (``folder``) names its records by its path inside the folder too
+    (``inside``: ``2024/a.jsonl:17``), since ids often restart in each file; a file given
+    directly names them by id alone."""
+    records = Records() if records is None else records
+    group_field = records.group_field
     fields = _text_fields(text_field)
-    records: list[tuple[int, str, str]] = []
+    grouped: list[Chunk] = []
+    ungrouped: list[tuple[int, str, str]] = []
     for line_number, line in enumerate(text.split("\n"), start=1):
         if not line.strip():
             continue
@@ -252,28 +340,62 @@ def _jsonl_chunks(
                 f"{name}:{line_number}: no string field among {', '.join(fields)}",
                 code="text_field",
             )
+        records.count += 1
+        for key, value in record.items():
+            if key == field:
+                continue
+            seen = records.values.setdefault(key, set())
+            if isinstance(value, str | int | float) and len(str(value)) <= GROUP_VALUE_CHARS:
+                seen.add(str(value))
+        if group_field is not None:
+            group = record.get(group_field)
+            if isinstance(group, dict | list):
+                raise StyleProfileError(
+                    f"{name}:{line_number}: the group field {group_field} holds a "
+                    f"{type(group).__name__}, not a name or number",
+                    code="group_field",
+                )
+            missing = group is None or not str(group).strip()
+            records.missing += missing
+            shown = literal_id(group_id(group_field, None if missing else group))
+            # Missing values get a key no value can have, so "(none)" is a group of its own.
+            value = "\x00" if missing else str(group)
+            document = f"{_GROUPED}{records.scope}\x1e{group_field}\x1e{value}"
+            chunk_id = f"{shown}#r{line_number}"
+            own = record.get("id")
+            own_id = f"line {line_number}" if own in (None, "") else literal_id(str(own))
+            grouped.append(
+                Chunk(chunk_id, source, record[field], path, folder, document, record=own_id)
+            )
+            continue
         record_id = record.get("id")
         # An id of 0 is kept; a missing, null or empty id falls back to the line.
-        label = Path(name).name
-        chunk_id = (
-            f"{label}:{line_number}" if record_id in (None, "") else literal_id(str(record_id))
-        )
-        records.append((line_number, chunk_id, record[field]))
-    counts = Counter(chunk_id for _, chunk_id, _ in records)
+        if record_id in (None, ""):
+            chunk_id = f"{inside or Path(name).name}:{line_number}"
+        else:
+            chunk_id = literal_id(str(record_id))
+            chunk_id = f"{inside}:{chunk_id}" if inside else chunk_id
+        ungrouped.append((line_number, chunk_id, record[field]))
+    if grouped:
+        return grouped
+    counts = Counter(chunk_id for _, chunk_id, _ in ungrouped)
     shared = {chunk_id: count for chunk_id, count in counts.items() if count > 1}
     if repeated is not None:
         repeated += shared.items()
-    return [
-        Chunk(f"{chunk_id}@{line}" if chunk_id in shared else chunk_id, source, body, path)
-        for line, chunk_id, body in records
-    ]
+    chunks: list[Chunk] = []
+    for line, chunk_id, body in ungrouped:
+        unique = f"{chunk_id}@{line}" if chunk_id in shared else chunk_id
+        document = f"{path or source}{_RECORD}{unique}"
+        chunks.append(Chunk(unique, source, body, path, folder, document))
+    return chunks
 
 
 def literal_id(value: str) -> str:
-    """An id from outside (a JSONL id, a ``Text`` name) that window suffixes cannot be read
-    into: a trailing ``#w2`` becomes ``%23w2``, so ``base_id`` strips only the suffixes
-    ``window`` adds, and a record ``x#w2`` stays apart from a record ``x``."""
-    return _WINDOW_SUFFIX.sub(lambda match: match.group(0).replace("#", "%23"), value)
+    """An id from outside (a JSONL id, a group value, a ``Text`` name) that part suffixes
+    cannot be read into: a trailing ``#w2`` or ``#r3`` becomes ``%23w2`` or ``%23r3``, so
+    ``base_id`` strips only the suffixes ``window`` and grouping add, and a record ``x#w2``
+    stays apart from a record ``x``."""
+    return _PART_SUFFIX.sub(lambda match: match.group(0).replace("#", "%23"), value)
 
 
 def _repeated_note(label: str, repeated: Sequence[tuple[str, int]]) -> Note:
@@ -393,11 +515,16 @@ def _forced_jsonl(
     source: str,
     path: str | None,
     text_field: str | Sequence[str] | None,
+    records: Records,
+    inside: str | None = None,
+    folder: str | None = None,
     repeated: list[tuple[str, int]] | None = None,
 ) -> list[Chunk]:
     """Read JSONL that was asked for rather than detected, saying so when it fails."""
     try:
-        return _jsonl_chunks(text, name, source, path, text_field, repeated)
+        return _jsonl_chunks(
+            text, name, source, path, text_field, records, inside, folder, repeated
+        )
     except StyleProfileError as error:
         if error.code:
             raise
@@ -426,15 +553,22 @@ def _file_chunks(
     input_format: str,
     text_field: str | Sequence[str] | None,
     detected: _Detected,
+    records: Records,
+    folder: str | None = None,
 ) -> list[Chunk]:
     text = _read_text(path)
     fmt = _format_of(path, input_format)
     if fmt == JSONL:
         repeated: list[tuple[str, int]] = []
-        if input_format == JSONL and path.suffix.lower() != ".jsonl":
-            chunks = _forced_jsonl(text, str(path), source, str(path), text_field, repeated)
-        else:
-            chunks = _jsonl_chunks(text, str(path), source, str(path), text_field, repeated)
+        inside = chunk_id if folder is not None else None
+        read = (
+            _forced_jsonl
+            if input_format == JSONL and path.suffix.lower() != ".jsonl"
+            else _jsonl_chunks
+        )
+        chunks = read(
+            text, str(path), source, str(path), text_field, records, inside, folder, repeated
+        )
         if repeated:
             detected.repeated.append((label, repeated))
         return chunks
@@ -445,16 +579,20 @@ def _file_chunks(
         text = html_to_markdown(text)
         if not re.search(r"\w", text):
             detected.empty.append(label)
-    return [Chunk(chunk_id, source, text, str(path))]
+    document = document_of(str(path), chunk_id)
+    return [Chunk(chunk_id, source, text, str(path), folder, document)]
 
 
 def _stdin_chunks(
-    input_format: str, text_field: str | Sequence[str] | None, notes: list[Note]
+    input_format: str,
+    text_field: str | Sequence[str] | None,
+    notes: list[Note],
+    records: Records,
 ) -> list[Chunk]:
     text = _decode(sys.stdin.buffer.read(), "stdin")
     repeated: list[tuple[str, int]] = []
     if input_format == JSONL:
-        chunks = _forced_jsonl(text, "stdin", "stdin", None, text_field, repeated)
+        chunks = _forced_jsonl(text, "stdin", "stdin", None, text_field, records, repeated=repeated)
         notes += [_repeated_note("stdin", repeated)] if repeated else []
         return chunks
     fmt = input_format
@@ -465,7 +603,7 @@ def _stdin_chunks(
                 NoteCode.READ_AS_JSONL,
             )
         )
-        chunks = _jsonl_chunks(text, "stdin", "stdin", None, text_field, repeated)
+        chunks = _jsonl_chunks(text, "stdin", "stdin", None, text_field, records, repeated=repeated)
         notes += [_repeated_note("stdin", repeated)] if repeated else []
         return chunks
     if fmt == AUTO and looks_like_html(text):
@@ -475,7 +613,7 @@ def _stdin_chunks(
         text = html_to_markdown(text)
         if not re.search(r"\w", text):
             notes.append(Note("stdin has no readable text after conversion", NoteCode.EMPTY_HTML))
-    return [Chunk("stdin", "stdin", text)]
+    return [Chunk("stdin", "stdin", text, document=document_of("stdin", "stdin"))]
 
 
 def _listing(items: Sequence[str], shown: int = 3) -> str:
@@ -557,11 +695,16 @@ def load_chunks(
     names: SourceNames | None = None,
     input_format: str = AUTO,
     notes: list[Note] | None = None,
+    group_field: str | None = None,
+    records: Records | None = None,
 ) -> list[Chunk]:
     """Read Markdown, text, HTML or JSONL files, directories of them, or ``-`` for stdin.
 
     ``text_field`` names the JSONL field that holds the text, or several to try in order;
-    by default the first of ``TEXT_FIELDS`` that a record has.
+    by default the first of ``TEXT_FIELDS`` that a record has. Each file is one document,
+    and so is each JSONL record, unless ``group_field`` names a record field whose value
+    groups the records of one input into documents (see ``group_id``). ``records``, when
+    given, carries the group field instead, and gathers what the records held.
 
     Each chunk's ``source`` is its input's ``root_name`` (``posts``), joined for a file in a
     directory with its path inside it (``posts/2024/a.md``); nothing above the input is
@@ -580,17 +723,30 @@ def load_chunks(
     _check_format(input_format)
     names = SourceNames() if names is None else names
     notes = [] if notes is None else notes
+    if records is None:
+        records = Records(group_field)
     chunks: list[Chunk] = []
     for value in inputs:
         if value == "-":
-            chunks.extend(_stdin_chunks(input_format, text_field, notes))
+            records.scope = "stdin"
+            chunks.extend(_stdin_chunks(input_format, text_field, notes, records))
             continue
         path = expand_path(value).resolve()
+        records.scope = str(path)
         detected = _Detected([], [])
         if not path.is_dir():
             [source] = _name_sources(value, path, [path], names)
             chunks.extend(
-                _file_chunks(path, value, path.name, source, input_format, text_field, detected)
+                _file_chunks(
+                    path,
+                    value,
+                    path.name,
+                    source,
+                    input_format,
+                    text_field,
+                    detected,
+                    records,
+                )
             )
         else:
             files, skipped, generated = _walk(path)
@@ -631,7 +787,17 @@ def load_chunks(
                 chunk_id = str(item.relative_to(path))
                 label = str(Path(value) / chunk_id)
                 chunks.extend(
-                    _file_chunks(item, label, chunk_id, source, input_format, text_field, detected)
+                    _file_chunks(
+                        item,
+                        label,
+                        chunk_id,
+                        source,
+                        input_format,
+                        text_field,
+                        detected,
+                        records,
+                        folder=value,
+                    )
                 )
         if detected.sniffed:
             they = "it is" if len(detected.sniffed) == 1 else "they are"
@@ -657,9 +823,22 @@ def load_chunks(
 def _document_label(chunk: Chunk) -> str:
     """A document as reports name it: its saved source (never a path), and a record's id."""
     source = chunk.source
+    if _grouped(chunk):
+        # Grouped record ids are ``thread=t1#r12``: the group, then the line.
+        group, _, line = chunk.id.rpartition("#r")
+        return f"line {line} ({group}) in {source}"
     if source == "stdin" or source.endswith(base_id(chunk.id)):
         return source
     return f"record {base_id(chunk.id)} in {source}"
+
+
+def _duplicate_unit(chunk: Chunk) -> str:
+    """What ``drop_duplicates`` compares: a whole document, except that a grouped JSONL
+    record is compared on its own, so a comment posted twice is caught inside or across
+    groups."""
+    if _grouped(chunk):
+        return f"{chunk.path or chunk.source}\x1f{chunk.id}"
+    return chunk_document(chunk)
 
 
 def drop_duplicates(
@@ -669,9 +848,10 @@ def drop_duplicates(
 
     Chunks are grouped into documents by ``chunk_document`` (their real file and record, so
     windows of one document stay together and two files that share a saved name stay
-    apart). Each document's words, lowercased, are compared with front matter, punctuation
-    and Markdown markup left out, so a post and its generated HTML page (converted to
-    Markdown) match; this reads each document once with one regular expression rather than
+    apart), except that JSONL records grouped by a group field are compared one by one.
+    Each document's words, lowercased, are compared with front matter, punctuation and
+    Markdown markup left out, so a post and its generated HTML page (converted to Markdown)
+    match; this reads each document once with one regular expression rather than
     parsing its Markdown, which measuring does later. A file given twice is a different
     check, made when inputs are read.
 
@@ -684,7 +864,7 @@ def drop_duplicates(
     seen = {} if seen is None else seen
     documents: dict[str, list[Chunk]] = {}
     for chunk in chunks:
-        documents.setdefault(chunk_document(chunk), []).append(chunk)
+        documents.setdefault(_duplicate_unit(chunk), []).append(chunk)
     dropped_documents: set[str] = set()
     dropped: list[tuple[str, str]] = []
     for document, members in documents.items():
@@ -698,17 +878,61 @@ def drop_duplicates(
             dropped_documents.add(document)
         else:
             seen[key] = label
-    kept = [chunk for chunk in chunks if chunk_document(chunk) not in dropped_documents]
+    kept = [chunk for chunk in chunks if _duplicate_unit(chunk) not in dropped_documents]
     if not dropped:
         return kept, None
     copy, original = dropped[0]
     count = len(dropped)
-    repeating = "1 document that repeats" if count == 1 else f"{count:,} documents that repeat"
+    kind = "document"
+    if all(_grouped(documents[unit][0]) for unit in dropped_documents):
+        kind = "record"
+    repeating = f"1 {kind} that repeats" if count == 1 else f"{count:,} {kind}s that repeat"
     note = (
         f"dropped {repeating} another word for word, keeping the first copy (for example, "
         f"{copy} repeats {original})"
     )
     return kept, Note(note, NoteCode.DUPLICATES)
+
+
+def _pack(counts: Sequence[int], window_words: int, glued: Sequence[bool]) -> list[list[int]]:
+    """Group consecutive items of ``counts`` prose words into windows of about
+    ``window_words``, as indexes. ``glued[i]`` keeps item ``i`` with the item before it.
+
+    A window closes once it reaches ``window_words``, or early rather than grow past one and
+    a half windows. A remainder under half a window joins the previous window. No items
+    give one empty window.
+    """
+    limit = window_words * 1.5
+    groups: list[list[int]] = []
+    current: list[int] = []
+    count = 0
+    for index, size in enumerate(counts):
+        closes_early = count >= window_words / 2 and count + size > limit
+        if current and closes_early and not glued[index]:
+            groups.append(current)
+            current, count = [], 0
+        current.append(index)
+        count += size
+        following_glued = index + 1 < len(counts) and glued[index + 1]
+        if count >= window_words and not following_glued:
+            groups.append(current)
+            current, count = [], 0
+    if current and groups and count < window_words / 2:
+        groups[-1] += current
+    elif current or not groups:
+        groups.append(current)
+    return groups
+
+
+def _pieces(text: str, window_words: int) -> list[tuple[str, int]]:
+    """``text`` cut into windows (see ``window``), each with its prose word count."""
+    blocks = classify(text)
+    counts = [block_word_count(block) for block in blocks]
+    groups = _pack(counts, window_words, [block.continues_list for block in blocks])
+    return [
+        ("\n\n".join(blocks[index].raw for index in group), sum(counts[index] for index in group))
+        for group in groups
+    ]
 
 
 def window(chunks: Sequence[Chunk], window_words: int) -> list[Chunk]:
@@ -719,36 +943,25 @@ def window(chunks: Sequence[Chunk], window_words: int) -> list[Chunk]:
     than grow past one and a half windows. A remainder under half a window joins the
     previous piece, so no window is shorter than half a window unless its whole chunk is;
     that merge, or a single long block, can make a window longer than one and a half.
+    A chunk with no prose stays as one window, so it is counted as skipped.
     """
-    limit = window_words * 1.5
-    windows: list[Chunk] = []
-    for chunk in chunks:
-        blocks = classify(chunk.text)
-        counts = [block_word_count(block) for block in blocks]
-        pieces: list[tuple[list[str], int]] = []
-        current: list[str] = []
-        count = 0
-        for index, (block, block_words) in enumerate(zip(blocks, counts, strict=True)):
-            closes_early = count >= window_words / 2 and count + block_words > limit
-            if current and closes_early and not block.continues_list:
-                pieces.append((current, count))
-                current, count = [], 0
-            current.append(block.raw)
-            count += block_words
-            following = blocks[index + 1] if index + 1 < len(blocks) else None
-            if count >= window_words and not (following and following.continues_list):
-                pieces.append((current, count))
-                current, count = [], 0
-        if current and pieces and count < window_words / 2:
-            pieces[-1] = (pieces[-1][0] + current, pieces[-1][1] + count)
-        elif current or not pieces:
-            # A chunk with no prose stays as one window, so it is counted as skipped.
-            pieces.append((current, count))
-        windows.extend(
-            Chunk(f"{chunk.id}#w{index}", chunk.source, "\n\n".join(raw_blocks), chunk.path)
-            for index, (raw_blocks, _) in enumerate(pieces, start=1)
+    return _windows(chunks, [_pieces(chunk.text, window_words) for chunk in chunks])
+
+
+def _windows(chunks: Sequence[Chunk], pieces: Sequence[list[tuple[str, int]]]) -> list[Chunk]:
+    """Each chunk's ``_pieces`` as the windows ``window`` makes of it."""
+    return [
+        Chunk(
+            f"{chunk.id}#w{index}",
+            chunk.source,
+            text,
+            chunk.path,
+            chunk.folder,
+            chunk_document(chunk),
         )
-    return windows
+        for chunk, cut in zip(chunks, pieces, strict=True)
+        for index, (text, _) in enumerate(cut, start=1)
+    ]
 
 
 def _merge(target: Metrics, extra: Metrics) -> Metrics:
@@ -815,22 +1028,284 @@ def summarize(chunk_metrics: Sequence[Metrics]) -> Summary:
     }
 
 
-# Windowing already-windowed chunks stacks suffixes (``post#w1#w2``); all of them go.
-_WINDOW_SUFFIX = re.compile(r"(?:#w\d+)+$")
+# What a document is. A document is the unit held-out calibration leaves out: every chunk
+# of it is scored against a reference built without it. Which one a chunk belongs to is
+# ``Chunk.document``, set when it is read and kept through windowing and pooling, and read
+# by ``chunk_document``:
+#
+# - a Markdown, text or HTML file, or stdin, is one document;
+# - a JSONL record is one document, unless a group field groups records: then the records
+#   of one input (a file, or every file of a folder) with one value in it are one document,
+#   and records with no value are one more;
+# - an ungrouped window that ``pool`` joins from several short texts (the records of one
+#   JSONL file, the files of one folder input, or ``Text`` inputs) is a document of its own.
+#
+# Windows of a document stay in it. Ids name chunks for people (``post#w2``,
+# ``thread=t1#r12``, ``c0012..c0019``) and are never read back to find a document, except
+# for a ``Chunk`` made without one, which is placed by its file and its id without part
+# suffixes (``document_of``). Part suffixes are ``#wN``, a window, and ``#rN``, a grouped
+# record (its line); ``base_id`` strips them, so a report's rows gather by document, and
+# ids from outside are escaped so they never end in one (``literal_id``).
+_PART_SUFFIX = re.compile(r"(?:#[rw]\d+)+$")
+# Document keys: a file's or a hand-made chunk's is ``document_of``; a record's joins its
+# file and id with _RECORD; a group's starts with _GROUPED, then its input, field and value.
+_RECORD = "\x1d"
+_GROUPED = "\x1e"
+# How a group of records with no value in the group field is shown in ids.
+MISSING_GROUP = "(none)"
 
 
 def document_of(source: str, chunk_id: str) -> str:
-    """The document a chunk came from: its file plus its id, with a window suffix removed.
-
-    Windows ``post#w3`` share their document; files with the same name in different
-    folders, and JSONL records with the same id in different files, stay separate.
-    """
+    """The document of a chunk made without one: its file plus its id, without the part
+    suffixes (``base_id``). Windows ``post#w3`` share their document; files with the same
+    name in different folders stay separate."""
     return f"{source}\x1f{base_id(chunk_id)}"
 
 
 def base_id(chunk_id: str) -> str:
-    """A chunk's id without the ``#wN`` suffixes that windowing adds."""
-    return _WINDOW_SUFFIX.sub("", chunk_id)
+    """A chunk's id without the ``#wN`` (window) and ``#rN`` (grouped record) suffixes:
+    ``thread=t1#r12#w1`` is ``thread=t1``, the group it is part of."""
+    return _PART_SUFFIX.sub("", chunk_id)
+
+
+def chunk_document(chunk: Chunk) -> str:
+    """The document ``chunk`` belongs to: its ``document``, set when it was read, else its
+    real file (or source) and id (``document_of``). Saved sources are short names, which two
+    separately loaded inputs can share, so they never decide it alone."""
+    if chunk.document is not None:
+        return chunk.document
+    return document_of(chunk.path or chunk.source, chunk.id)
+
+
+def group_id(group_field: str, value: object) -> str:
+    """How the group of records with ``value`` in ``group_field`` is shown, ``thread=t1``;
+    with no value (missing, null or blank), ``thread=(none)``. Values compare as text, so
+    ``1`` and ``"1"`` are one group."""
+    shown = MISSING_GROUP if value is None or not str(value).strip() else value
+    return f"{group_field}={shown}"
+
+
+def _grouped(chunk: Chunk) -> bool:
+    """Whether ``chunk`` is a JSONL record (or a window of records) grouped by a field."""
+    return (chunk.document or "").startswith(_GROUPED)
+
+
+def is_grouped(chunk: Chunk) -> bool:
+    """Whether ``chunk`` is a JSONL record (or a window of records) grouped by a field."""
+    return _grouped(chunk)
+
+
+def cover_key(chunk: Chunk) -> tuple[str, str | None]:
+    """What an edited record shares with its original, to compare an edited set that covers
+    only some texts with just those originals: a grouped record's group and own id (or
+    line), else its ``pair_key``."""
+    return (pair_key(chunk), chunk.record if _grouped(chunk) else None)
+
+
+def bare_key(key: str) -> str | None:
+    """A folder record's ``pair_key`` without its file (``a.jsonl:17`` is ``17``), for
+    pairing it with a copy read from the file directly; None for other keys."""
+    inside, colon, rest = key.partition(":")
+    return rest if colon and PurePosixPath(inside).suffix else None
+
+
+def _record(chunk: Chunk) -> bool:
+    """Whether ``chunk`` is a JSONL record, or a window of records."""
+    return _grouped(chunk) or _RECORD in (chunk.document or "")
+
+
+def pair_key(chunk: Chunk) -> str:
+    """What pairs a text with its copy in another set (an edited draft with its original):
+    its id without window suffixes. For a file that is its path inside its input; for a
+    JSONL record, its id, with its file's path inside a folder input (``2024/a.jsonl:17``);
+    for a group's window, the group (``thread=t1``), whichever files its records are in."""
+    return base_id(chunk.id)
+
+
+def _pool_key(chunk: Chunk) -> str:
+    """What ungrouped texts must share to be joined: a record's file (the records of one
+    JSONL file, or stdin), a file's folder input, else the source (``Text`` inputs)."""
+    if _record(chunk):
+        return chunk.path or chunk.source
+    return chunk.folder or chunk.path or chunk.source
+
+
+@dataclass(frozen=True)
+class Pooled:
+    """What ``pool`` made: the windows; how many texts share a window with another text;
+    for each ungrouped text joined with others, the id of its window (keyed by the text's
+    ``pair_key``), so another set can be pooled alike; and whether the median text is
+    short (``pools_by_default``)."""
+
+    windows: list[Chunk]
+    together: int
+    joined: dict[str, str]
+    short: bool
+
+
+def pools_by_default(chunks: Sequence[Chunk], window_words: int) -> bool:
+    """The ``"auto"`` pooling rule: pool when the median text has fewer prose words than a
+    quarter of a window."""
+    if not window_words:
+        return False
+    return _short([_pieces(chunk.text, window_words) for chunk in chunks], window_words)
+
+
+def _short(pieces: Sequence[list[tuple[str, int]]], window_words: int) -> bool:
+    """``pools_by_default`` for texts already cut into ``_pieces``."""
+    sizes = [sum(size for _, size in cut) for cut in pieces]
+    return bool(sizes) and statistics.median(sizes) < window_words / 4
+
+
+@dataclass
+class _Run:
+    """Texts ``pool`` packs together: a group's records (``document``), consecutive short
+    texts from one place, or (``target``) the texts joined into one window of another set."""
+
+    members: list[int]
+    document: str | None = None
+    target: str | None = None
+
+
+def pool(
+    chunks: Sequence[Chunk],
+    window_words: int,
+    like: Pooled | None = None,
+    *,
+    auto: bool = False,
+    join: bool = True,
+) -> Pooled:
+    """Window chunks as ``window`` does, and also join short texts into windows of about
+    ``window_words`` prose words.
+
+    - A group's records (see ``Chunk.document``) are joined in order, wherever they are in
+      their input, into windows ``thread=t1#w1``, ``thread=t1#w2``, ... of that group.
+    - Other texts are joined when they are consecutive, short enough not to need windowing
+      on their own, and come from one place (``_pool_key``): the records of one JSONL file,
+      the Markdown, text or HTML files of one folder input (in the walk's sorted order), or
+      ``Text`` inputs. Each joined window is a document of its own, with the id
+      ``first..last`` of its first and last texts.
+    - Any other text (a long one, or one with nothing to join) is windowed as ``window``
+      would window it.
+
+    Given ``like``, another set's ``Pooled``, ungrouped texts whose ``pair_key`` it joined
+    are joined into the same windows, under the same ids, whatever their lengths (texts
+    from different files never share one), and other texts are not joined: an edited set
+    pools as its originals did.
+
+    With ``auto``, texts that ``pools_by_default`` would not pool are windowed as ``window``
+    windows them; with ``join`` False, all texts are. A group's windows are always named by
+    the group (``thread=t1#w1``), even a group of one record. ``short`` is always measured.
+    """
+    pieces = [_pieces(chunk.text, window_words) for chunk in chunks]
+    short = _short(pieces, window_words)
+    if not join or (auto and not short):
+        return Pooled(_windows(chunks, pieces), 0, {}, short)
+    runs: list[_Run] = []
+    matched: dict[tuple[str, str], _Run] = {}  # by file and the window of ``like`` joined
+    groups: dict[str, _Run] = {}
+    open_run: _Run | None = None
+    targets = _targets(like) if like is not None else {}
+    for index, chunk in enumerate(chunks):
+        grouped = _grouped(chunk)
+        target = None if grouped else _target(targets, pair_key(chunk))
+        if target is not None:
+            key = (_pool_key(chunk), target)
+            if key not in matched:
+                matched[key] = _Run([], target=target)
+                runs.append(matched[key])
+            matched[key].members.append(index)
+            open_run = None
+        elif grouped:
+            document = chunk_document(chunk)
+            if document not in groups:
+                groups[document] = _Run([], document=document)
+                runs.append(groups[document])
+            groups[document].members.append(index)
+            open_run = None
+        elif like is not None or len(pieces[index]) > 1:
+            runs.append(_Run([index]))
+            open_run = None
+        else:
+            if open_run is None or _pool_key(chunks[open_run.members[-1]]) != _pool_key(chunk):
+                open_run = _Run([])
+                runs.append(open_run)
+            open_run.members.append(index)
+    windows: list[Chunk] = []
+    together: set[int] = set()
+    joined: dict[str, str] = {}
+
+    def add(window_id: str, first: Chunk, parts: Sequence[str], document: str) -> None:
+        text = "\n\n".join(parts)
+        joined_from = tuple(parts) if len(parts) > 1 else None
+        windows.append(
+            Chunk(window_id, first.source, text, first.path, first.folder, document, joined_from)
+        )
+
+    for run in runs:
+        first = chunks[run.members[0]]
+        if run.target is not None:
+            parts = [chunks[index].text for index in run.members]
+            add(run.target, first, parts, _joined_document(first, run.target))
+            together.update(run.members if len(run.members) > 1 else ())
+            continue
+        units = [(index, text, size) for index in run.members for text, size in pieces[index]]
+        packed = _pack([size for _, _, size in units], window_words, [False] * len(units))
+        for number, group in enumerate(packed, start=1):
+            members = sorted({units[position][0] for position in group})
+            parts = [units[position][1] for position in group]
+            together.update(members if len(members) > 1 else ())
+            if run.document is not None:
+                # Named by the group (``thread=t1#r12`` without its line), kept as its document.
+                add(f"{base_id(first.id)}#w{number}", first, parts, run.document)
+            elif len(members) == 1:
+                member = chunks[members[0]]
+                number = number if len(run.members) == 1 else 1
+                add(f"{member.id}#w{number}", member, parts, chunk_document(member))
+            else:
+                start = chunks[members[0]]
+                window_id = _span_id(start.id, chunks[members[-1]].id)
+                add(window_id, start, parts, _joined_document(start, window_id))
+                joined.update({pair_key(chunks[member]): window_id for member in members})
+    return Pooled(windows, len(together), joined, short)
+
+
+def _span_id(first: str, last: str) -> str:
+    """The id of a window joined from texts ``first`` to ``last``: ``c0012..c0019``, or
+    ``2024/a.jsonl:17..23`` when both share a ``file:`` prefix, which is shown once."""
+    common = os.path.commonprefix([first, last])
+    shared = common[: common.rfind(":") + 1]
+    return f"{first}..{last[len(shared) :]}"
+
+
+def _targets(like: Pooled) -> dict[str, str]:
+    """``like.joined``, also by bare id (``bare_key``) both ways where that is unique, so
+    records read from a file directly pair with their copies read from a folder."""
+    targets = dict(like.joined)
+    bare: dict[str, list[str]] = defaultdict(list)
+    for key in like.joined:
+        if (short := bare_key(key)) is not None:
+            bare[short].append(key)
+    for short, keys in bare.items():
+        if len(keys) == 1 and short not in targets:
+            targets[short] = like.joined[keys[0]]
+    return targets
+
+
+def _target(targets: Mapping[str, str], key: str) -> str | None:
+    """The window of another set a text joins (see ``_targets``); an edited record read
+    from a folder also finds an original read from a file directly, by bare id."""
+    found = targets.get(key)
+    if found is None and (short := bare_key(key)) is not None:
+        found = targets.get(short)
+    return found
+
+
+def _joined_document(first: Chunk, window_id: str) -> str:
+    """The document of an ungrouped window joined from several texts: its own, in the place
+    its texts came from; a window of records stays a record, for ``pair_key``."""
+    separator = _RECORD if _record(first) else "\x1f"
+    return f"{_pool_key(first)}{separator}{window_id}"
 
 
 def _z_against(metrics: Metrics, summary: Summary, floor: dict[Key, float]) -> ZScores:
@@ -1171,6 +1646,8 @@ def _measure(
         [size for _, _, size in kept],
         piece_lengths,
         piece_words,
+        [chunk.parts for chunk, _, _ in kept],
+        [chunk_document(chunk) for chunk, _, _ in kept],
     )
     pieces: list[tuple[int, int, Prose, Metrics]] = []
     for index, length, markdown in planned:
@@ -1200,12 +1677,6 @@ def _measure(
         below,
         [_Piece(index, length, metrics) for index, length, _, metrics in pieces],
     )
-
-
-def chunk_document(chunk: Chunk) -> str:
-    """The document ``chunk`` belongs to, keyed on the file it was read from when known:
-    saved sources are short names, which two separately loaded inputs can share."""
-    return document_of(chunk.path or chunk.source, chunk.id)
 
 
 def _documents(chunks: Sequence[Chunk]) -> list[str]:
@@ -1837,7 +2308,7 @@ def average_z(
 
 
 # ``literal_id``'s escaped window suffixes at the end of an id, before a repeated id's line.
-_ESCAPED_SUFFIX = re.compile(r"(?:%23w\d+)+(?=(?:@\d+)?$)")
+_ESCAPED_SUFFIX = re.compile(r"(?:%23[rw]\d+)+(?=(?:@\d+)?$)")
 
 # A number that keeps a saved source unique (``posts (2)/a.md``, ``notes (2).md``).
 _SOURCE_NUMBER = re.compile(r" \(\d+\)(?=(?:\.[^/.]*)?(?:/|$))")

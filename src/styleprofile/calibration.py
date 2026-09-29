@@ -172,16 +172,67 @@ def cut(markdown: str, length: int, *, excerpts: bool = False) -> list[str]:
     return [_joined(units, start, end) for start, end in _cuts(units, length, excerpts=excerpts)]
 
 
+def whole_parts(parts: Sequence[str], length: int) -> list[str]:
+    """Pieces of up to ``length`` words cut from a pooled window along the texts it was
+    joined from (``parts``: whole records or files, in order), so a piece is what people
+    score: a run of whole texts up to ``length`` (a single text when the next would pass
+    it); a text of ``length`` or more on its own, or cut as ``cut`` cuts it when it holds
+    1.5 pieces. A run left under half ``length`` at the end is not a piece."""
+    pieces: list[str] = []
+    run: list[str] = []
+    count = 0
+    for part in parts:
+        size = len(part.split())
+        if size >= length:
+            if count >= length / 2:
+                pieces.append("\n\n".join(run))
+            run, count = [], 0
+            pieces += cut(part, length) if size >= PIECES_PER_CHUNK * length else [part]
+            continue
+        if run and count + size > length:
+            pieces.append("\n\n".join(run))
+            run, count = [], 0
+        run.append(part)
+        count += size
+    if run and count >= length / 2:
+        pieces.append("\n\n".join(run))
+    return pieces
+
+
+def single_parts(parts: Sequence[str], length: int) -> list[str]:
+    """Pieces of about ``length`` words from single texts of a pooled window (``parts``): a
+    text of ``length`` to 1.5 ``length`` words whole, a longer one cut as ``cut`` cuts it.
+    Shorter texts give none: like the texts judged at ``length``, each piece is one text."""
+    pieces: list[str] = []
+    for part in parts:
+        size = len(part.split())
+        if size >= PIECES_PER_CHUNK * length:
+            pieces += cut(part, length)
+        elif size >= length:
+            pieces.append(part)
+    return pieces
+
+
 def plan_pieces(
-    texts: Sequence[str], sizes: Sequence[int], lengths: Sequence[int], budget: int
+    texts: Sequence[str],
+    sizes: Sequence[int],
+    lengths: Sequence[int],
+    budget: int,
+    parts: Sequence[Sequence[str] | None] | None = None,
+    documents: Sequence[str] | None = None,
 ) -> list[tuple[int, int, str]]:
     """(chunk index, length, Markdown) of every piece to measure for calibration.
 
     Only lengths the median chunk holds 1.5 times are cut. Every chunk is cut both ways
     (``cut`` and ``cut(excerpts=True)``), since a short text may be a whole paragraph or an
-    excerpt; when the pieces of a length hold more than ``budget`` words, every k-th piece
-    is kept, so every document still contributes in proportion to its text however few and
-    large the chunks are.
+    excerpt. A pooled window with its ``parts`` (the texts it was joined from) is cut along
+    them instead, since its short texts are scored whole: at each length, from single texts
+    of at least that length (``single_parts``), as the texts judged at it are, when there are
+    ``MIN_CALIBRATION_PIECES`` such pieces from ``MIN_CALIBRATION_DOCUMENTS`` documents (by
+    ``documents``, each chunk's); otherwise from runs of whole texts (``whole_parts``). When
+    the pieces of a length hold more than ``budget`` words, every k-th piece is kept, so
+    every document still contributes in proportion to its text however few and large the
+    chunks are.
     """
     if not texts:
         return []
@@ -195,19 +246,40 @@ def plan_pieces(
         for index, (text, size) in enumerate(zip(texts, sizes, strict=True))
         if size >= shortest
     }
+    joined_from = parts or [None] * len(texts)
+    document_of_chunk = documents or [str(index) for index in range(len(texts))]
     planned: list[tuple[int, int, str]] = []
     for length in usable:
-        ranges = [
-            (index, start, end)
-            for index, chunk_units in units.items()
-            for excerpts in (False, True)
-            for start, end in _cuts(chunk_units, length, excerpts=excerpts)
+        singles = [
+            (index, text)
+            for index in units
+            for text in single_parts(joined_from[index] or (), length)
         ]
-        words = sum(sum(unit.words for unit in units[i][a:b]) for i, a, b in ranges)
-        step = max(1, math.ceil(words / budget))
+        from_singles = (
+            len(singles) >= MIN_CALIBRATION_PIECES
+            and len({document_of_chunk[index] for index, _ in singles}) >= MIN_CALIBRATION_DOCUMENTS
+        )
+        # Each candidate is (chunk, words, whole text) or (chunk, words, unit range).
+        found: list[tuple[int, int, str | tuple[int, int]]] = []
+        if from_singles:
+            found += [(index, len(text.split()), text) for index, text in singles]
+        for index, chunk_units in units.items():
+            if joined_from[index]:
+                if not from_singles:
+                    found += [
+                        (index, len(text.split()), text)
+                        for text in whole_parts(joined_from[index] or (), length)
+                    ]
+                continue
+            found += [
+                (index, sum(unit.words for unit in chunk_units[start:end]), (start, end))
+                for excerpts in (False, True)
+                for start, end in _cuts(chunk_units, length, excerpts=excerpts)
+            ]
+        step = max(1, math.ceil(sum(words for _, words, _ in found) / budget))
         planned += [
-            (index, length, _joined(units[index], start, end))
-            for index, start, end in ranges[::step]
+            (index, length, where if isinstance(where, str) else _joined(units[index], *where))
+            for index, _, where in found[::step]
         ]
     return planned
 

@@ -48,8 +48,10 @@ folders `_layouts`, `_includes`, `layouts`, `themes` and `resources`. Name such 
 directly to read it. `build` and `evaluate` keep only the first of documents with
 word-for-word the same text, so a post and its copy can't calibrate against each other.
 
-`build` splits texts into ~500-word windows (`--window-words N`, or `--no-window`), and `score`
-uses whatever the reference used, so the two always match. `--contrast` can be repeated.
+`build` splits texts into ~500-word windows (`--window-words N`, or `--no-window`), and joins
+short ones, such as comments, into windows of the same size (see [Comments, tweets and
+emails](#comments-tweets-and-emails)). `score` uses whatever the reference used, so the two
+always match. `--contrast` can be repeated.
 
 `build` prints a short summary: how the reference scores its own held-out writing, what
 separates it from the contrast drafts, and any warnings; pass `--all` to see every metric.
@@ -207,6 +209,64 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
 - **A verdict means "unlike this reference", not proof of authorship.** A human can drift
   from their own profile, and a model can be prompted toward it.
 
+### Comments, tweets and emails
+
+Short texts can be JSONL, one record per text, or a folder with one file per text. Each
+record or file is a document; a JSONL file is read in order, a folder in sorted file order.
+
+- **Pooling.** When the median text is under a quarter of a window (125 words, by default),
+  `build` joins consecutive short records from the same JSONL file, or consecutive short
+  files from the same folder you named, into ~500-word windows, and says so: `note: joined
+  20,000 records into 1,913 windows of about 500 words`. It never joins across two inputs
+  you typed. It holds back, with a note, when that would leave fewer than 15 windows, since
+  a handful of windows can't calibrate. `--pool` always pools and `--no-pool` never does.
+  Long texts are windowed on their own as usual.
+- **Group records by where they came from.** Pass `--group-field thread` (or
+  `conversation_id`, `channel`) when records carry one. The records sharing a value in one
+  input (a file, or all the files of a folder, so a thread split across monthly exports
+  stays together: name the folder, not the files, and `build` notes a group it finds in
+  several inputs) are then one document: they are pooled together, never with another
+  group's, and held-out calibration leaves out a whole group at a time. Values compare as
+  text, so `1` and `"1"` are one group. Records without a value form one more group,
+  `thread=(none)`, with a note. In the writer's texts, a field no record has is an error
+  that lists the fields the records do have; contrast drafts, which rarely carry the
+  writer's threads, are read ungrouped instead, each draft a document, with a note.
+- **Pick a field with several values, each with several records.** Grouping a
+  one-writer corpus by `author` gives one document, and nothing to hold out; grouping
+  tweets by a field that is new on almost every record leaves nothing to pool. `build`
+  names both problems.
+- **Without a group field, calibration can be far too narrow.** Each pooled window counts
+  as a document. When records from different threads or authors are mixed, windows that
+  mix them average out the differences between threads, so the reference's own spread
+  shrinks, while a new draft comes from one thread and looks far away. In one test (one
+  writer, 20 threads of 40 comments, each thread on its own topic and, in variant B, with
+  a mild habit of its own), the share of a new thread's windows above the reference's
+  calibrated 95th percentile, nominally 5%, was:
+
+  | record order | variant | no group field | `--group-field thread` |
+  |---|---|---|---|
+  | contiguous by thread | A: topic only | 3–12% | 5–7% |
+  | contiguous by thread | B: topic and habit | 8–14% | 3–4% |
+  | interleaved (sorted by time, say) | A | 33–44% | 5–8% |
+  | interleaved | B | 66–85% | 2–4% |
+
+  So pass a group field when there is one. `build` suggests fields named like one
+  (`thread`, `conversation_id`, `channel`, `subject`, `in_reply_to`, `parent`, and as a
+  fallback `author`, `user` or `sender`) that have a few values per many records; never
+  a language, an app or a count.
+- **Duplicates.** A record repeating another word for word (20 words or more) is dropped
+  before pooling, inside a group or across groups, so a cross-posted comment can't
+  calibrate against itself. Files are compared whole.
+- **Scoring.** `score` inherits `--group-field` and `--window-words`, but judges each
+  record on its own, at its own length: a record under 75 words gets no verdict, and
+  `score` notes when the drafts are this short. `score --pool` joins them into windows and
+  judges the batch as a whole (each group apart, with a group field). With a group field,
+  the per-document results are per group, one by one or pooled
+  (`comments.jsonl:thread=t3`). Scoring with `--pool` against a reference that was not
+  pooled reads too close, and warns.
+- **Name the folder, not the files.** Files named one by one on the command line are
+  separate inputs, so they are never joined; `Text` inputs in Python pool like records.
+
 Keep corpora, drafts and generated profiles out of version control; the `.gitignore`
 excludes `profiles/`, `corpora/` and `data/`.
 
@@ -220,9 +280,19 @@ of the separation survives editing.
 Make edited copies of the contrast drafts with whatever you want to test: a person, an
 editing tool, or a model asked to polish or "humanize" them. Save each set in its own folder
 with the originals' file names. An edited draft is matched to its original by its path
-relative to the folder you pass (for JSONL, by record `id`), so keep the same layout: a
-file given directly matches by its bare file name. A set may leave out some drafts; it is
+relative to the folder you pass, so keep the same layout: a file given directly matches by
+its bare file name. A JSONL record matches by its `id`; in a folder, by its file's path in
+the folder and its id (`2024/a.jsonl:17`), since ids often restart in each file. A set may leave out some drafts; it is
 then compared only with the drafts it covers.
+
+Short JSONL drafts are pooled as in `build`, when the writer's texts are. Each edited set
+is then joined into the same windows as its originals, record by record (matched as above),
+however the edits changed their lengths, so every edited window pairs with its original
+window. With `--group-field`, drafts pair by group instead: `thread=t1` with `thread=t1`,
+whichever files of a folder hold its records, and even when an edited set keeps only some
+of a group's records. An edited set that covers only some of a pooled window's drafts is
+compared with that window rebuilt from just those drafts, so its rewrite share, length and
+signal survival are like with like.
 
 ```bash
 styleprofile evaluate posts/ --contrast llm-drafts/ \

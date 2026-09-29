@@ -16,22 +16,8 @@
 # bench/gate.py.
 
 [[regression]]
-pr = 15
-case = "medium-nosyntax"
-metric = "build_cpu_s"
-ratio = 1.78
-reason = "Length-aware verdicts: build cuts every window into 75-, 150- and 300-word pieces, two ways, and measures up to 30,000 words of them per length to calibrate short texts."
-
-[[regression]]
-pr = 15
-case = "medium-nosyntax"
-metric = "build_mb"
-ratio = 1.45
-reason = "Length-aware verdicts: the calibration pieces' metrics are held while build calibrates each length."
-
-[[regression]]
-pr = 15
-case = "medium-nosyntax"
+pr = 18
+case = "comments"
 metric = "profile_mb"
-ratio = 1.45
-reason = "Length-aware verdicts: the profile stores calibration.by_length (about 20 KB: an rms per metric and the ranges for each length)."
+ratio = 1.5
+reason = "Pooling: the comments reference is now ~500-word windows instead of 50-word records, so length calibration can cut 75-, 150- and 300-word pieces and stores their ranges (0.05 to 0.07 MB, still far under the 1 MB target). Build CPU time falls to 0.40x and peak memory to 0.27x."
