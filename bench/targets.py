@@ -1,6 +1,4 @@
-"""Benchmark cases and their performance targets: the one place both live.
-
-Rule: a PR that improves a metric must lower or delete its baseline here in the same PR.
+"""Benchmark cases, their performance targets, and the margins of CI's regression gate.
 
 The targets come from the "Performance targets" table of the engineering plan (measured on a
 4-core laptop):
@@ -18,25 +16,14 @@ Each case below builds a reference from one corpus of ``bench/gen.py`` (with its
 then scores ``examples/draft.md`` against it. Targets marked "derived" are not in the table
 but follow from it; see the comments beside them.
 
-CI enforces a *regression budget* rather than the target itself, because several targets are
-aspirational and are met only by later PRs (13 and 14):
-
-    budget = max(CI_MARGIN x target, NOISE[metric] x baseline)
-
-where ``baseline`` is what the metric measured on the CI runner (GitHub's ``ubuntu-24.04``)
-when the budget was last set, and ``NOISE`` is the metric's noise margin: 1.5 for wall time
-and memory, 1.05 for the deterministic profile size. The first term is the plan's "fail above
-2x the target", which a met target falls back to; the second keeps an unmet target from
-failing CI while still catching a regression.
-
-The ratchet is enforced: ``run.py --check`` also fails when a baseline is *stale*, that is when
-the metric is comfortably back within 2x its target, ``measured x NOISE <= 2 x target`` (the
-baseline is no longer needed, and deleting it still leaves noise headroom under 2x the
-target), or below ``baseline / NOISE`` (it improved by more than noise). The PR that made the
-improvement must then lower or delete the baseline, so the budget tightens towards 2x the
-target and the gain can't quietly be lost again. Time and memory baselines are only judged
-stale on the CI runner (in GitHub Actions), where they were measured; profile size is judged
-on any machine.
+The targets are a *report*, not a gate: GitHub's shared runners vary by up to ~75% in wall time
+from one run of the same code to the next, so no absolute budget is both tight and reliable.
+CI instead gates on a *relative* comparison (``run.py --against``): it benchmarks the change's
+base in the same job, on the same runner, interleaving base and change runs, and fails when the
+change is worse than its base by more than ``MARGINS`` allow. Time is judged on CPU time
+(user + system), which a busy neighbour on the runner inflates far less than wall time; wall
+time is still measured and reported. A change that knowingly costs more declares it in
+``bench/accepted.toml``. Values over ``BACKSTOP`` x their target only raise a warning.
 
 Peak memory is the main ``styleprofile`` process's alone (``ru_maxrss`` from ``os.wait4``),
 not its process tree. That is exact while styleprofile runs in one process; PR 13, which adds
@@ -45,28 +32,54 @@ spaCy's ``n_process`` workers, is responsible for measuring the whole tree.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-CI_MARGIN = 2.0
-# How far a metric may drift from its baseline through noise alone, per metric.
-NOISE = {
-    "build_s": 1.5,
-    "build_mb": 1.5,
-    "profile_mb": 1.05,  # deterministic: sources are stored relative to their inputs
-    "score_s": 1.5,
-    "score_mb": 1.5,
-}
-# Metrics that don't depend on the machine, so any run can judge their baselines.
-DETERMINISTIC = {"profile_mb"}
 
-# Metric keys, their units, and how to label them in the results table.
+@dataclass(frozen=True)
+class Metric:
+    unit: str
+    label: str
+    # Keep the smallest value over repeated runs (time, whose noise only ever adds) rather than
+    # the largest (memory, where the worst run is the one that matters).
+    best_is_min: bool
+
+
+# Metric keys, their units and labels, in the order the tables list them.
 METRICS = {
-    "build_s": ("s", "build wall time"),
-    "build_mb": ("MB", "build peak memory"),
-    "profile_mb": ("MB", "reference profile size"),
-    "score_s": ("s", "score wall time"),
-    "score_mb": ("MB", "score peak memory"),
+    "build_s": Metric("s", "build wall time", best_is_min=True),
+    "build_cpu_s": Metric("s", "build CPU time", best_is_min=True),
+    "build_mb": Metric("MB", "build peak memory", best_is_min=False),
+    "profile_mb": Metric("MB", "reference profile size", best_is_min=False),
+    "score_s": Metric("s", "score wall time", best_is_min=True),
+    "score_cpu_s": Metric("s", "score CPU time", best_is_min=True),
+    "score_mb": Metric("MB", "score peak memory", best_is_min=False),
 }
+
+
+@dataclass(frozen=True)
+class Margin:
+    ratio: float  # the most the change may exceed its base, as change / base
+    # A difference at most this large (in the metric's unit) is noise whatever the ratio: it
+    # keeps a tiny value (say a 0.2s CPU time) from failing on a few milliseconds.
+    floor: float
+
+
+# The relative gate: only these metrics are judged against the base. Wall time is not (CPU
+# time stands in for it). The ratios come from seven A/A runs of the CI job, where base and
+# change are the same code (#19): build time swung between 2.47s and 3.23s from run to run,
+# but CPU time stayed within 1% of its base's in every run, peak memory within 0.3%, and
+# profile size is deterministic. The margins leave over ten times that noise, so they don't
+# flake, while catching a 15% slowdown or a 10% memory increase.
+MARGINS = {
+    "build_cpu_s": Margin(ratio=1.15, floor=0.05),
+    "build_mb": Margin(ratio=1.10, floor=5.0),
+    "profile_mb": Margin(ratio=1.05, floor=0.0),
+    "score_cpu_s": Margin(ratio=1.15, floor=0.05),
+    "score_mb": Margin(ratio=1.10, floor=5.0),
+}
+
+# Values over this multiple of their target get a warning in the report; they never fail CI.
+BACKSTOP = 3.0
 
 
 @dataclass(frozen=True)
@@ -75,40 +88,9 @@ class Case:
     corpus: str  # a corpus name from bench/gen.py
     syntax: bool  # build (and so score) with the spaCy parser
     about: str
+    # The plan's targets, keyed by metric. Time targets are wall time, as the plan states them.
     targets: dict[str, float]
-    # Measured on the CI runner; only for cases that CI runs. Lower a value (or delete it once
-    # the metric is comfortably within 2x its target) whenever a PR improves on it; --check
-    # insists.
-    baseline: dict[str, float] = field(default_factory=dict)
     ci: bool = False  # run by the CI benchmark job and `--quick`
-
-    def budget(self, metric: str) -> float | None:
-        """The most CI accepts for ``metric``; None when CI doesn't run the case or no target."""
-        if not self.ci or metric not in self.targets:
-            return None
-        return max(CI_MARGIN * self.targets[metric], NOISE[metric] * self.baseline.get(metric, 0))
-
-    def stale(self, metric: str, value: float, on_runner: bool) -> str | None:
-        """Why ``metric``'s baseline should be lowered or deleted, or None if it shouldn't.
-
-        Time and memory baselines belong to the CI runner, so only a run there (``on_runner``)
-        can find them stale; a faster laptop would always look like an improvement.
-        """
-        if not self.ci or metric not in self.baseline or metric not in self.targets:
-            return None
-        if metric not in DETERMINISTIC and not on_runner:
-            return None
-        baseline = self.baseline[metric]
-        # Hysteresis: only when deleting the baseline leaves noise headroom under 2x target,
-        # or a value just under 2x target would flake between stale and over budget.
-        if value * NOISE[metric] <= CI_MARGIN * self.targets[metric]:
-            return (
-                "is within 2x its target with room for noise, so its baseline is no longer "
-                "needed; delete it"
-            )
-        if value < baseline / NOISE[metric]:
-            return f"improved on its baseline ({baseline:g}) by more than noise; lower it"
-        return None
 
 
 PROFILE_MB = 1.0  # "< 1 MB regardless of corpus size"
@@ -138,12 +120,6 @@ CASES = {
                 "profile_mb": PROFILE_MB,
                 "score_s": SCORE_S,
             },
-            # Only values over 2x target need a baseline; the rest fall back to 2x target.
-            # build_s meets its target on a laptop (1.2s); the shared runner is slower. Plan
-            # PR 3 brought it from 3.72s to 2.94s there, and with PR 14's lean profile it
-            # measured 1.83s (plan PR 8's CI run), under 3.2s / 1.5 = 2.13s, so its baseline
-            # is deleted and the budget is 2x target, 3.2s.
-            baseline={},
             ci=True,
         ),
         Case(
@@ -170,10 +146,10 @@ CASES = {
                 "profile_mb": PROFILE_MB,
                 "score_s": SCORE_S,
             },
-            # Not run in CI, so no baseline. PR 14 cut the build by about 35% on a laptop
-            # (bootstrap and calibration) and the profile from 105 MB to 0.05 MB. PR 13 owns
-            # the rest of the gap to build_s and build_mb: measurement, and the per-chunk
-            # distribution counters behind the 1.9 GB peak.
+            # PR 14 cut the build by about 35% on a laptop (bootstrap and calibration) and the
+            # profile from 105 MB to 0.05 MB. PR 13 owns the rest of the gap to build_s and
+            # build_mb: measurement, and the per-chunk distribution counters behind the 1.9 GB
+            # peak.
         ),
     )
 }

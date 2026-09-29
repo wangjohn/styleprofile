@@ -209,13 +209,41 @@ make snapshots      # regenerate tests/snapshots/ after an intended change to CL
 ```
 
 `make bench` generates seeded synthetic corpora from `examples/` (`bench/gen.py`, written to
-the git-ignored `bench/corpora/`), then measures wall time, peak memory and profile size for
-each case in `bench/targets.py`. It prints a table beside the targets and saves
-`bench/results.json`. Pick cases with `make bench BENCH="--case big --repeat 3"`. CI runs the
-medium case without spaCy and fails when a value is over its regression budget, as explained in
-`bench/targets.py`. A PR that improves a metric must lower or delete its baseline in
-`bench/targets.py` in the same PR, so the budget ratchets down; CI's `--check` fails on a
-stale baseline until it does.
+the git-ignored `bench/corpora/`), then measures wall time, CPU time, peak memory and profile
+size for each case in `bench/targets.py`. It prints a table beside the plan's targets and saves
+`bench/results.json`. Pick cases with `make bench BENCH="--case big --repeat 3"`. To compare
+with another revision as CI does, add `--against`:
+`make bench-quick BENCH="--against origin/main --repeat 5"` also benchmarks `src/` as of
+`origin/main`, alternating its runs with yours, and prints each metric's ratio to it.
+
+### The benchmark gate in CI
+
+CI's benchmark job runs `bench/run.py --quick --repeat 5 --against HEAD^ --check`. It
+benchmarks your change and its base (the tip of `main` it merges into) in the same job, on the
+same runner, and fails when your change is worse than the base by more than a margin set in
+`bench/targets.py`: CPU time 1.15x, peak memory 1.1x, reference profile size 1.05x. Time is
+judged on CPU time because wall time on shared runners swings by up to 75% between runs. Wall
+time and the plan's targets are reported in the job summary but never fail the job.
+
+If your change is meant to cost more, declare it in `bench/accepted.toml` in the same PR, so
+reviewers approve it:
+
+```toml
+[[regression]]
+pr = 15                    # your pull request's number
+case = "medium-nosyntax"   # the case, from bench/targets.py
+metric = "build_cpu_s"     # the metric, from MARGINS in bench/targets.py
+ratio = 1.9                # the most it may cost, as change / base, with room for noise
+reason = "Length-aware verdicts bootstrap each length bucket separately."
+```
+
+Open the PR first to get its number. Take the ratio from the failing job's summary (or from
+`make bench-quick BENCH="--against origin/main --repeat 5"`) and add about 0.1 for noise. Add
+one entry per metric that fails. An entry applies only to the PR it names, on its own CI runs
+and on the push to `main` that merges it. After that it is inert, and CI warns until someone
+deletes it (do so in any later PR). CI also warns when your own PR turns out not to need its
+entry. To try an entry locally, pass the PR number:
+`make bench-quick BENCH="--against origin/main --repeat 5 --check --pr 15"`.
 
 ### Changing CLI output
 
