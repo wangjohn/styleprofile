@@ -42,7 +42,7 @@ from styleprofile.calibration import (
     similarity,
     verdict,
 )
-from styleprofile.cli import main
+from styleprofile.cli import EXIT_FAILED, main
 from styleprofile.core import StyleProfileError
 from styleprofile.profile import (
     VERSION,
@@ -1045,39 +1045,101 @@ def test_the_writers_own_comments_pool_to_close() -> None:
     assert report["reference"]["verdict"]["verdict"] == sp.Verdict.CLOSE
 
 
-def test_a_few_flagged_chunks_are_named_beside_a_close_headline(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The headline judges the mean of a run's chunks, which answers whether the run as a
-    whole is like the writer; a few very different chunks among many close ones move it
-    little. So whenever a judged chunk is flagged on its own, the headline says how many,
-    ``-q`` appends the count, and the chunk lists name them: the writer's seven essays with
-    one LLM draft at the end read close overall, and its window is named."""
+def _essays_and_a_draft(tmp_path: Path) -> tuple[Path, Path, list[str]]:
+    """The reference (the sample essays, 500-word windows, with the LLM drafts as contrast),
+    a run of the seven essays with one LLM draft at the end, and the essays."""
     reference = tmp_path / "writer.json"
     write_report(_reference(), reference)
     essays = [path.read_text(encoding="utf-8") for path in sorted(WRITER.glob("*.md"))]
     draft = (DRAFTS / "old-maps.md").read_text(encoding="utf-8")
     run = tmp_path / "run.md"
     run.write_text("\n\n".join([*essays, draft]), encoding="utf-8")
-    assert main(["score", str(run), str(reference), "--no-syntax"]) == 0
+    return reference, run, essays
+
+
+def test_a_few_flagged_chunks_are_named_beside_a_close_headline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The headline judges the mean of a run's chunks, which answers whether the run as a
+    whole is like the writer; a few very different chunks among many close ones move it
+    little. So whenever a judged chunk is flagged on its own, the headline says how many,
+    ``-q`` ends its line with them, and the chunk lists name them: the writer's seven
+    essays with one LLM draft at the end, cut at 250 words, read close overall, and the
+    draft's two windows are named."""
+    reference, run, essays = _essays_and_a_draft(tmp_path)
+    args = [str(run), str(reference), "--no-syntax", "--window-words", "250"]
+    assert main(["score", *args]) == 0
     text = capsys.readouterr().out
     assert re.search(
-        r"Overall: close   Delta \d\.\d\d; 1 of 9 chunks reads clearly different or leans "
-        r"LLM on its own \(see below\)\n",
+        r"Overall: close   Delta \d\.\d\d; 2 of 17 chunks read clearly different or lean "
+        r"LLM on their own \(see below\)\n",
         text,
     ), text
-    least = text.split("Least like the reference\n", 1)[1].split("\n\n", 1)[0]
-    assert least.splitlines()[0].endswith("very different          run.md#w9")
-    assert main(["score", "-q", str(run), str(reference), "--no-syntax"]) == 0
-    assert capsys.readouterr().out.endswith(" (1 of 9 chunks flagged)\n")
+    least = text.split("Least like the reference\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert sorted(line.rsplit("  ", 1)[1] for line in least[:2]) == ["run.md#w16", "run.md#w17"]
+    assert main(["score", "-q", *args]) == 0
+    assert capsys.readouterr().out.endswith(
+        " (2 of 17 chunks read clearly different or lean LLM)\n"
+    )
 
     # The essays alone: nothing is flagged, and nothing is added.
     alone = tmp_path / "essays.md"
     alone.write_text("\n\n".join(essays), encoding="utf-8")
     assert main(["score", "-q", str(alone), str(reference), "--no-syntax"]) == 0
-    assert "chunks flagged)" not in capsys.readouterr().out
-    report = _score(["\n\n".join(essays)], _reference())
-    assert report["reference"]["verdict"]["flagged"] == 0
+    assert "clearly different" not in capsys.readouterr().out
+    assert _score(["\n\n".join(essays)], _reference())["reference"]["verdict"]["flagged"] == 0
+
+
+def test_fail_flagged_catches_a_few_off_voice_chunks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--fail-above and --fail-likeness judge each document as a whole, so a close run
+    with two very different chunks passes them; --fail-flagged N fails a document with N or
+    more chunks flagged on their own, and the failed: line and the JSON's failed entry give
+    the count whichever check failed. The library's fail policy is the same."""
+    reference, run, _ = _essays_and_a_draft(tmp_path)
+    args = [str(run), str(reference), "--no-syntax", "--window-words", "250", "-q"]
+    assert main(["score", *args, "--fail-above", "clearly", "--fail-likeness", "leans"]) == 0
+    capsys.readouterr()
+
+    assert main(["score", *args, "--fail-flagged", "2"]) == EXIT_FAILED
+    assert capsys.readouterr().err.endswith(
+        f"failed: {run}: 2 of 17 chunks read clearly different or lean LLM\n"
+    )
+    assert main(["score", *args, "--fail-flagged", "3"]) == 0
+    capsys.readouterr()
+
+    # Failing on likeness, the line and the JSON still carry the count.
+    report = tmp_path / "report.json"
+    failing = [*args, "--fail-flagged", "3", "--fail-likeness", "few", "-o", str(report)]
+    assert main(["score", *failing]) == EXIT_FAILED
+    assert capsys.readouterr().err.endswith(
+        f"failed: {run}: likeness a few LLM traits; 2 of 17 chunks read clearly different "
+        "or lean LLM\n"
+    )
+    saved: Any = load_report(report)
+    assert saved["fail"] == {"above": None, "likeness": "few", "flagged": 3}
+    assert saved["failed"] == [
+        {
+            "name": "run.md",
+            "path": "run.md",
+            "delta": None,
+            "likeness": "a few LLM traits",
+            "flagged": 2,
+            "chunks_judged": 17,
+        }
+    ]
+
+    result = sp.Profile.load(reference).score(run, syntax=False, window_words=250)
+    (document,) = result.documents
+    assert document.flagged == 2
+    assert result.failing(flagged=2) == (document,)
+    assert result.failing(flagged=3) == ()
+    assert result.failing(sp.Verdict.CLEARLY_DIFFERENT, sp.LikenessVerdict.LEANS) == ()
+
+    with pytest.raises(SystemExit):
+        main(["score", *args, "--fail-flagged", "0"])
+    assert "must be a whole number of 1 or more" in capsys.readouterr().err
 
 
 # spaCy.

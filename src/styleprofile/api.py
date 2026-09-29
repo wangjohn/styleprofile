@@ -522,15 +522,23 @@ class ScoreResult(_Result[ScoreReport]):
         )
 
     def failing(
-        self, above: Verdict | None = None, likeness: LikenessVerdict | None = None
+        self,
+        above: Verdict | None = None,
+        likeness: LikenessVerdict | None = None,
+        flagged: int | None = None,
     ) -> tuple[DocumentResult, ...]:
         """The documents at least ``above`` from the reference (``Verdict.CLEARLY_DIFFERENT``
         catches clearly and very different), or at least ``likeness`` like the contrast set,
-        in input order: what ``styleprofile score --fail-above`` and ``--fail-likeness``
-        check. A document without a verdict (too short to judge, or not comparable) never
-        fails either check."""
+        or with at least ``flagged`` chunks flagged on their own (``DocumentResult.flagged``),
+        in input order: what ``styleprofile score --fail-above``, ``--fail-likeness`` and
+        ``--fail-flagged`` check. ``above`` and ``likeness`` judge each document's verdict,
+        over all of its chunks, which a few very different chunks among many move little;
+        ``flagged`` catches those. A document without a verdict (too short to judge, or not
+        comparable) never fails any check."""
         return tuple(
-            document for document in self.documents if any(fails(document, above, likeness))
+            document
+            for document in self.documents
+            if any(fails(document, above, likeness, flagged))
         )
 
     @property
@@ -618,16 +626,20 @@ class ScoreResult(_Result[ScoreReport]):
 
 
 def fails(
-    document: DocumentResult, above: Verdict | None, likeness: LikenessVerdict | None
-) -> tuple[bool, bool]:
-    """Whether ``document`` reaches ``above`` on Delta, and ``likeness`` on likeness, as
-    ``ScoreResult.failing`` checks: never for a document without a Delta verdict (too short
-    to judge, or not comparable)."""
+    document: DocumentResult,
+    above: Verdict | None,
+    likeness: LikenessVerdict | None,
+    flagged: int | None = None,
+) -> tuple[bool, bool, bool]:
+    """Whether ``document`` reaches ``above`` on Delta, ``likeness`` on likeness, and has
+    at least ``flagged`` chunks flagged on their own, as ``ScoreResult.failing`` checks:
+    never for a document without a Delta verdict (too short to judge, or not comparable)."""
     if not document.judged or document.verdict not in DISTANCES:
-        return False, False
+        return False, False, False
     return (
         _reaches(document.verdict, above, DISTANCES),
         _reaches(document.likeness_verdict, likeness, LIKENESSES),
+        flagged is not None and document.flagged >= flagged,
     )
 
 

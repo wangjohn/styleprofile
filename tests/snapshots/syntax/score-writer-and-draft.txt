@@ -10,7 +10,7 @@ By document   furthest from the reference first
       most different in: Long words (7+ letters) ▲▲▲, List items ▲▲▲
   examples/…ter/sharpening.md     637  close                0.57  like reference
 
-Across 2 documents: very different   Delta 2.59; 1 of 2 documents reads clearly different or leans LLM on its own (see the table above)
+Across 2 documents: very different   Delta 2.59
   Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.78 typically (a mean over 2 chunks, up to 0.98).
   Pooled over every document from here on; the table above has each one's own.
 

@@ -511,26 +511,21 @@ def _flagged_note(report: ScoreReport, reference: Baseline, style: _Style) -> st
     """What the headline adds when some judged chunks are flagged on their own
     (``calibration.chunk_flagged``): "; 4 of 40 chunks read clearly different or lean LLM on
     their own (see below)". The headline judges the chunks' mean, which a few such chunks
-    move little, so it always says so; the chunk lists below name them, or, when every
-    document is one chunk, the document table above does."""
+    move little, so it says so whenever the chunk lists below are shown to name them. When
+    every document is one chunk, the document table and its count line already do."""
     verdict = report["reference"]["verdict"]
-    if not verdict["flagged"] or verdict["chunks_judged"] < 2:
+    # With every document one chunk, the document table and its count line say it already.
+    if not verdict["flagged"] or report["chunk_count"] <= max(len(report["documents"]), 1):
         return ""
-    documents = len(report["documents"])
     contrast = reference["contrast"]
-    one = verdict["flagged"] == 1
-    lean = f" or lean{'s' * one} {contrast['label']}" if contrast else ""
-    if report["chunk_count"] > max(documents, 1):
-        count = flagged_text(verdict["flagged"], verdict["chunks_judged"], verdict["chunks"])
-        where = "see below"
-    else:
-        count = flagged_text(
-            verdict["flagged"], verdict["chunks_judged"], verdict["chunks"], unit="documents"
-        )
-        where = "see the table above"
-    verb = "reads" if one else "read"
-    note = f"; {count} {verb} clearly different{lean} on {'its' if one else 'their'} own ({where})"
-    return style.distance(note, FLAGGED_DISTANCE)
+    words = flagged_text(
+        verdict["flagged"],
+        verdict["chunks_judged"],
+        verdict["chunks"],
+        contrast["label"] if contrast else None,
+    )
+    own = "its" if verdict["flagged"] == 1 else "their"
+    return style.distance(f"; {words} on {own} own (see below)", FLAGGED_DISTANCE)
 
 
 def _flagged_chunks(

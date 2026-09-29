@@ -541,10 +541,13 @@ class DocumentEntry(TypedDict):
 
 
 class FailLevels(TypedDict):
-    """The levels ``score --fail-above`` and ``--fail-likeness`` asked for; None if not."""
+    """The levels ``score --fail-above``, ``--fail-likeness`` and ``--fail-flagged`` asked
+    for; None if not."""
 
     above: Literal["somewhat", "clearly", "very"] | None
     likeness: Literal["few", "leans", "like"] | None
+    # The fewest chunks flagged on their own that fail a document.
+    flagged: int | None
 
 
 class FailedDocument(TypedDict):
@@ -555,6 +558,10 @@ class FailedDocument(TypedDict):
     path: str
     delta: str | None
     likeness: str | None
+    # How many of its judged chunks are flagged on their own (``DocumentEntry.flagged``),
+    # whichever check it failed, and how many were judged.
+    flagged: int
+    chunks_judged: int
 
 
 class ScoreReport(ReportBase):
@@ -565,7 +572,7 @@ class ScoreReport(ReportBase):
     # Each document's own verdict, in input order.
     documents: list[DocumentEntry]
     reference: ReferenceScore
-    # Only when ``score`` was given --fail-above or --fail-likeness.
+    # Only when ``score`` was given --fail-above, --fail-likeness or --fail-flagged.
     fail: NotRequired[FailLevels]
     failed: NotRequired[list[FailedDocument]]
 

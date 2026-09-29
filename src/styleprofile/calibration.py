@@ -709,9 +709,10 @@ def _likeness(
 
 
 # A chunk is flagged on its own (``chunk_flagged``) at "clearly different" or worse, or at
-# "leans <contrast>" or more: levels the writer's own chunks almost never reach (at most
-# 0.3% at any length, see docs/method.md), unlike "somewhat different", which about one in
-# twenty of them reads by design.
+# "leans <contrast>" or more: levels the writer's own chunks rarely reach (0-0.3% of held-out
+# chunks, see docs/method.md), unlike "somewhat different", which about one in twenty of
+# them reads by design. A long run still has many chances: runs of 200 of the writer's own
+# chunks name one in 15-27% of batches.
 FLAGGED_DISTANCE = 2
 FLAGGED_LIKENESS = 2
 
@@ -725,10 +726,15 @@ def chunk_flagged(row: Mapping[str, Any]) -> bool:
     return level >= FLAGGED_DISTANCE or (chunk_likeness_level(row) or 0) >= FLAGGED_LIKENESS
 
 
-def flagged_text(flagged: int, judged: int, chunks: int, *, unit: str = "chunks") -> str:
-    """ "4 of 40 chunks", or "4 of 40 judged chunks" when some of ``chunks`` were not
-    judged: how many judged chunks (or documents, ``unit``) are flagged on their own."""
-    return f"{flagged} of {judged} {'judged ' if judged < chunks else ''}{unit}"
+def flagged_text(flagged: int, judged: int, chunks: int, label: str | None) -> str:
+    """ "4 of 40 chunks read clearly different or lean LLM" ("1 of 9 chunks reads ... or
+    leans LLM"; "judged chunks" when some of ``chunks`` were not judged; without the likeness
+    half when there is no contrast set ``label``): how many judged chunks are flagged on
+    their own (``chunk_flagged``), in words every front end uses."""
+    one = flagged == 1
+    judged_word = "judged " if judged < chunks else ""
+    lean = f" or lean{'s' * one} {label}" if label else ""
+    return f"{flagged} of {judged} {judged_word}chunks read{'s' * one} clearly different{lean}"
 
 
 def chunk_level(row: Mapping[str, Any]) -> int | None:
