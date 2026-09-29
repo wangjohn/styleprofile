@@ -20,12 +20,21 @@ typecheck:
 
 check: test lint typecheck
 
-# Build a reference from the sample corpus in examples/, score a draft against it, and show
-# the saved score. Outputs go to profiles/, which is git-ignored.
+# Score examples/draft.md, which slips into the LLM register in two paragraphs: first against
+# the seven essays in examples/writer, too few to set paragraph thresholds (the output says
+# so), then against a larger corpus in the same voice, remixed from them by bench/gen.py (see
+# examples/README.md), which finds the two paragraphs. Outputs go to profiles/ (git-ignored).
 demo:
 	$(UV) run styleprofile build examples/writer --contrast examples/llm-drafts \
+		-o profiles/demo-essays.json
+	$(UV) run styleprofile score examples/draft.md profiles/demo-essays.json
+	@echo
+	@echo "Next, against a synthetic reference remixed from the seven essays (bench/gen.py):"
+	@echo "an optimistic stand-in for a real writer's larger archive, for illustration only."
+	$(UV) run python bench/gen.py --corpus demo --out profiles
+	$(UV) run styleprofile build profiles/demo/writer --contrast profiles/demo/contrast \
 		-o profiles/demo-writer.json
-	$(UV) run styleprofile score examples/draft.md profiles/demo-writer.json \
+	$(UV) run styleprofile score --by-paragraph examples/draft.md profiles/demo-writer.json \
 		-o profiles/demo-draft.json
 	$(UV) run styleprofile show profiles/demo-draft.json > /dev/null
 

@@ -45,6 +45,27 @@ and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdic
 
 ```
 
+A single document is also read in spans of 100 words or more to show where it drifts (see
+[Where it drifts](../README.md#where-it-drifts)). `result.passages` holds one `Passage` per
+paragraph, in order: its `lines` (first and last line of its prose), `words`, `excerpt`, the
+figures of the lower of its two spans (`delta`, `verdict`, `likeness`, `likeness_verdict`),
+its own `traits`, each a `Trait(metric, z, value, reference)`, and whether it `drifts`.
+Pass `passages=True` to read several documents this way (each passage names its `document`
+as `result.documents` does), or `passages=False` to skip it. With a reference as small as the
+seven sample essays no paragraph drifts: it is too small to set paragraph thresholds
+(`report["passages"][0]["sensitive"]` is False), though the planted paragraph reads highest.
+
+```python
+>>> passage = result.passages[3]
+>>> passage.lines, passage.words, passage.excerpt[:32], passage.drifts
+((9, 9), 60, 'But the store is more than a pla', False)
+>>> max(result.passages, key=lambda p: p.likeness).lines
+(9, 9)
+>>> result.to_text(by_paragraph=True)  # doctest: +ELLIPSIS
+'STYLE COMPARISON...By paragraph...'
+
+```
+
 ## Several documents at once
 
 `result.delta`, `result.verdict` and the likeness figures are pooled over every chunk of

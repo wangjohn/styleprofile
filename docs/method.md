@@ -376,6 +376,129 @@ of sentences that split paragraphs.
   evidence is thin: the 95% confidence intervals on a 0% rate reach 12% (28 pieces) and 23%
   (14 pieces). A second real corpus should be tracked before the bound is trusted further.
 
+## Where a draft drifts
+
+One Delta or likeness over a whole draft dilutes a paragraph or two in another register:
+`examples/draft.md` has two paragraphs written like an LLM (lines 9 and 15, 93 of its 542
+words) and reads "close" overall. So `score` also reads a single document in parts
+(`drift`; `--by-paragraph` or `passages=True` does it for several). A paragraph that reads
+unlike the writer is said to *drift*; that is a different thing from a chunk *flagged* on its
+own (a whole window reading clearly different), which the headline notes.
+
+- **Paragraphs and spans.** The document is split into paragraphs as written: each block
+  with prose, measured with any heading or code block just above it and its list
+  continuations; its line range is its prose's, so headings and code never widen it (for
+  HTML, the lines are the Markdown conversion's, and the output says so). Every paragraph
+  gets two spans of whole paragraphs holding at least 100 words: one starting at it and
+  running forward, one ending at it and running back. Near the ends, where one side runs
+  out, it takes the document's first or last span instead; where the two are the same span
+  (a paragraph of 100 words or more is its own span both ways, and so, often, is the
+  first or last), the second is that span widened by the shorter neighbouring paragraph. So
+  every paragraph rests on two distinct spans, unless one span is the whole document. A
+  document under 100 words has no span and abstains.
+- **Measured once.** Each span's Markdown is measured once, like a chunk; with spaCy its
+  syntax comes from its part of the parse the windows already have, joined into one parse of
+  the document (`Doc.from_docs`), so nothing is parsed twice. Each paragraph is also measured
+  on its own, for its traits.
+- **The statistic.** Each span is scored like a chunk of its length (Lengths.at) and read as
+  its score over the 95% bound at that length (floored as the verdicts are): LLM-likeness
+  when the reference has a contrast set, else Delta. A paragraph's statistic is the lower of
+  its two spans. A span that is high only because of a neighbouring paragraph has the
+  neighbour's other span beside it, without the drifting paragraph, so the neighbour's
+  statistic stays low. A paragraph whose two spans both hold another that drifts, while it
+  is not in both of that one's, is explained by it and does not drift (`--by-paragraph`
+  says so).
+- **A threshold per document, from the writer's documents.** Checking every paragraph of a
+  70-paragraph document at a 95% bound would find some paragraph of the writer's own most of
+  the time. So `build` reads up to 40,000 words of its own documents the same way, each span
+  scored held out (z-scores against the windows of every other document, likeness with the
+  contrast fold that left the document out, both at the span's length). It splits each
+  paragraph's statistic into its document's *level* (the median statistic of its paragraphs)
+  and its *excess* over that level, and stores (`calibration.drift`) the spread of the
+  documents' levels (median and 90th percentile) and the tail of the excess above its 90th
+  percentile, modelled as exponential. A document of n paragraphs lets a paragraph drift
+  only above the level of the writer's documents at the top of their spread (the 90th
+  percentile) plus the 1 − 0.05 / n quantile of the excess, with the tail's scale at an upper
+  90% confidence bound (the mean of k exponential excesses is a chi-square with 2k degrees
+  of freedom: 1.24 times the mean for 40 values above the tail's start, 1.16 for 80). So the
+  chance of any paragraph of the writer's drifting is at most about 5% whatever the
+  document's length, and the margin comes from how far the writer's own documents move, and
+  how well the reference pins the tail down, rather than from a constant. It is never at or
+  below the 95% bound.
+- **Too small, or no contrast.** The null needs paragraphs from 10 or more documents and 20
+  values in the tail (about 200 paragraphs): with fewer, no paragraph drifts and the output
+  says the reference is too small to set paragraph thresholds. The seven sample essays are
+  such a reference. A document that is a single span (one tail value per document, too few
+  to fit) is never judged to drift, and says why. Against a reference without a contrast
+  set, spans are judged by Delta, which dilutes a paragraph's few LLM tells across every area
+  (an earlier rule, judged by Delta, caught 12–21% of prose LLM paragraphs spliced into
+  corpus A), so the output says paragraph checks need `--contrast` rather than "no paragraph
+  drifts".
+- **What a passage shows.** Its lines, the likeness and Delta verdicts of its lower span, the
+  start of its text, and its own top three traits (its strongest likeness signals, or its
+  largest z-scores, at its own length), so a neighbouring list cannot lend it "List items".
+  `--by-paragraph` lists every paragraph's statistic ("x range") against the document's
+  threshold. More than half the paragraphs drifting reads "drifts throughout (13 of 17
+  paragraphs)", and `-q` "drifts throughout".
+
+### How well it holds
+
+Measured with `bench/drift.py`, the review's harness: 5 folds per corpus, each with a
+contrast set of 40 documents generated from 4 of the 5 LLM drafts, and inserts from the
+fifth. Inserts are runs of 1, 2 or 3 consecutive blocks of that draft (headings and lists
+included) at the start, middle or end of a held-out document, 9 per document. Documents are
+also scored with every paragraph split into 1–2 sentences, and concatenated 2, 4, 6 and 10 at
+a time (about 25 to 140 paragraphs), 6 of each per fold.
+
+- **A** is bench medium (seed 0): the reference is 150 documents, and 50 are held out, on
+  the reference's own topics. It is optimistic: its documents are remixed from the same
+  seven essays, so held-out text shares topics and sentences with the reference.
+- **B** is a topic shift: the reference is remixed from 5 of the essays, and the held-out
+  documents from the other 2 (`sharpening`, `walking-in-rain`, their topics and sentences
+  unseen), plus those 2 real essays.
+- **C** is a topic shift the contrast covers but the reference does not: the held-out topics
+  are `fence-lines` and `the-woodstove`, which the LLM drafts also write about, in documents
+  of about 600 words.
+
+| | A no spaCy | A spaCy | B no spaCy | B spaCy | C no spaCy | C spaCy |
+|---|---|---|---|---|---|---|
+| held-out documents with a false drift (~12 paragraphs) | 2/50 (4%) | 0/50 | 0/32 | 1/32 (3%) | 1/32 (3%) | 1/32 (3%) |
+| same, 1–2-sentence paragraphs (~50) | 0/50 | 0/50 | 0/32 | 1/32 (3%) | 2/32 (6%) | 2/32 (6%) |
+| 2 concatenated (~25 paragraphs) | 4/30 (13%) | 0/30 | 0/30 | 0/30 | 3/30 (10%) | 0/30 |
+| 4, 6 or 10 concatenated (48–140 paragraphs) | 0/90 | 0/90 | 0/90 | 0/90 | 3/90 (3%) | 0/90 |
+| any insert found / and nothing else | 83 / 78% | 82 / 82% | 81 / 80% | 84 / 77% | 81 / 79% | 76 / 75% |
+| 1 / 2 / 3 blocks found | 65 / 87 / 98% | 63 / 87 / 97% | 60 / 82 / 100% | 66 / 86 / 99% | 68 / 77 / 97% | 60 / 72 / 97% |
+| prose insert under 30 words | 33% | 31% | 29% | 38% | 34% | 29% |
+| 1 block, 1–2-sentence host paragraphs | 60% | 58% | 62% | 53% | 66% | 53% |
+| 1 block in a 24–140-paragraph document | 41% | 40% | 45% | 51% | 47% | 44% |
+| 1 block at the start / middle / end | 76 / 66 / 54% | 74 / 66 / 50% | 66 / 62 / 53% | 69 / 66 / 62% | 69 / 72 / 62% | 56 / 66 / 59% |
+| draft.md exactly lines 9 and 15 | 5/5 | 5/5 | 4/5 | 4/5 | 5/5 | 4/5 |
+
+A's 4 of 30 two-document concatenations are 2 distinct paragraphs of the writer (from 2 of
+its 50 held-out documents), repeated across concatenations; C's without spaCy are 4
+distinct paragraphs. Across
+all six setups, the writer's documents drift falsely 0–6% of the time, and 0–13% counting
+repeats, on seen and unseen topics alike.
+
+Before this rule (a constant floor of 1.2 times the bound, and single spans judged against a
+tail fitted to all spans), the same harness gave C 9–16% false drift in single documents and
+8–27% in 48–140-paragraph ones, 28 of 29 long-document flags being paragraphs of 100 words or
+more resting on one span. Now every paragraph rests on two spans (none of the 59,000 clean
+paragraphs rests on one). The fitted excess tail predicts the writer's held-out paragraphs
+on seen topics (at p = 0.1 / 0.02 / 0.005: 0.113 / 0.037 / 0.010 on A without spaCy, 0.087 /
+0.023 / 0.007 with it) and runs heavier on unseen ones (C: 0.19 / 0.05–0.06 / 0.007–0.021),
+which the margin from the documents' spread and the tail's confidence bound absorb.
+
+What this does not catch well: a single short LLM paragraph (under 30 words, 29–38%), one
+paragraph in a long document (the per-document threshold rises with its length: 40–51% at
+24–140 paragraphs), a single block at the end of a document (50–62%), and, on a topic the
+reference lacks with spaCy, two-block inserts (72%). So "no paragraph drifts" is not "clean":
+a single short paragraph in the LLM register is missed more often than it is found.
+`draft.md`'s line 15 is such a paragraph (33 words); the folds find both planted paragraphs
+4 or 5 times in 5, and the demo reference finds both. Real writers vary more than these
+remixed corpora, so expect somewhat more false drift on real text, and on a new topic most of
+all.
+
 ## Resolution floors
 
 Every z uses a spread of at least half of one occurrence per chunk for counts (5% of the

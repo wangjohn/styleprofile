@@ -1,4 +1,5 @@
-"""Generate the benchmark corpora: seeded, synthetic, and built from the sample texts in examples/.
+"""Generate the benchmark and demo corpora: seeded, synthetic, and built from the sample texts in
+examples/.
 
     python bench/gen.py [--corpus NAME ...] [--out DIR]
 
@@ -8,6 +9,9 @@ Each corpus has a writer side (from ``examples/writer``) and a contrast side (fr
 - ``medium``: 200 Markdown documents of about 1,000 words, plus 40 contrast documents;
 - ``big``: 1,000 documents, plus 200 contrast documents;
 - ``comments``: 20,000 JSONL records of about 50 words, plus 2,000 contrast records.
+- ``demo``: 40 documents of about 700 words, plus 10 contrast documents, for ``make demo``: a
+  reference the size a calibrated one needs (20,000 words or more), which the seven essays
+  alone are not.
 
 Documents mix whole paragraphs from the samples with paragraphs recombined from their
 sentences, and vary in length, so windows differ from each other the way real texts do rather
@@ -52,6 +56,7 @@ CORPORA = {
         Corpus("medium", documents=200, contrast=40, words=1_000),
         Corpus("big", documents=1_000, contrast=200, words=1_000),
         Corpus("comments", documents=20_000, contrast=2_000, words=50, jsonl=True),
+        Corpus("demo", documents=40, contrast=10, words=700),
     )
 }
 

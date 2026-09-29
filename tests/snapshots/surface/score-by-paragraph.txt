@@ -1,13 +1,13 @@
-$ styleprofile show '<tmp>/draft.json'
+$ styleprofile score --by-paragraph examples/draft.md '<tmp>/writer.json'
 [exit 0]
 --- stdout
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
-Overall: close   Delta 0.81
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.82 typically (95% under 1.10).
+Overall: close   Delta 0.85
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under 0.99).
 
-LLM-likeness: like the reference   0.73
-  The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.90); the LLM drafts 13.74.
+LLM-likeness: like the reference   0.71
+  The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
@@ -17,11 +17,21 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
   Sentence shape               0.49x  ██░░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
-  Syntax                       0.41x  ██░░░░░░░░░░░░░░░░░░  close
-  How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
 Where it drifts: the reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.
+
+By paragraph   examples/draft.md   spans of at least 100 words
+  The reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.
+     lines      words   x range  LLM-likeness
+     3             70     0.21x  like the reference      The hardware store in the village has…
+     5             85     0.20x  like the reference      It's a narrow building, long and dim…
+     7             84     0.20x  like the reference      I go in for one thing and come out an…
+     9             60     0.93x  like the reference      But the store is more than a place to…
+     11            86     0.07x  like the reference      The big store in the city is cheaper. I…
+     13            63     0.07x  like the reference      Walt is seventy-one. His daughter works…
+     15            33     0.56x  like the reference      Ultimately, the future of the village…
+     17            61     0.44x  like the reference      I bought a pound of eightpenny nails…
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference

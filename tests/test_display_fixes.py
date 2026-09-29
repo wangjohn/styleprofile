@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import stat
@@ -13,7 +14,7 @@ import pytest
 
 from styleprofile.calibration import verdict
 from styleprofile.display import (
-    BAR_SCALE,
+    BAR_MAX,
     BAR_WIDTH,
     LABEL_WIDTH,
     format_evaluation,
@@ -141,7 +142,7 @@ def test_areas_sort_by_verdict_and_show_distance_relative_to_their_range() -> No
     numbers = [float(re.search(r"([\d.]+)x", row).group(1)) for row in rows]  # type: ignore[union-attr]
     assert numbers == sorted(numbers, reverse=True)
     for row, number in zip(rows, numbers, strict=True):
-        assert row.count("█") == round(number / BAR_SCALE * BAR_WIDTH)
+        assert row.count("█") == round(math.log1p(number) / math.log1p(BAR_MAX) * BAR_WIDTH)
 
 
 def test_areas_fall_back_to_raw_delta_without_calibration() -> None:

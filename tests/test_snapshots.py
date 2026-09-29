@@ -15,18 +15,24 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import importlib
 import importlib.util
 import io
 import os
 import re
 import shlex
 import shutil
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from styleprofile.cli import main
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
+gen: Any = importlib.import_module("gen")
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"
@@ -37,6 +43,10 @@ TMP = "<tmp>"  # stands in for the per-run temporary directory
 WRITER, CONTRAST, DRAFT = "examples/writer", "examples/llm-drafts", "examples/draft.md"
 REFERENCE, REPORT, EVALUATION = f"{TMP}/writer.json", f"{TMP}/draft.json", f"{TMP}/evaluation.json"
 MIXED = f"{TMP}/mixed.json"
+# The demo's larger reference in the same voice (``bench/gen.py --corpus demo``, as `make demo`
+# builds it), against which draft.md's two planted paragraphs are found.
+DEMO, DEMO_REFERENCE = f"{TMP}/demo", f"{TMP}/demo-writer.json"
+DEMO_REPORT = f"{TMP}/demo-draft.json"
 
 # (name, arguments) in the order they run; later commands read what earlier ones wrote.
 # `build` gains --no-syntax in surface mode, and `score` and `show` inherit it from the profile.
@@ -67,6 +77,22 @@ COMMANDS: list[tuple[str, list[str]]] = [
         ],
     ),
     ("show-score-writer-and-draft", ["show", MIXED]),
+    ("score-by-paragraph", ["score", "--by-paragraph", DRAFT, REFERENCE]),
+    (
+        "build-demo",
+        ["build", f"{DEMO}/writer", "--contrast", f"{DEMO}/contrast", "-o", DEMO_REFERENCE],
+    ),
+    ("score-demo", ["score", DRAFT, DEMO_REFERENCE, "-o", DEMO_REPORT]),
+    ("score-demo-quiet", ["score", "-q", DRAFT, DEMO_REFERENCE]),
+    ("show-demo-by-paragraph", ["show", "--by-paragraph", DEMO_REPORT]),
+    (
+        "score-demo-two-files-by-paragraph",
+        ["score", "--by-paragraph", DRAFT, f"{WRITER}/old-maps.md", DEMO_REFERENCE],
+    ),
+    (
+        "score-demo-two-files-by-paragraph-quiet",
+        ["score", "-q", "--by-paragraph", DRAFT, f"{WRITER}/old-maps.md", DEMO_REFERENCE],
+    ),
     ("show-reference", ["show", REFERENCE]),
     ("show-reference-all", ["show", "--all", REFERENCE]),
     ("show-score", ["show", REPORT]),
@@ -137,6 +163,7 @@ def outputs(
             pytest.fail("updating snapshots needs spaCy for the syntax mode; run `make snapshots`")
         pytest.skip("spaCy is not installed")
     tmp = tmp_path_factory.mktemp(mode)
+    gen.generate("demo", out=tmp)
     plain = tmp / "plain"
     plain.mkdir()
     for draft in sorted((ROOT / CONTRAST).glob("*.md")):

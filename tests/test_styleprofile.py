@@ -1454,8 +1454,8 @@ def test_each_command_has_short_help_with_an_example(
     assert exit_.value.code == 0
     out = capsys.readouterr().out
     assert f"example:\n  styleprofile {command}" in out
-    # score also lists its exit codes, for hooks and CI.
-    assert len(out.splitlines()) < (50 if command == "score" else 40)
+    # score also lists its exit codes, for hooks and CI, and has --by-paragraph.
+    assert len(out.splitlines()) < (51 if command == "score" else 40)
 
 
 def test_version_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> None:
