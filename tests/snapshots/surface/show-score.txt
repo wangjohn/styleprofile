@@ -3,31 +3,31 @@ $ styleprofile show '<tmp>/draft.json'
 --- stdout
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
-Overall: close   Delta 0.88
-  Lower is closer. The reference's own held-out writing scores 0.68 typically, 95% under 0.89.
+Overall: close   Delta 0.85
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under 0.99).
 
-LLM-likeness: like the reference   0.77
-  The reference's own writing scores 0.20 typically (95% under 0.82); the LLM drafts 14.23.
+LLM-likeness: like the reference   0.71
+  The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.
 
 By area   Delta ÷ the top of the reference's usual range in each area
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.42x  █████████░░░░░░░░░░░  somewhat different
-  Vocabulary                   0.84x  ██████░░░░░░░░░░░░░░  close
-  Function words               0.78x  █████░░░░░░░░░░░░░░░  close
-  Punctuation                  0.77x  █████░░░░░░░░░░░░░░░  close
-  Sentence shape               0.65x  ████░░░░░░░░░░░░░░░░  close
-  Rhythm                       0.59x  ████░░░░░░░░░░░░░░░░  close
+  Voice and stance             1.32x  █████████░░░░░░░░░░░  somewhat different
+  Vocabulary                   0.72x  █████░░░░░░░░░░░░░░░  close
+  Function words               0.66x  ████░░░░░░░░░░░░░░░░  close
+  Punctuation                  0.66x  ████░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.49x  ███░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.47x  ███░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference
   Sentences per paragraph                               4.38        6.15   ▼▼▼
-  "more"                                             5.5 /1k     1.5 /1k   ▲▲▲
+  "more"                                             5.5 /1k     1.5 /1k   ▲▲
   "but"                                              5.5 /1k     2.0 /1k   ▲▲
-  Words per paragraph                             67.8 words  86.9 words   ▼▼
-  "at"                                               1.8 /1k     5.8 /1k   ▼▼
   Sentences starting However / Moreover                 2.9%        0.0%   ▲▲  reference never varies
-  Median sentence length                          15.0 words  10.7 words   ▲▲
   Em dashes                                          1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  "these"                                            1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  Words per paragraph                             67.8 words  86.9 words   ▼▼
 
 Pass --all to see every metric.

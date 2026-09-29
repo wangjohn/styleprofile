@@ -26,9 +26,21 @@ Delta 0..., like the reference
 (`.words(label)` names the contrast set). Both are string enums with the same words as the
 CLI (see [Reading the output](../README.md#reading-the-output)). A score with no metric in
 common with the profile is `Verdict.NOT_COMPARABLE`. Delta and the verdicts are pooled over
-every input you score at once; per-document results arrive with plan PR 7.
-`result.to_text()` is what `styleprofile score` prints, and `result.report` is the full JSON
-report: the live dict, not a copy.
+every input you score at once, each chunk read against the writer's range at its own length;
+per-document results arrive with plan PR 7. `result.to_text()` is what `styleprofile score`
+prints, and `result.report` is the full JSON report: the live dict, not a copy.
+
+A text too short to judge gets no verdict: `judged` is False, both verdicts are `TOO_SHORT`,
+and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdicts)).
+
+```python
+>>> short = profile.score(sp.Text("The stones shift; the posts do not. My father kept his."))
+>>> short.verdict, short.likeness_verdict, short.judged
+(<Verdict.TOO_SHORT: 'too short to judge'>, <LikenessVerdict.TOO_SHORT: 'too short to judge'>, False)
+>>> short.reason
+"under 75 words, the writer's own text varies too much by chance to judge"
+
+```
 
 ## Inputs
 

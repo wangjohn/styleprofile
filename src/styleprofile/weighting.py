@@ -31,7 +31,7 @@ from itertools import accumulate, groupby, islice
 from operator import itemgetter, mul
 from typing import Any, NamedTuple
 
-from styleprofile.core import LIKENESSES
+from styleprofile.core import DISTANCES, LIKENESSES, Verdict
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
 from styleprofile.surface import Metrics
 
@@ -52,6 +52,9 @@ MIN_CEILING = 0.5
 # |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
 # the reference's own held-out likeness is near zero or averaged over very many chunks.
 LIKENESS_MIN_CEILING = MIN_CEILING / 2
+# Calibration pieces come many to a document, so their 95th percentile is read as an upper
+# confidence bound: one-sided, at this many standard errors of the quantile's share (90%).
+UPPER_Z = 1.2816
 # The contrast AUC's confidence interval resamples whole documents, checking at each of
 # these counts whether both ends of the interval have settled: moved less than a fiftieth of
 # its width (at least 0.001, at most 0.005) since the previous checkpoint, at this and the
@@ -111,25 +114,36 @@ def _values(metrics: Metrics) -> dict[Key, float]:
 
 
 def held_out_z(
-    chunk_metrics: Sequence[Metrics], sources: Sequence[str], floor: Mapping[Key, float]
+    chunk_metrics: Sequence[Metrics],
+    sources: Sequence[str],
+    floor: Mapping[Key, float],
+    *,
+    others: tuple[Sequence[Metrics], Sequence[str]] | None = None,
 ) -> list[ZScores]:
     """Each chunk's z-scores against the chunks from every other source.
 
-    Running sums keep this linear in the number of chunks, so a corpus of thousands of
-    comments costs about as much as profiling it.
+    With ``others`` (more texts and their sources, such as shorter pieces cut from these
+    chunks), those texts are scored instead, each against the chunks from every source but
+    its own. Running sums keep this linear in the number of chunks, so a corpus of
+    thousands of comments costs about as much as profiling it.
     """
     values = [_values(metrics) for metrics in chunk_metrics]
     total, parts = _sums(values, sources)
+    if others is not None:
+        values, sources = [_values(metrics) for metrics in others[0]], others[1]
     scored: list[ZScores] = []
     for chunk_values, source in zip(values, sources, strict=True):
-        own = parts[source]
+        own = parts.get(source, {})
         chunk_z: ZScores = {}
         for key, value in chunk_values.items():
-            n = total[key][0] - own[key][0]
+            if key not in total:
+                continue
+            mine = own.get(key, _EMPTY)
+            n = total[key][0] - mine[0]
             if n < 2:
                 continue
-            mean = (total[key][1] - own[key][1]) / n
-            variance = (total[key][2] - own[key][2] - n * mean * mean) / (n - 1)
+            mean = (total[key][1] - mine[1]) / n
+            variance = (total[key][2] - mine[2] - n * mean * mean) / (n - 1)
             sd = math.sqrt(variance) if variance > 1e-12 * max(1.0, mean * mean) else 0.0
             z = z_score(value, mean, sd, int(n), floor.get(key, 0.0))
             if z is not None:
@@ -171,6 +185,79 @@ def quantile(values: Sequence[float], share: float) -> float:
     return ordered[round(share * (len(ordered) - 1))]
 
 
+def _group_size(groups: Sequence[str]) -> float:
+    """n0, the usual adjusted mean group size of a one-way analysis of variance."""
+    count = len(groups)
+    sizes = [len(index) for index in _by_source(groups).values()]
+    if len(sizes) < 2:
+        return float(count)
+    return (count - sum(size * size for size in sizes) / count) / (len(sizes) - 1)
+
+
+def intraclass_correlation(values: Sequence[float], groups: Sequence[str]) -> float | None:
+    """How alike values from one group (one document) are: the intraclass correlation from
+    a one-way analysis of variance, clipped to [0, 1]; None with fewer than two groups or
+    no group of two or more."""
+    count = len(values)
+    positions = _by_source(groups)
+    if len(positions) < 2 or count <= len(positions):
+        return None
+    mean = statistics.fmean(values)
+    means = {
+        group: statistics.fmean(values[i] for i in index) for group, index in positions.items()
+    }
+    between = sum(len(index) * (means[group] - mean) ** 2 for group, index in positions.items())
+    within = sum(
+        (values[i] - means[group]) ** 2 for group, index in positions.items() for i in index
+    )
+    mean_between = between / (len(positions) - 1)
+    mean_within = within / (count - len(positions))
+    spread = mean_between + (_group_size(groups) - 1) * mean_within
+    return min(max((mean_between - mean_within) / spread, 0.0), 1.0) if spread > 0 else 0.0
+
+
+def effective_count(
+    values: Sequence[float], groups: Sequence[str], icc: float | None = None
+) -> float:
+    """How many independent values ``values`` are worth, given that values from one group
+    (one document) are alike: n over the design effect 1 + (n0 - 1) x ICC, with n0 the
+    adjusted mean group size. ``icc`` is the intraclass correlation to use; by default it
+    is estimated from the values themselves (``intraclass_correlation``). Values from one
+    group count as one."""
+    count = len(values)
+    if len(set(groups)) < 2:
+        return float(min(count, 1))
+    if icc is None:
+        icc = intraclass_correlation(values, groups) or 0.0
+    return count / (1 + (_group_size(groups) - 1) * icc)
+
+
+def upper_quantile(
+    values: Sequence[float],
+    groups: Sequence[str],
+    share: float,
+    z: float = UPPER_Z,
+    icc: float | None = None,
+) -> float:
+    """An upper confidence bound on the ``share`` quantile of ``values``: the quantile at
+    share + z x sqrt(share (1 - share) / n_eff), with n_eff from ``effective_count``, so a
+    bound read from few documents is set higher rather than trusted as exact. For the 95th
+    percentile that is the sample maximum below about 31 effective values."""
+    effective = max(effective_count(values, groups, icc), 1.0)
+    return quantile(values, min(share + z * math.sqrt(share * (1 - share) / effective), 1.0))
+
+
+@dataclass(frozen=True)
+class HeldDeltas:
+    """Held-out Deltas of chunks (or pieces), overall and per area, with the source each
+    came from (see ``held_out_deltas``)."""
+
+    overall: list[float]
+    sources: list[str]
+    areas: dict[str, list[float]]
+    area_sources: dict[str, list[str]]
+
+
 def likeness(
     z_scores: ZScores, effects: Mapping[Key, float], rms: Mapping[Key, float]
 ) -> tuple[float, list[dict[str, Any]]]:
@@ -200,6 +287,7 @@ def likeness(
 
 
 Sums = dict[Key, list[float]]
+_EMPTY = (0.0, 0.0, 0.0)
 
 
 def _sums(
@@ -275,6 +363,21 @@ def _fold_without(
         else:
             effects.pop(key, None)
     return effects, rms
+
+
+def _rms_without(
+    total: Sums, full: Mapping[Key, float], part: Mapping[Key, list[float]]
+) -> dict[Key, float]:
+    """``_rms`` of ``total`` less one source's ``part``, given ``full``, the rms of the whole
+    total; only the metrics the part has are recomputed."""
+    rms = dict(full)
+    for key in part:
+        n, _, squares = _less(total[key], part, key)
+        if n < 1:
+            rms.pop(key, None)
+        else:
+            rms[key] = math.sqrt(squares / n)
+    return rms
 
 
 def _by_source(sources: Sequence[str]) -> dict[str, list[int]]:
@@ -498,12 +601,10 @@ def by_document(scores: Sequence[float], sources: Sequence[str]) -> list[list[fl
     return list(grouped.values())
 
 
-def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str, Any] | None:
-    """The reference's own Delta range on held-out chunks, overall and per area.
-
-    Each source is scored with reliability weights learned without it, so the range shows
-    how Delta behaves on the writer's new text rather than on text the weights have seen.
-    """
+def held_out_deltas(held: Sequence[ZScores], sources: Sequence[str]) -> HeldDeltas:
+    """Each chunk's Delta, overall and per area, with reliability weights learned without
+    its own source, so the values show how Delta behaves on the writer's new text rather
+    than on text the weights have seen."""
     total, parts = _sums(held, sources)
     full = delta_weights(_rms(total))
     scored: list[tuple[float | None, dict[str, float]]] = [(None, {})] * len(held)
@@ -520,22 +621,63 @@ def calibrate_delta(held: Sequence[ZScores], sources: Sequence[str]) -> dict[str
         for index in positions:
             scored[index] = delta(held[index], weights)
     overall: list[float] = []
+    overall_sources: list[str] = []
     areas: dict[str, list[float]] = defaultdict(list)
-    for value, by_group in scored:
+    area_sources: dict[str, list[str]] = defaultdict(list)
+    for (value, by_group), source in zip(scored, sources, strict=True):
         if value is None:
             continue
         overall.append(value)
+        overall_sources.append(source)
         for group, amount in by_group.items():
             areas[group].append(amount)
+            area_sources[group].append(source)
+    return HeldDeltas(overall, overall_sources, dict(areas), dict(area_sources))
+
+
+def calibrate_delta(
+    held: Sequence[ZScores],
+    sources: Sequence[str],
+    *,
+    upper: bool = False,
+    icc: float | None = None,
+    deltas: HeldDeltas | None = None,
+) -> dict[str, Any] | None:
+    """The reference's own Delta range on held-out chunks (``held_out_deltas``, or
+    ``deltas`` when already computed), overall and per area.
+
+    With ``upper`` (for calibration pieces, many per document), each 95th percentile is an
+    upper confidence bound (``upper_quantile``) with the intraclass correlation ``icc``
+    (estimated from the values when None), the overall 99th percentile is added, and
+    ``effective`` records how many independent pieces the overall values are worth.
+    """
+    deltas = deltas or held_out_deltas(held, sources)
+    overall, overall_sources = deltas.overall, deltas.sources
     if not overall:
         return None
+
+    def p95(values: list[float], groups: list[str]) -> float:
+        if upper:
+            return upper_quantile(values, groups, 0.95, icc=icc)
+        return quantile(values, 0.95)
+
+    extra: dict[str, float] = {}
+    if upper:
+        extra = {
+            "p99": quantile(overall, 0.99),
+            "effective": effective_count(overall, overall_sources, icc),
+        }
     return {
         "median": statistics.median(overall),
-        "p95": quantile(overall, 0.95),
+        "p95": p95(overall, overall_sources),
+        **extra,
         "max": max(overall),
         "by_group": {
-            group: {"median": statistics.median(values), "p95": quantile(values, 0.95)}
-            for group, values in areas.items()
+            group: {
+                "median": statistics.median(values),
+                "p95": p95(values, deltas.area_sources[group]),
+            }
+            for group, values in deltas.areas.items()
         },
     }
 
@@ -628,6 +770,56 @@ def fold_scores(
     return scores
 
 
+def likeness_range(
+    reference_held: Sequence[ZScores],
+    reference_sources: Sequence[str],
+    contrast_z: Sequence[ZScores],
+    piece_held: Sequence[ZScores],
+    piece_sources: Sequence[str],
+    contrast_piece_z: Sequence[ZScores],
+    contrast_piece_sources: Sequence[str],
+    learned: CrossValidated,
+    *,
+    icc: float | None = None,
+) -> dict[str, Any]:
+    """The likeness range of shorter pieces: the reference's held-out median and 95th
+    percentile, and the contrast pieces' median.
+
+    Effects stay those learned on whole chunks, each piece scored with the fold that left
+    out its own document, as ``cross_validate`` does; the rms that scales each z is the
+    pieces' own, since that is what a text of their length is scored with. A reference
+    piece's rms leaves out its document too. ``reference_held``, ``reference_sources`` and
+    ``contrast_z`` are the whole chunks ``learned`` came from; folds are made only for the
+    documents that have pieces, one at a time.
+    """
+    reference_total, reference_parts = _sums(reference_held, reference_sources)
+    contrast_total = _sums(contrast_z, [""] * len(contrast_z), by_source=False)[0]
+    piece_total, piece_parts = _sums(piece_held, piece_sources)
+    rms = _rms(piece_total)
+    reference_scores = [0.0] * len(piece_held)
+    for source, positions in _by_source(piece_sources).items():
+        effects = _fold_without(
+            reference_total,
+            contrast_total,
+            (learned.effects, learned.rms),
+            reference_part=reference_parts.get(source, {}),
+        )[0]
+        own_rms = _rms_without(piece_total, rms, piece_parts[source])
+        for index in positions:
+            reference_scores[index] = likeness(piece_held[index], effects, own_rms)[0]
+    contrast_scores = [
+        likeness(chunk_z, learned.contrast_folds[source][0], rms)[0]
+        for chunk_z, source in zip(contrast_piece_z, contrast_piece_sources, strict=True)
+    ]
+    return {
+        "reference": {
+            "median": statistics.median(reference_scores),
+            "p95": upper_quantile(reference_scores, piece_sources, 0.95, icc=icc),
+        },
+        "contrast": {"median": statistics.median(contrast_scores)},
+    }
+
+
 def summarize_contrast(
     learned: CrossValidated,
     reference_sources: Sequence[str],
@@ -667,6 +859,30 @@ def summarize_contrast(
 
 # Verdicts: where a Delta or likeness score sits relative to the reference's own range.
 
+DISTANCE_WORDS: tuple[Verdict, ...] = DISTANCES
+# What every verdict says for a text too short to judge (see ``calibration``).
+TOO_SHORT = Verdict.TOO_SHORT
+
+
+def delta_level(delta: float, ceiling: float | None = None) -> int:
+    """0-3 for Delta, relative to a ceiling from the reference's held-out range when known.
+
+    Up to that ceiling (see ``mean_ceiling``) reads as close; 1.5x and 2x mark the next
+    steps. Without a calibrated reference, fixed steps suit a writer whose own text scores
+    about 0.8.
+    """
+    if ceiling:
+        return (
+            0
+            if delta <= ceiling
+            else 1
+            if delta <= 1.5 * ceiling
+            else 2
+            if delta <= 2 * ceiling
+            else 3
+        )
+    return 0 if delta < 1.0 else 1 if delta < 1.5 else 2 if delta < 2.5 else 3
+
 
 def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
     """The usual upper bound for an average over ``count`` chunks.
@@ -682,12 +898,34 @@ def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) 
     return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
 
 
+def pooled_ceiling(stats: Sequence[Mapping[str, Any]], floor: float = MIN_CEILING) -> float | None:
+    """``mean_ceiling`` for the mean of several chunks that each have their own range, as
+    chunks of different lengths do.
+
+    Each chunk's spread above its median is taken as (p95 - median); the mean's median is
+    the mean of the medians, and its spread the root sum of squares over n, as for a mean
+    of independent values. With n equal ranges this is ``mean_ceiling(stats, n)``.
+    """
+    if not stats or any(item.get("p95") is None for item in stats):
+        return None
+    medians = [item.get("median", item["p95"]) for item in stats]
+    spread = math.sqrt(
+        sum((item["p95"] - median) ** 2 for item, median in zip(stats, medians, strict=True))
+    )
+    return max(statistics.fmean(medians) + spread / len(stats), floor)
+
+
 def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
     """0-3 from the reference's own held-out range up to the contrast set's typical score."""
     ceiling = (
         mean_ceiling(calibration["reference"], count, LIKENESS_MIN_CEILING) or LIKENESS_MIN_CEILING
     )
-    target = calibration["contrast"]["median"]
+    return likeness_step(score, ceiling, calibration["contrast"]["median"])
+
+
+def likeness_step(score: float, ceiling: float, target: float) -> int:
+    """0-3 for a likeness score, given the top of the reference's usual range (``ceiling``)
+    and the contrast set's typical score (``target``)."""
     if score <= ceiling:
         return 0
     if target <= ceiling:

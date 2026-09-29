@@ -14,3 +14,24 @@
 # An entry applies only to the PR it names (its PR runs, and the push to main that merges it).
 # Afterwards it is inert and CI warns until it is deleted; delete it in any later PR. See
 # bench/gate.py.
+
+[[regression]]
+pr = 15
+case = "medium-nosyntax"
+metric = "build_cpu_s"
+ratio = 1.78
+reason = "Length-aware verdicts: build cuts every window into 75-, 150- and 300-word pieces, two ways, and measures up to 30,000 words of them per length to calibrate short texts."
+
+[[regression]]
+pr = 15
+case = "medium-nosyntax"
+metric = "build_mb"
+ratio = 1.45
+reason = "Length-aware verdicts: the calibration pieces' metrics are held while build calibrates each length."
+
+[[regression]]
+pr = 15
+case = "medium-nosyntax"
+metric = "profile_mb"
+ratio = 1.45
+reason = "Length-aware verdicts: the profile stores calibration.by_length (about 20 KB: an rms per metric and the ranges for each length)."

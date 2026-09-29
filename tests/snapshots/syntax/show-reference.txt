@@ -38,6 +38,7 @@ Syntax
   Opener: pronoun (I, It, You)                           62%   53% - 71%
 
 As a reference   held-out Delta 0.78 typically, 95% under 0.99 (7 documents)
+  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7 documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75 words, no verdict.
 
 Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on 7 reference and 5 contrast documents)
   LLM-likeness on held-out text: reference 0.20 typically (95% under 0.86), LLM drafts 13.88

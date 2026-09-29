@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from styleprofile.calibration import verdict
 from styleprofile.display import (
     BAR_SCALE,
     BAR_WIDTH,
@@ -59,9 +60,24 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[dict[str, Any
         "chunks": [
             {
                 "id": f"c{index}",
+                "metrics": {"size": {"words": 400.0}},
                 "reference": {
                     "delta": 0.8,
+                    "delta_by_group": {group: amount for group, (amount, _) in AREAS.items()},
                     "z": {"voice": {"llm_markers_per_1k": 3.0, "hedges_per_1k": -0.1}},
+                    # As a chunk of the reference's window length is judged.
+                    "calibration": {
+                        "judged": True,
+                        "reason": None,
+                        "delta": {"median": 0.78, "p95": 0.99} if calibrated else None,
+                        "delta_by_group": (
+                            {group: stats for group, (_, stats) in AREAS.items()}
+                            if calibrated
+                            else {}
+                        ),
+                        "likeness": None,
+                        "length_scale": {},
+                    },
                 },
             }
             for index in range(chunks)
@@ -74,7 +90,21 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[dict[str, Any
         },
         "warnings": [],
     }
+    _judge(report)
     return report, reference
+
+
+def _judge(report: dict[str, Any], areas: dict[str, float] | None = None) -> None:
+    """Set every chunk's area Deltas (when given) and the verdict read from the chunks."""
+    for chunk in report["chunks"]:
+        if areas is not None:
+            chunk["reference"]["delta_by_group"] = areas
+            chunk["reference"]["calibration"]["delta_by_group"] = {
+                group: stats
+                for group, stats in chunk["reference"]["calibration"]["delta_by_group"].items()
+                if group in areas
+            }
+    report["reference"]["verdict"] = verdict(report["chunks"], None)
 
 
 def _area_block(text: str) -> list[str]:
@@ -111,10 +141,10 @@ def test_areas_fall_back_to_raw_delta_without_calibration() -> None:
 def test_area_verdict_follows_the_rounded_multiple() -> None:
     report, reference = _comparison()
     # 0.953 / 0.95 is 1.003: shown as 1.00x, so it must read close.
-    report["reference"]["delta_by_group_mean"] = {"voice": 0.953}
+    _judge(report, {"voice": 0.953})
     (row,) = _area_block(format_summary(report, reference))
     assert "1.00x" in row and row.endswith("close")
-    report["reference"]["delta_by_group_mean"] = {"voice": 0.96}
+    _judge(report, {"voice": 0.96})
     (row,) = _area_block(format_summary(report, reference))
     assert "1.01x" in row and row.endswith("somewhat different")
 

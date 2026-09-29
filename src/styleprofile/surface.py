@@ -296,6 +296,21 @@ def block_word_count(block: Block) -> int:
     return sum(len(words(text)) for text in tally.blocks)
 
 
+def plain_sentences(block: Block) -> list[str] | None:
+    """A plain paragraph's sentences, as raw Markdown, or None for any other block.
+
+    Only running text can be cut between sentences without changing what it is: code,
+    headings, lists, list continuations, quotes and tables stay whole.
+    """
+    if block.code or block.continues_list:
+        return None
+    lines = [line for line in block.raw.split("\n") if line.strip()]
+    for line in lines:
+        if _HEADING.match(line) or _LIST_ITEM.match(line) or line.lstrip().startswith(("|", ">")):
+            return None
+    return sentences(" ".join(line.strip() for line in lines))
+
+
 def words(text: str) -> list[str]:
     return [
         token.casefold().replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")

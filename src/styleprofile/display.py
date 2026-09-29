@@ -13,7 +13,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from styleprofile.core import DISTANCES, Verdict
+from styleprofile.calibration import (
+    MIN_CALIBRATION_DOCUMENTS,
+    MIN_CALIBRATION_PIECES,
+    MIN_JUDGED_WORDS,
+    chunk_level,
+    chunk_likeness_level,
+    enough,
+    shortfall,
+    too_short_text,
+)
+from styleprofile.core import Verdict
 from styleprofile.metrics import (
     DISTRIBUTION_LABELS,
     KEY_VIEW,
@@ -25,12 +35,17 @@ from styleprofile.metrics import (
     label,
 )
 from styleprofile.metrics import title as group_title
+from styleprofile.profile import summarize
 from styleprofile.weighting import (
+    DISTANCE_WORDS,
     LENGTH_AUC_WARNING,
-    likeness_level,
+    delta_level,
     likeness_words,
-    mean_ceiling,
 )
+
+# The verdict helpers live in ``weighting``; these names stay importable from here.
+from styleprofile.weighting import likeness_level as likeness_level
+from styleprofile.weighting import mean_ceiling as mean_ceiling
 
 # Wide enough for the longest metric label, so value columns stay aligned.
 LABEL_WIDTH = 46
@@ -49,27 +64,6 @@ BAR_SCALE = 3.0
 # color is paired with a word or arrows, so the report reads the same without color.
 DISTANCE_RGB: tuple[tuple[int, int, int], ...] = ((217, 149, 106), (220, 111, 52), (184, 70, 26))
 DISTANCE_256: tuple[int, ...] = (173, 166, 130)
-DISTANCE_WORDS: tuple[Verdict, ...] = DISTANCES
-
-
-def delta_level(delta: float, ceiling: float | None = None) -> int:
-    """0-3 for Delta, relative to a ceiling from the reference's held-out range when known.
-
-    Up to that ceiling (see ``mean_ceiling``) reads as close; 1.5x and 2x mark the next
-    steps. Without a calibrated reference, fixed steps suit a writer whose own text scores
-    about 0.8.
-    """
-    if ceiling:
-        return (
-            0
-            if delta <= ceiling
-            else 1
-            if delta <= 1.5 * ceiling
-            else 2
-            if delta <= 2 * ceiling
-            else 3
-        )
-    return 0 if delta < 1.0 else 1 if delta < 1.5 else 2 if delta < 2.5 else 3
 
 
 def z_level(z: float) -> int:
@@ -200,9 +194,41 @@ def _reference_lines(report: dict[str, Any], style: _Style) -> list[str]:
                 f"({report['calibration']['sources']} documents)"
             ),
         ]
+        lengths = report["calibration"].get("by_length")
+        if lengths is not None:
+            lines.append(style.dim(f"  {_lengths_line(lengths)}"))
     if report.get("contrast"):
         lines += _contrast_summary(report["contrast"], style)
     return lines
+
+
+def _lengths_line(lengths: dict[str, Any]) -> str:
+    """Which shorter lengths the reference is calibrated for, and on how many pieces."""
+    calibrated = [
+        f"{length} words ({entry['pieces']} pieces)"
+        for length, entry in lengths.items()
+        if "delta" in entry
+    ]
+    thin = [
+        f"{length} words ({shortfall(entry)})"
+        for length, entry in lengths.items()
+        if not enough(entry)
+    ]
+    if not lengths:
+        text = "Shorter texts: not calibrated (its chunks are too short to cut into pieces)"
+    else:
+        parts = []
+        if calibrated:
+            parts.append("calibrated at " + ", ".join(calibrated))
+        if thin:
+            parts.append(
+                ("not at " if calibrated else "not calibrated at ")
+                + ", ".join(thin)
+                + f", as a length needs {MIN_CALIBRATION_PIECES} independent pieces from "
+                f"{MIN_CALIBRATION_DOCUMENTS} or more documents"
+            )
+        text = "Shorter texts: " + "; ".join(parts)
+    return f"{text}. Under {MIN_JUDGED_WORDS} words, no verdict."
 
 
 def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
@@ -261,12 +287,32 @@ def _length_line(length: dict[str, Any], name: str) -> str:
     )
 
 
+def _judged_view(report: dict[str, Any]) -> dict[str, Any]:
+    """The report as far as its verdict goes: only the chunks long enough to judge, with
+    their own summary, or every chunk when none is (then everything shown is indicative).
+    A chunk left out of the verdict adds nothing to the differences, arrows or signals."""
+    rows = [row for row in report["chunks"] if row["reference"]["calibration"]["judged"]]
+    if not rows or len(rows) == len(report["chunks"]):
+        return report
+    return {
+        **report,
+        "chunks": rows,
+        "chunk_count": len(rows),
+        "summary": summarize([row["metrics"] for row in rows]),
+    }
+
+
 def _chunk_z(report: dict[str, Any]) -> dict[tuple[str, str], list[float]]:
+    """Each metric's z per chunk, over how many times more that metric swings at the
+    chunk's length than in a reference window (``length_scale``), so a short chunk's arrows
+    count standard deviations of the writer's own text at its length."""
     totals: dict[tuple[str, str], list[float]] = {}
     for chunk in report["chunks"]:
+        scale = chunk["reference"]["calibration"]["length_scale"]
         for group, values in chunk["reference"]["z"].items():
             for name, z in values.items():
-                totals.setdefault((group, name), []).append(z)
+                factor = scale.get(group, {}).get(name, 1.0)
+                totals.setdefault((group, name), []).append(z / factor)
     return totals
 
 
@@ -307,8 +353,11 @@ def _comparison_rows(report: dict[str, Any], reference: dict[str, Any], style: _
     return lines
 
 
-def _differences(report: dict[str, Any], reference: dict[str, Any], style: _Style) -> list[str]:
-    """Metrics whose average z over chunks sits furthest from the reference.
+def _differences(
+    report: dict[str, Any], reference: dict[str, Any], style: _Style, *, judged: bool = True
+) -> list[str]:
+    """Metrics whose average z over chunks sits furthest from the reference, in standard
+    deviations of the writer's own text at each chunk's length (see ``_chunk_z``).
 
     A metric the reference never varies on scores a capped z when a chunk differs and 0
     when it matches, so its arrows reflect how many chunks depart from the reference.
@@ -319,9 +368,10 @@ def _differences(report: dict[str, Any], reference: dict[str, Any], style: _Styl
         ((key, z) for key, z in averaged.items() if abs(z) >= NOTABLE_Z),
         key=lambda item: -abs(item[1]),
     )[:DIFFERENCES_SHOWN]
+    indicative = "" if judged else "; indicative only"
     lines = [
         style.bold("Biggest differences")
-        + style.dim("   (each ▲ or ▼ is one standard deviation, up to 3)"),
+        + style.dim(f"   (each ▲ or ▼ is one standard deviation, up to 3{indicative})"),
     ]
     if not ranked:
         return [*lines, f"  No metric differs by {NOTABLE_Z:.0f} sd or more on average."]
@@ -347,20 +397,34 @@ def _differences(report: dict[str, Any], reference: dict[str, Any], style: _Styl
     return lines
 
 
-def _likeness(report: dict[str, Any], contrast: dict[str, Any], style: _Style) -> list[str]:
-    scored = report["reference"]
-    score = scored.get("likeness_mean")
-    if score is None:
+def _at_length(report: dict[str, Any], reference: dict[str, Any]) -> str:
+    """How the verdict's ranges were matched to length, for the lines that quote them."""
+    if (reference.get("calibration") or {}).get("by_length") is None:
+        return ""
+    counts = [int(row["metrics"]["size"]["words"] or 0) for row in report["chunks"]]
+    if len(counts) == 1:
+        return f" at this length ({counts[0]:,} words)"
+    return f" at these lengths ({min(counts):,}-{max(counts):,} words per chunk)"
+
+
+def _likeness(
+    report: dict[str, Any], reference: dict[str, Any], style: _Style, verdict: dict[str, Any]
+) -> list[str]:
+    entry = verdict.get("likeness")
+    if entry is None:
         return []
+    contrast = reference["contrast"]
     name = contrast["label"]
-    calibration = contrast["calibration"]
-    level = likeness_level(score, calibration, report["chunk_count"])
+    level = entry["level"]
     shares: dict[str, list[float]] = {}
     zs: dict[str, list[float]] = {}
     for chunk in report["chunks"]:
+        scale = chunk["reference"]["calibration"]["length_scale"]
         for signal in chunk["reference"].get("likeness_signals", []):
+            group, metric = signal["metric"].split(".", 1)
             shares.setdefault(signal["metric"], []).append(signal["contribution"])
-            zs.setdefault(signal["metric"], []).append(signal["z"])
+            factor = scale.get(group, {}).get(metric, 1.0)
+            zs.setdefault(signal["metric"], []).append(signal["z"] / factor)
     ranked = sorted(shares, key=lambda metric: -sum(shares[metric]))[:3]
     signals = []
     for metric in ranked:
@@ -368,56 +432,68 @@ def _likeness(report: dict[str, Any], contrast: dict[str, Any], style: _Style) -
         signals.append(
             f"{label(metric.split('.', 1)[1])[0]} {style.distance(_arrow(z), z_level(z))}"
         )
+    words = style.bold(entry["verdict"])
     lines = [
         style.bold(f"{name}-likeness: ")
-        + style.distance(style.bold(likeness_words(level, name)), level)
-        + f"   {score:.2f}",
-        style.dim(
-            f"  The reference's own writing scores {calibration['reference']['median']:.2f} "
-            f"typically (95% under {calibration['reference']['p95']:.2f}); "
-            f"the {name} drafts {calibration['contrast']['median']:.2f}."
-        ),
+        + (style.distance(words, level) if level is not None else words)
+        + f"   {entry['value']:.2f}",
     ]
-    if signals and level:
+    # A text too short to judge has no range of its own length to quote.
+    if entry["typical"] is not None and level is not None:
+        lines.append(
+            style.dim(
+                f"  The reference's own writing{_at_length(report, reference)} "
+                f"scores {entry['typical']:.2f} typically ({_bound(report, entry)}); "
+                f"the {name} drafts {entry['target']:.2f}."
+            )
+        )
+    if signals and level is None:
+        lines.append(f"  Indicative {name} signals: " + ", ".join(signals))
+    elif signals and level:
         lines.append(f"  Strongest {name} signals: " + ", ".join(signals))
     return lines
 
 
-def _delta_baseline(reference: dict[str, Any]) -> str:
-    held = (reference.get("calibration") or {}).get("delta")
-    if not held:
+def _delta_baseline(
+    report: dict[str, Any], reference: dict[str, Any], entry: dict[str, Any]
+) -> str:
+    if entry["typical"] is None:
         return "Text by the reference's own writer usually scores around 0.8."
     return (
-        f"The reference's own held-out writing scores {held['median']:.2f} typically, "
-        f"95% under {held['p95']:.2f}."
+        f"The reference's own held-out writing{_at_length(report, reference)} scores "
+        f"{entry['typical']:.2f} typically ({_bound(report, entry)})."
     )
 
 
-def _flagged_chunks(
-    report: dict[str, Any], reference: dict[str, Any], ceiling: float | None, style: _Style
-) -> list[str]:
-    """Up to a few chunks per list, only those that are actually flagged."""
+def _bound(report: dict[str, Any], entry: dict[str, Any]) -> str:
+    """The bound the verdict reads: one chunk's 95% bound, or the tighter one for a mean
+    over several chunks (``pooled_ceiling``), which is what the verdict words compare with."""
+    if report["chunk_count"] > 1:
+        return f"a mean over {report['chunk_count']} chunks, up to {entry['ceiling']:.2f}"
+    if entry["ceiling"] is not None and entry["ceiling"] > entry["p95"] + 5e-3:
+        # The floor that keeps a near-zero range from inflating verdicts.
+        return f"95% under {entry['p95']:.2f}; close up to {entry['ceiling']:.2f}"
+    return f"95% under {entry['p95']:.2f}"
+
+
+def _flagged_chunks(report: dict[str, Any], reference: dict[str, Any], style: _Style) -> list[str]:
+    """Up to a few chunks per list, only those that are flagged, each judged at its own
+    length; chunks too short to judge are never listed."""
     lines: list[str] = []
     contrast = reference.get("contrast")
-    if contrast and report["reference"].get("likeness_mean") is not None:
+    if contrast and report["reference"]["verdict"].get("likeness"):
         name = contrast["label"]
         ranked = sorted(report["chunks"], key=lambda chunk: -chunk["reference"]["likeness"])
-        flagged = [
-            (chunk, level)
-            for chunk in ranked
-            if (level := likeness_level(chunk["reference"]["likeness"], contrast["calibration"]))
-        ][:CHUNKS_SHOWN]
+        flagged = [(chunk, level) for chunk in ranked if (level := chunk_likeness_level(chunk))][
+            :CHUNKS_SHOWN
+        ]
         if flagged:
             lines += ["", style.bold(f"Most {name}-like chunks")]
             for chunk, level in flagged:
                 word = style.distance(f"{likeness_words(level, name):22}", level)
                 lines.append(f"  {chunk['reference']['likeness']:5.2f}  {word}  {chunk['id']}")
     ranked = sorted(report["chunks"], key=lambda chunk: -(chunk["reference"]["delta"] or 0))
-    flagged = [
-        (chunk, level)
-        for chunk in ranked
-        if (level := delta_level(chunk["reference"]["delta"] or 0.0, ceiling))
-    ][:CHUNKS_SHOWN]
+    flagged = [(chunk, level) for chunk in ranked if (level := chunk_level(chunk))][:CHUNKS_SHOWN]
     if flagged:
         lines += ["", style.bold("Least like the reference")]
         for chunk, level in flagged:
@@ -432,53 +508,57 @@ class _Area:
 
     group: str
     delta: float
-    # Delta divided by the top of the area's usual held-out range (the bound of "close",
-    # see ``mean_ceiling``), rounded as shown; None without calibration.
+    # Delta divided by the top of the area's usual held-out range at the text's length (the
+    # bound of "close", see ``pooled_ceiling``), rounded as shown; None without calibration.
     relative: float | None
-    level: int
+    # None when the text is too short to judge.
+    level: int | None
     # The reference's median held-out Delta for the area and the top of its usual range.
     typical: float | None
     ceiling: float | None
 
 
-def _areas(report: dict[str, Any], reference: dict[str, Any]) -> list[_Area]:
+def _areas(verdict: dict[str, Any]) -> list[_Area]:
     """Each scored area, most different first: by verdict, then by Delta relative to the
-    top of the area's usual held-out range.
+    top of the area's usual held-out range at the text's length.
 
     Areas vary by different amounts on the writer's own text, so raw area Deltas do not
     compare: 1.45 can be usual for sentence shape while 1.34 is unusual for voice. The
     relative value is what the verdict reads, and the verdict is taken from it as rounded
-    for display, so the order, the numbers and the words agree.
+    for display (``calibration.verdict``), so the order, the numbers and the words agree.
     """
-    held = (reference.get("calibration") or {}).get("delta", {}).get("by_group", {})
-    areas = []
-    for group, amount in report["reference"]["delta_by_group_mean"].items():
-        if amount is None:
-            continue
-        stats = held.get(group, {})
-        ceiling = mean_ceiling(stats, report["chunk_count"])
-        if ceiling:
-            relative = round(amount / ceiling, 2)
-            level = delta_level(relative, 1.0)
-        else:
-            relative, level = None, delta_level(amount)
-        areas.append(_Area(group, amount, relative, level, stats.get("median"), ceiling))
-    return sorted(areas, key=lambda area: (-area.level, -(area.relative or area.delta)))
-
-
-def _area_lines(areas: list[_Area], style: _Style) -> list[str]:
-    """The "By area" block: each area's Delta over the top of its usual held-out range, or
-    the raw Delta when the reference has no calibration for it."""
-    calibrated = any(area.relative is not None for area in areas)
-    lines = [
-        style.bold("By area")
-        + style.dim(
-            "   Delta ÷ the top of the reference's usual range in each area"
-            if calibrated
-            else "   Delta in each area"
+    areas = [
+        _Area(
+            group,
+            entry["value"],
+            entry["relative"],
+            entry["level"],
+            entry["typical"],
+            entry["ceiling"],
         )
+        for group, entry in verdict["by_group"].items()
     ]
-    if calibrated:
+    return sorted(
+        areas,
+        key=lambda area: (
+            -(area.level or 0),
+            -(area.relative if area.relative is not None else area.delta),
+        ),
+    )
+
+
+def _area_lines(areas: list[_Area], style: _Style, *, judged: bool = True) -> list[str]:
+    """The "By area" block: each area's Delta over the top of its usual held-out range, or
+    the raw Delta when the reference has no calibration for it. A text too short to judge
+    gets the numbers without verdict words."""
+    calibrated = any(area.relative is not None for area in areas)
+    about = (
+        "   Delta ÷ the top of the reference's usual range in each area"
+        if calibrated
+        else "   Delta in each area"
+    )
+    lines = [style.bold("By area") + style.dim(about + ("" if judged else "; indicative only"))]
+    if calibrated and judged:
         lines.append(
             style.dim(
                 "  close up to 1x, somewhat different to 1.5x, clearly different to 2x, "
@@ -489,12 +569,11 @@ def _area_lines(areas: list[_Area], style: _Style) -> list[str]:
         relative = area.relative
         amount = area.delta if relative is None else relative
         cell = f"Delta {amount:.2f}" if relative is None else f"{amount:.2f}x"
-        lines.append(
-            f"  {group_title(area.group):24}{cell:>10}  "
-            + _bar(amount, style, area.level)
-            + "  "
-            + style.distance(DISTANCE_WORDS[area.level], area.level)
-        )
+        level = area.level or 0
+        line = f"  {group_title(area.group):24}{cell:>10}  " + _bar(amount, style, level)
+        if area.level is not None:
+            line += "  " + style.distance(DISTANCE_WORDS[level], level)
+        lines.append(line)
     return lines
 
 
@@ -527,30 +606,52 @@ def _comparison_view(
     report: dict[str, Any], reference: dict[str, Any], style: _Style, full: bool
 ) -> list[str]:
     scored = report["reference"]
-    delta = scored["delta_mean"]
+    verdict = scored["verdict"]
+    delta = verdict["delta"]["value"]
     if delta is None:
         return ["", style.warn("No metrics could be compared with the reference.")]
-    held = (reference.get("calibration") or {}).get("delta", {})
-    count = report["chunk_count"]
-    ceiling = mean_ceiling(held, count)
-    chunk_ceiling = mean_ceiling(held, 1)
-    level = delta_level(delta, ceiling)
-    # The shading is described only when it is shown; the words carry the same reading.
-    shading = " Darker orange is further away." if style.color else ""
-    lines = [
-        "",
-        style.bold("Overall: ")
-        + style.distance(style.bold(describe_delta(delta, ceiling)), level)
-        + f"   Delta {delta:.2f}",
-        style.dim(f"  Lower is closer. {_delta_baseline(reference)}{shading}"),
-    ]
+    judged = verdict["judged"]
+    if judged:
+        level = verdict["delta"]["level"]
+        # The shading is described only when it is shown; the words carry the same reading.
+        shading = " Darker orange is further away." if style.color else ""
+        lines = [
+            "",
+            style.bold("Overall: ")
+            + style.distance(style.bold(verdict["verdict"]), level)
+            + f"   Delta {delta:.2f}",
+            style.dim(
+                f"  Lower is closer. "
+                f"{_delta_baseline(_judged_view(report), reference, verdict['delta'])}"
+                f"{shading}"
+            ),
+        ]
+    else:
+        reason = verdict["reason"]
+        lines = [
+            "",
+            style.bold("Overall: ") + style.bold(too_short_text(verdict)),
+            style.dim(
+                f"  {reason[0].upper()}{reason[1:]}. Delta {delta:.2f}; the numbers below "
+                "are indicative only."
+            ),
+        ]
+    # What the verdict reads: without the chunks it left out.
+    view = _judged_view(report)
+    if view is not report:
+        left_out = report["chunk_count"] - view["chunk_count"]
+        verb = "is" if left_out == 1 else "are"
+        lines[-1] += style.dim(
+            f" {left_out} of {report['chunk_count']} chunks {verb} too short to judge and "
+            f"{verb} left out (see the note below)."
+        )
     if reference.get("contrast"):
-        lines += ["", *_likeness(report, reference["contrast"], style)]
-    areas = _areas(report, reference)
-    lines += ["", *_area_lines(areas, style)]
-    lines += ["", *_differences(report, reference, style)]
+        lines += ["", *_likeness(view, reference, style, verdict)]
+    areas = _areas(verdict)
+    lines += ["", *_area_lines(areas, style, judged=judged)]
+    lines += ["", *_differences(view, reference, style, judged=judged)]
     if report["chunk_count"] > 1:
-        lines += _flagged_chunks(report, reference, chunk_ceiling, style)
+        lines += _flagged_chunks(report, reference, style)
     if full:
         divergences = [
             (name, amount)
@@ -568,7 +669,7 @@ def _comparison_view(
                 for name, amount in divergences
             ]
         lines += _area_deltas(areas, style)
-        lines += _comparison_rows(report, reference, style)
+        lines += _comparison_rows(view, reference, style)
     return lines
 
 

@@ -103,6 +103,14 @@ The verdict words place each number against the writer's own range:
 | leans LLM | more than halfway to the LLM drafts |
 | like the LLM drafts | at or beyond the drafts' typical score |
 
+Both are read against the writer's own range **at the draft's length**. Short texts vary
+far more than whole windows by chance, so `build` also measures the writer's held-out text
+in pieces of about 75, 150 and 300 words, and `score` judges each chunk against the range
+for its own length (see [docs/method.md](docs/method.md#length-aware-verdicts)). Under 75
+words there is no verdict: the output says "too short to judge (36 words)" and shows the
+numbers and traits as indicative only. When several chunks are scored, each is judged at
+its own length, and chunks too short to judge are left out of the headline.
+
 "By area" breaks Delta down the same way. Areas vary by different amounts on the writer's
 own text, so each area's number is its Delta ÷ the top of that area's usual held-out range:
 close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above.
@@ -120,8 +128,12 @@ and the resolution floors.
 - **Contrast drafts from the writer's own briefs.** Have LLMs write from the same briefs or
   outlines the writer worked from, and use several models; the weights only know the drafts
   they were learned from.
-- **Short texts are noisy.** Under about 150 words, most metrics rest on a handful of
-  sentences.
+- **Short texts get wider ranges, then no verdict.** A 150-word paragraph is judged against
+  how much the writer's own 150-word passages vary, which is far more than whole essays do,
+  so only a larger difference counts. Under 75 words, or below the shortest length the
+  reference is calibrated for (it needs 3 or more documents), the verdict is "too short to
+  judge", with the reason. A reference from a single document judges nothing shorter than
+  half a window. Score whole drafts, or several paragraphs together, when you can.
 - **A verdict means "unlike this reference", not proof of authorship.** A human can drift
   from their own profile, and a model can be prompted toward it.
 
