@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -441,3 +442,39 @@ def test_the_cache_command_says_when_the_cache_is_unavailable(
         cache_home.parent.chmod(0o700)
     out = capsys.readouterr().out
     assert "unavailable:" in out and "not writable" in out
+
+
+def test_a_stuck_writer_is_given_up_on_within_seconds(
+    cache_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A writer that takes a batch and then never finishes it: the run waits only as long as
+    # the writer makes no progress (HAND_DEADLINE_S), then goes on without the cache.
+    monkeypatch.setattr(caching, "HAND_DEADLINE_S", 0.5)
+    monkeypatch.setattr(caching, "HAND_TIMEOUT_S", 0.1)
+    written = MeasurementCache._write  # pyright: ignore[reportPrivateUsage]
+    release = threading.Event()
+
+    def stuck(self: MeasurementCache) -> None:
+        get = self._writes.get  # pyright: ignore[reportPrivateUsage]
+
+        def slow_get(*args: Any, **kwargs: Any) -> Any:
+            item = get(*args, **kwargs)
+            if item is not None:
+                release.wait(60)
+            return item
+
+        self._writes.get = slow_get  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+        written(self)
+
+    monkeypatch.setattr(MeasurementCache, "_write", stuck)
+    settings = sp.Settings(syntax=False)
+    expected = dumps_report(sp.build(WRITER, settings, contrast=CONTRAST, cache=False).report)
+    started = time.monotonic()
+    try:
+        profile = sp.build(WRITER, settings, contrast=CONTRAST)
+    finally:
+        release.set()
+    assert time.monotonic() - started < 20
+    assert dumps_report(profile.report) == expected
+    [note] = _notes(profile)
+    assert "stopped responding" in note.message

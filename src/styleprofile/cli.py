@@ -473,10 +473,11 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     cache = commands.add_parser(
         "cache",
         **_help_parser(
-            "Show where the measurement cache is and how large, or delete it. Builds and "
-            "scores keep every text's measurements there, so measuring a text again is "
-            f"instant; the cache holds at most {caching.MAX_BYTES // 2**20:,} MB, dropping "
-            "the least recently used entries first.",
+            "Show where the measurement cache is, how large, and whether it can be used, or "
+            "delete it. build and evaluate keep every text's measurements there (score does "
+            "not), so building from a text again measures nothing; the cache holds about "
+            f"{caching.MAX_BYTES // 2**20:,} MB at most, dropping the least recently used "
+            f"entries first. {caching.ENVIRONMENT}=1 turns it off.",
             f"{PROG} cache --clear",
         ),
     )

@@ -387,3 +387,23 @@ def test_a_piece_whose_prose_repeats_is_found_as_main_found_it() -> None:
         [(text, [(offset, offset + len(sentence)) for offset in offsets if offset is not None])],
     )
     assert all(piece is not None for piece in pieces)
+
+
+def test_a_model_that_fails_to_load_leaves_syntax_out_under_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from styleprofile import api, syntax
+
+    def broken(model: str) -> Any:
+        raise syntax.SyntaxUnavailableError(f"{model} is broken")
+
+    monkeypatch.setattr(syntax, "_load", broken)
+    api._default_parser.cache_clear()  # pyright: ignore[reportPrivateUsage]
+    try:
+        profile = sp.build(WRITER, jobs=1, cache=False)
+        assert profile.report["settings"]["syntax_used"] is None
+        assert sp.NoteCode.NO_SYNTAX in [note.code for note in profile.notes]
+        with pytest.raises(sp.SyntaxUnavailableError):
+            sp.build(WRITER, sp.Settings(syntax=True), jobs=1, cache=False)
+    finally:
+        api._default_parser.cache_clear()  # pyright: ignore[reportPrivateUsage]

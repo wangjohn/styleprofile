@@ -60,9 +60,12 @@ JOURNAL_LIMIT = 16 * 1024 * 1024
 # How long a writer waits for another process's transaction before giving up on the cache.
 TIMEOUT_S = 10.0
 # How long handing a batch to the writer thread waits between checks that it is still alive,
-# and how long ``close`` waits for it to finish.
+# and at most in all before the cache is turned off (also the longest ``close`` waits for a
+# writer that finishes no batch); and the longest ``close`` waits for the writer to finish
+# what is queued (at most WRITE_QUEUE batches) before dropping it.
 HAND_TIMEOUT_S = 1.0
-CLOSE_TIMEOUT_S = 120.0
+HAND_DEADLINE_S = 5.0
+CLOSE_TIMEOUT_S = 30.0
 # Set to anything but empty or 0, this turns the cache off for every run.
 ENVIRONMENT = "STYLEPROFILE_NO_CACHE"
 # The modules whose code decides a metric's value. The fingerprint hashes their source, so
@@ -198,6 +201,7 @@ class MeasurementCache:
         self._used: list[bytes] = []
         self._writes: queue.Queue[_Batch | None] = queue.Queue(maxsize=WRITE_QUEUE)
         self._writer: threading.Thread | None = None
+        self._progress_at = 0.0  # when the writer last finished a batch (monotonic)
         self.hits = 0
         self.misses = 0
 
@@ -338,17 +342,22 @@ class MeasurementCache:
         self._hand(_Batch(pending, used, int(self.clock() * 1000)))
 
     def _hand(self, item: _Batch | None) -> bool:
-        """Queue ``item`` for the writer, unless the writer has stopped; never blocks for
-        good."""
+        """Queue ``item`` for the writer, waiting at most ``HAND_DEADLINE_S`` for room. A
+        writer that has stopped, or keeps the queue full that long (stuck, or much slower
+        than measuring), turns the cache off: what is pending is dropped and the run goes on
+        without it rather than wait."""
         import queue
 
         writer = self._writer
+        deadline = time.monotonic() + HAND_DEADLINE_S
         while writer is not None and writer.is_alive():
             try:
-                self._writes.put(item, timeout=HAND_TIMEOUT_S)
+                self._writes.put(item, timeout=min(HAND_TIMEOUT_S, HAND_DEADLINE_S))
                 return True
             except queue.Full:
-                continue
+                if time.monotonic() >= deadline:
+                    self._fail("the cache writer stopped responding")
+                    return False
         self._fail("its writer stopped")
         return False
 
@@ -380,6 +389,7 @@ class MeasurementCache:
                     )
             except BaseException as error:
                 self._fail(error)
+            self._progress_at = time.monotonic()
         if connection is not None:
             try:
                 if self.problem is None:
@@ -394,15 +404,15 @@ class MeasurementCache:
 
     def close(self) -> None:
         """Write what is pending, prune the file if it is too large, and disconnect. Waits for
-        the writer at most ``CLOSE_TIMEOUT_S``: past that, what is unwritten is dropped."""
+        the writer while it makes progress (see ``_wait_for_writer``): past that, what is
+        unwritten is dropped."""
         import sqlite3
 
         self.flush()
         if self._writer is not None:
-            if self._hand(None):
-                self._writer.join(CLOSE_TIMEOUT_S)
-                if self._writer.is_alive():
-                    self._fail("writing to it took too long")
+            # A writer already given up on is not waited for (it is a daemon thread).
+            if self.problem is None and self._hand(None):
+                self._wait_for_writer(self._writer)
             self._writer = None
         if self._connection is not None:
             try:
@@ -410,6 +420,19 @@ class MeasurementCache:
             except sqlite3.Error as error:
                 self._fail(error)
             self._connection = None
+
+    def _wait_for_writer(self, writer: threading.Thread) -> None:
+        """Wait for the writer to finish what is queued while it keeps making progress: it
+        is given up on (and what is left dropped) when no batch has finished for
+        ``HAND_DEADLINE_S``, or after ``CLOSE_TIMEOUT_S`` in all."""
+        start = time.monotonic()
+        while writer.is_alive():
+            writer.join(HAND_TIMEOUT_S)
+            now = time.monotonic()
+            stalled = now - max(self._progress_at, start) >= HAND_DEADLINE_S
+            if writer.is_alive() and (stalled or now - start >= CLOSE_TIMEOUT_S):
+                self._fail("the cache writer stopped responding")
+                return
 
     def _prune(self, connection: sqlite3.Connection) -> None:
         """Drop the least recently used entries once the file has grown past ``max_bytes``,
