@@ -276,6 +276,19 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   them widens every spread and blurs every score.
 - **Enough text.** Aim for 15 or more chunks (windows) from several documents, and 20,000
   or more words, in the reference. `build` warns when a reference is thinner than that.
+- **One big file just works.** A manuscript, or a newsletter archive in one Markdown, text
+  or HTML file, is split into documents where it divides: at its top headings (`# Title`,
+  or `##` when one `#` title heads the file), at rules (`---`, `***`, `___` or `* * *` on
+  their own lines), or between the `<article>`s of an HTML page, whichever gives the fewest
+  parts of at least half a window, never inside code blocks or front matter. `build` says
+  so (`note: split book.md into 14 documents at its level-1 headings`), and the reference
+  gets held-out calibration and can take `--contrast`. A file with no such markers is cut
+  into 8 stand-in documents of consecutive text, with a note: they share topics, so its
+  calibration is optimistic and verdicts on new text may be harsher, and separate files or
+  headings are better. This happens only when the writer's texts are fewer than 3
+  documents; `--split-on heading` (or `rule`) splits every file, and `--split-on none`
+  never. `score` does not split a draft unless asked: `score book.md writer.json
+  --split-on heading` gives each chapter its own verdict.
 - **Contrast drafts from the writer's own briefs.** Have LLMs write from the same briefs or
   outlines the writer worked from, and use several models; the weights only know the drafts
   they were learned from.
@@ -283,8 +296,9 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   how much the writer's own 150-word passages vary, which is far more than whole essays do,
   so only a larger difference counts. Under 75 words, or below the shortest length the
   reference is calibrated for (it needs 3 or more documents), the verdict is "too short to
-  judge", with the reason. A reference from a single document judges nothing shorter than
-  half a window. Score whole drafts, or several paragraphs together, when you can.
+  judge", with the reason. A reference from a single document (a short file, or one built
+  with `--split-on none`) judges nothing shorter than half a window. Score whole drafts, or
+  several paragraphs together, when you can.
 - **Paragraph checks need more documents than verdicts do.** "Where it drifts" (experimental) sets its
   thresholds from paragraphs of the writer's own documents: it needs 10 or more documents
   and about 200 paragraphs among the (up to 40,000) words it reads, so in practice 20 or

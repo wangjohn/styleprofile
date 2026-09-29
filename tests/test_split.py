@@ -296,9 +296,10 @@ def test_a_file_without_headings_gets_stand_in_documents(bare_file: Path) -> Non
     profile = sp.build(bare_file, SURFACE, contrast=DRAFTS)
     [note] = _coded(profile.notes, sp.NoteCode.STAND_INS)
     windows = profile.report["chunk_count"]
-    assert note.startswith(
-        f"bare.md has no headings or rules that split it into documents, so its {windows} "
-        f"windows are grouped into {min(windows, STAND_INS)} stand-in documents"
+    assert windows == STAND_INS and note.startswith(
+        "bare.md has no headings or rules that split it into documents, so each of its 8 "
+        "windows stands in for a document for held-out calibration. They are parts of one "
+        "text and share its topics"
     )
     assert "optimistic" in note and "harsher" in note
     assert profile.report["document_count"] == min(windows, STAND_INS) >= 7
@@ -314,6 +315,9 @@ def test_stand_ins_are_consecutive_windows(bare_file: Path) -> None:
     text = bare_file.read_text(encoding="utf-8") * 3  # about 27 windows
     bare_file.write_text(text, encoding="utf-8")
     profile = sp.build(bare_file, SURFACE, keep_chunks=True)
+    [note] = _coded(profile.notes, sp.NoteCode.STAND_INS)
+    windows = profile.report["chunk_count"]
+    assert f"so its {windows} windows are grouped into 8 stand-in documents of consecutive " in note
     ids = [row["id"] for row in profile.report["chunks"]]  # type: ignore[typeddict-item]
     groups = [chunk_id.split("#")[1] for chunk_id in ids]
     assert groups == sorted(groups, key=int) and len(set(groups)) == STAND_INS

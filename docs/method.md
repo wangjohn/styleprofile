@@ -48,7 +48,9 @@ people. The documents are:
 - **a group of records**, with `--group-field thread`: the records of one input (a file,
   or every file of a folder) that share a value. Records with no value (missing, null or
   blank) are one more group, `thread=(none)`. Values compare as text;
-- **a pooled window**, when short texts without a group field are joined: see below.
+- **a pooled window**, when short texts without a group field are joined: see below;
+- **a part of a split file**, when the writer's texts are fewer than 3 documents: see
+  "Splitting one big file" below.
 
 Windowing works within a document: a long text is split into windows at paragraph breaks.
 Short texts are *pooled*, joined in order into windows of about the same size:
@@ -100,6 +102,67 @@ flags group fields that cannot work: one group (nothing to hold out), groups too
 pool, a group found in several inputs typed one by one (each input's records are separate
 documents, so name the folder), and one document holding most windows, so that the
 others' few windows carry the calibration.
+
+### Splitting one big file
+
+A manuscript or an archive in one file is one document, so it has nothing to hold out: no
+held-out calibration, no ranges for short texts, and no contrast. When the writer's texts
+are fewer than 3 documents (the fewest a calibrated length needs), `build` and `evaluate`
+split each Markdown, text or HTML text among them (`--split-on auto`, the default):
+
+- **At its structure.** The candidates are each heading level (ATX `#` headings, and
+  setext headings underlined with `===` or `---`) and rules (`---`, `***`, `___`, spaced or
+  not, on a line of their own). HTML is read as the Markdown it converts to, so `<h1>` to
+  `<h6>` are headings, and a page of several `<article>`s has a rule between them. Front
+  matter, fenced code and indented code never split; a `---` under a paragraph line
+  underlines a heading, as in Markdown, rather than being a rule. A level is usable when
+  at least half the parts its markers start hold half a window of prose words (so the
+  markers divide pieces of writing, not paragraphs) and at least 3 parts remain once parts
+  under half a window join the next one (a preamble, a short interlude; the last joins the
+  one before). Of the usable levels, the one with the **fewest** parts wins, headings
+  before rules on a tie. Parts of one text share their author, time and often topics, and
+  the coarser the split the less a held-out part shares with the parts left in: chapters
+  rather than their sections, issues of a newsletter rather than the sections of each.
+  Parts are named `book.md#3-mud-season` (or `book.md#3` after a rule).
+- **Else, as stand-ins.** A text with neither, with 3 windows or more, has its windows
+  grouped in order into 8 stand-in documents of nearly equal size (as many as it has
+  windows, when fewer), named `book.md#3#w1`. Consecutive windows share topics, and
+  nothing in the pieces' within-document similarity can see the similarity *between*
+  neighbouring stand-ins, so calibration on them is optimistic and verdicts on new text
+  may be harsher; the note says so, and a score against such a reference warns. Eight
+  keeps them under the 10 documents below which that similarity is floored at 0.2 (see
+  "An honest 95% bound"), which widens their ranges. The contrast set, when it is one file,
+  is split the same way.
+
+Folders of 3 or more files are left as they are, even when one file is much larger than
+the rest: splitting it would mix a manuscript's chapters, held out against their own
+siblings, with whole files, and the automatic split never changes a reference that already
+calibrates. `build` notes the case (one document holding most windows) and suggests
+`--split-on heading` or `rule`, which split every text (and stdin, and `Text` inputs in the
+library) into 2 parts or more wherever their markers allow, with a note naming any text they
+could not split. JSONL records are never split: each is a document already. `score` does not
+inherit the setting, since a draft is one document: `--split-on heading` there gives each
+chapter its own verdict (the per-document table), and `auto` never splits drafts.
+
+On the benchmark's medium corpus, a reference from 80 documents as 80 files, as one file
+with their `# Title` headings, and as one file with the headings removed, each scoring 40
+held-out documents cut into pieces (surface metrics):
+
+| Reference | Documents | "Clearly different" or worse, 75 / 150 / 300 words | "Somewhat" or worse, 75 / 150 / 300 words |
+|---|---|---|---|
+| 80 files | 80 | 0.3% / 0% / 0% | 3.8% / 6.7% / 3.1% |
+| one file, split at headings | 80 | 0.3% / 0% / 0% | 3.8% / 6.7% / 3.1% |
+| one file, 8 stand-ins | 8 | 0.3% / 0% / 0% | 1.0% / 0% / 0.8% |
+
+(Sentence cuts; paragraph cuts are lower for all three. Every LLM draft piece was flagged
+by all three.) The split reference is the multi-file reference, number for number. The
+stand-ins read *fewer* pieces as different here, since eight documents keep the similarity
+floor and so wider ranges; but the synthetic corpus has no topics that run on from one
+document to the next, which is what makes stand-ins optimistic in real text, so the note
+stays. Leaving one of the seven sample essays out at a time (real essays, each on one
+topic), no held-out piece read "clearly different" against six files, the six in one file
+split, or the six as stand-ins (0 of 148 each); "somewhat" or worse was 0%, 0% and 1.5% at
+75 words.
 
 ## Two scores
 

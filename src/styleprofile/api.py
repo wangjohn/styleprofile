@@ -179,7 +179,7 @@ class Settings:
       (``---``, ``***``, ``___``), ``"none"`` never, and ``"auto"`` (see ``split``) only when
       the texts are fewer than ``MIN_CALIBRATION_DOCUMENTS`` documents: then at its headings
       or rules, whichever gives the fewest parts of at least half a window (three or more),
-      or, with neither, as ``STAND_INS`` stand-in documents of consecutive windows, with a
+      or, with neither, as 8 (``split.STAND_INS``) stand-in documents of consecutive windows, with a
       note that their calibration is optimistic. JSONL records are never split. Each split
       is noted. ``Profile.score`` does not inherit it, and ``"auto"`` never splits drafts:
       each is one document unless ``"heading"`` or ``"rule"`` is asked for, which splits a
@@ -1633,11 +1633,16 @@ def _stand_ins(
                     chunk.folder,
                     f"{document}{_PART}{number}",
                 )
+        grouped = (
+            f"each of its {len(found):,} windows stands in for a document"
+            if len(groups) == len(found)
+            else f"its {len(found):,} windows are grouped into {len(groups)} stand-in "
+            "documents of consecutive text"
+        )
         notes.append(
             Note(
                 f"{role}{_label(first)} has no headings or rules that split it into "
-                f"documents, so its {len(found):,} windows are grouped into {len(groups)} "
-                "stand-in documents of consecutive text for held-out calibration. They are "
+                f"documents, so {grouped} for held-out calibration. They are "
                 "parts of one text and share its topics, so that calibration is optimistic, "
                 "and verdicts on new text may be harsher than they should be; give the "
                 "writer's texts as separate files, or start each with a heading, for a "
