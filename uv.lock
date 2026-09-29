@@ -1169,12 +1169,11 @@ wheels = [
 
 [[package]]
 name = "styleprofile"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
 syntax = [
-    { name = "en-core-web-sm" },
     { name = "spacy" },
 ]
 
@@ -1184,12 +1183,12 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+spacy-model = [
+    { name = "en-core-web-sm" },
+]
 
 [package.metadata]
-requires-dist = [
-    { name = "en-core-web-sm", marker = "extra == 'syntax'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
-    { name = "spacy", marker = "extra == 'syntax'", specifier = ">=3.8,<4" },
-]
+requires-dist = [{ name = "spacy", marker = "extra == 'syntax'", specifier = ">=3.8,<3.9" }]
 provides-extras = ["syntax"]
 
 [package.metadata.requires-dev]
@@ -1198,6 +1197,7 @@ dev = [
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "ruff", specifier = ">=0.11,<1" },
 ]
+spacy-model = [{ name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }]
 
 [[package]]
 name = "thinc"

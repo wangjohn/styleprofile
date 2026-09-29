@@ -1,8 +1,8 @@
 """Parser-based metrics: clause structure, part-of-speech mix, and how sentences open.
 
-spaCy is an optional dependency: install the `syntax` extra (`styleprofile[syntax]`). Tags
-come from an automatic parser, so passive and nominalization counts in particular are
-approximate.
+spaCy is an optional dependency: install the `syntax` extra (`styleprofile[syntax]`), then
+its English model with `styleprofile setup` (see ``styleprofile.spacy_model``). Tags come from an
+automatic parser, so passive and nominalization counts in particular are approximate.
 """
 
 from __future__ import annotations
@@ -23,9 +23,56 @@ from styleprofile.metrics import grouped
 from styleprofile.surface import Metrics
 
 DEFAULT_MODEL = "en_core_web_sm"
+# The model version the package is tested with, which `styleprofile setup` installs. Keep it
+# equal to the spacy-model dependency group in pyproject.toml (a test checks).
+MODEL_VERSION = "3.8.0"
 _CLAUSE_DEPS = frozenset({"advcl", "ccomp", "relcl", "acl", "xcomp", "csubj"})
 _PASSIVE_DEPS = frozenset({"nsubjpass", "auxpass", "csubjpass"})
-_NOMINALIZATION = re.compile(r"(?:tion|sion|ment|ness|ity|ance|ence)s?$")
+# A nominalization is a noun that names the action, state or quality of a *different*
+# English verb or adjective, formed with one of these suffixes: decide -> decision, move ->
+# motion, fuse -> fusion, argue -> argument, dark -> darkness, able -> ability, distant ->
+# distance, silent -> silence. Judged from spelling alone:
+#
+# - the word keeps at least _MIN_NOMINALIZATION_STEM letters before the suffix, which rules
+#   out fence, city, pity and dance, whose ending is part of a one-syllable root;
+# - it is not in _NOT_NOMINALIZATIONS, the frequent words the suffix test gets wrong, by
+#   one rule: no different verb or adjective whose action, state or quality the noun
+#   names. That covers words whose ending is part of the root (nation, station, moment,
+#   chance), words with no English base (science, quality, community, university,
+#   tradition), and nouns whose only related verb is the same word (question, comment,
+#   document, influence, experience, sentence);
+# - US and British spellings count alike (_US_SPELLINGS): defense as defence.
+#
+# The list names frequent words only, so the metric stays approximate. It is also somewhat
+# topic-sensitive: a text about institutions or generations has more nominalizations than
+# one about fences, whoever writes it (see docs/method.md).
+_NOMINALIZATION = re.compile(r"^(?P<stem>.+?)(?:tion|sion|ment|ness|ity|ance|ence)$")
+_MIN_NOMINALIZATION_STEM = 2
+_US_SPELLINGS = {"defense": "defence", "offense": "offence", "pretense": "pretence"}
+_NOT_NOMINALIZATIONS = frozenset(
+    {
+        # -tion, -sion: the ending is part of the root, or there is no English base.
+        "nation", "notion", "lotion", "potion", "ration", "auction", "station", "section",
+        "fiction", "portion", "position", "tradition", "question", "mention", "mansion",
+        "mission", "session", "pension", "passion", "version", "dimension", "occasion",
+        "television", "lesion",
+        # -ment
+        "moment", "cement", "lament", "document", "element", "segment", "garment",
+        "comment", "apartment", "department", "experiment", "instrument", "basement",
+        "compliment", "supplement", "sediment", "parliament", "monument", "ornament",
+        "fragment", "pigment", "testament", "tournament",
+        # -ness
+        "business", "witness", "harness", "wilderness",
+        # -ity
+        "deity", "entity", "charity", "quality", "identity", "community", "university",
+        "opportunity", "authority",
+        # -ance, -ence
+        "chance", "glance", "stance", "advance", "balance", "finance", "instance",
+        "romance", "substance", "circumstance", "ambulance", "nuisance", "renaissance",
+        "sentence", "science", "audience", "sequence", "essence", "influence", "licence",
+        "conscience", "experience",
+    }
+)  # fmt: skip
 _MIN_SENTENCE_WORDS = 3
 # Texts per spaCy batch. On the medium benchmark corpus (500-word windows), speed hardly
 # depends on it (11.8s to 12.9s for every size from 2 to 32), but memory grows with it: a
@@ -39,10 +86,12 @@ EXCLUDED = ("ner", "lemmatizer", "senter")
 
 
 class SyntaxUnavailableError(StyleProfileError):
-    """spaCy or its English model is not installed."""
+    """spaCy or its English model is not installed. ``model_missing`` is True when spaCy is
+    installed but the model is not, which `styleprofile setup` fixes."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, model_missing: bool = False) -> None:
         super().__init__(message, code="syntax_unavailable")
+        self.model_missing = model_missing
 
 
 class Parser:
@@ -93,18 +142,28 @@ class Parser:
         }
 
 
-_MISSING = (
-    "syntax metrics need spaCy and {model!r}; install the `syntax` extra "
-    "(pip install 'styleprofile[syntax]') or profile without syntax metrics"
-)
-
-
 def _load(model: str) -> Any:
     try:
         spacy = import_module("spacy")
+    except ImportError as error:
+        raise SyntaxUnavailableError(
+            f"syntax metrics need spaCy and {model!r}; install the `syntax` extra "
+            "(pip install 'styleprofile[syntax]'), then run `styleprofile setup`, or profile "
+            "without syntax metrics"
+        ) from error
+    try:
         nlp = spacy.load(model, exclude=list(EXCLUDED))
-    except (ImportError, OSError) as error:
-        raise SyntaxUnavailableError(_MISSING.format(model=model)) from error
+    except OSError as error:
+        raise SyntaxUnavailableError(
+            f"syntax metrics need spaCy's English model {model!r}, which is not installed; "
+            + (
+                "run `styleprofile setup` to install it"
+                if model == DEFAULT_MODEL
+                else f"install it with `python -m spacy download {model}`"
+            )
+            + ", or profile without syntax metrics",
+            model_missing=True,
+        ) from error
     nlp.max_length = 5_000_000
     return nlp
 
@@ -197,10 +256,7 @@ def syntax_metrics(doc: Any) -> Metrics:
         "adverbs_per_1k": rate(pos["ADV"]),
         "modals_per_1k": rate(sum(token.tag_ == "MD" for token in words)),
         "nominalizations_per_1k": rate(
-            sum(
-                token.pos_ == "NOUN" and bool(_NOMINALIZATION.search(token.lower_))
-                for token in words
-            )
+            sum(token.pos_ == "NOUN" and is_nominalization(token.lower_) for token in words)
         ),
         "opens_pronoun_pct": opener_pct("PRON"),
         "opens_determiner_pct": opener_pct("DET"),
@@ -211,6 +267,32 @@ def syntax_metrics(doc: Any) -> Metrics:
         "opens_verb_pct": opener_pct("VERB", "AUX"),
     }
     return grouped(values, syntax=True)
+
+
+def _singular(word: str) -> str:
+    """``word`` without a plural ending, for the endings nominalizations take."""
+    if word.endswith("ities"):
+        return word[:-3] + "y"
+    if word.endswith("nesses"):
+        return word[:-2]
+    if word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def is_nominalization(word: str) -> bool:
+    """Whether a noun reads as a nominalization, judged from its spelling alone: a
+    nominalizing suffix after a long enough stem, and not a known exception. Plurals
+    (decisions, abilities, weaknesses) count as their singular, and US spellings as the
+    British ones (defense as defence)."""
+    singular = _singular(word.lower())
+    singular = _US_SPELLINGS.get(singular, singular)
+    match = _NOMINALIZATION.match(singular)
+    return (
+        match is not None
+        and len(match["stem"]) >= _MIN_NOMINALIZATION_STEM
+        and singular not in _NOT_NOMINALIZATIONS
+    )
 
 
 def pos_trigrams(doc: Any) -> Counter[str]:

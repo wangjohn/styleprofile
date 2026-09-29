@@ -178,8 +178,9 @@ Leave a keyword out to inherit it; the keywords are typed (`api.SettingsOverride
 type checker catches a misspelled one. A different window size or syntax setting is warned
 about in the report, and a different `min_words` gets a note.
 
-`syntax="auto"`, the default, uses spaCy when it's installed. Without spaCy, it runs with
-the surface metrics only and adds a note. `syntax=True` raises `SyntaxUnavailableError`
+`syntax="auto"`, the default, uses spaCy when it and its English model are installed
+(`pip install "styleprofile[syntax]"`, then `styleprofile setup` for the model). Without
+them, it runs with the surface metrics only and adds a note saying which is missing. `syntax=True` raises `SyntaxUnavailableError`
 instead, and `syntax=False` skips spaCy.
 
 ## Notes, warnings and errors

@@ -299,7 +299,7 @@ def test_a_few_large_documents_without_windows_are_calibrated(corpus: Path) -> N
 
 def test_reference_stores_calibration_by_length() -> None:
     reference = _reference()
-    assert reference["version"] == VERSION == 6
+    assert reference["version"] == VERSION >= 6  # by-length calibration arrived in 6
     calibration = reference["calibration"]
     assert calibration["chunk_words"] == pytest.approx(640, abs=20)
     lengths = calibration["by_length"]

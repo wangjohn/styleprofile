@@ -8,6 +8,7 @@ Commands:
     styleprofile metrics
     styleprofile evaluate posts/ --contrast llm-drafts/ --edited light=edits/
     styleprofile cache --clear
+    styleprofile setup
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
-from styleprofile import __version__, api
+from styleprofile import __version__, api, spacy_model
 from styleprofile import cache as caching
 from styleprofile.api import (
     AUTO,
@@ -77,6 +78,23 @@ HINTS = {
     "unmatched_edits": "give each edited file its original's name and relative path",
     "duplicate_names": "give each draft a distinct file name or JSONL id",
     "forced_jsonl": "leave out --input-format jsonl to read each file by its extension",
+    "setup_needs_spacy": "then run `styleprofile setup` again",
+    "setup_spacy_version": (
+        f"install spaCy {spacy_model.SPACY_SERIES}.x, for example by reinstalling "
+        "'styleprofile[syntax]', which requires it, then run `styleprofile setup` again"
+    ),
+    "setup_no_installer": (
+        "add pip to this environment (python -m ensurepip) and run `styleprofile setup` "
+        f"again, or install the model with your package manager from {spacy_model.MODEL_URL}"
+    ),
+    "setup_externally_managed": (
+        "install styleprofile in a virtual environment (python -m venv, pipx, or uv tool "
+        "install) and run `styleprofile setup` there"
+    ),
+    "setup_failed": (
+        "the installer's own output above says why; to install the model yourself, run "
+        f"pip install '{spacy_model.MODEL_URL}'"
+    ),
 }
 # Advice for notes, by ``Note.code``.
 NOTE_HINTS = {
@@ -482,6 +500,18 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         ),
     )
     cache.add_argument("--clear", action="store_true", help="delete the cache")
+
+    commands.add_parser(
+        "setup",
+        **_help_parser(
+            f"Install spaCy's English model ({spacy_model.DEFAULT_MODEL} "
+            f"{spacy_model.MODEL_VERSION}), which the syntax metrics need. Run it once after "
+            "pip install 'styleprofile[syntax]'. It downloads the model from spaCy's releases "
+            "on GitHub (about 13 MB) and installs it with pip, or with uv pip when this "
+            "environment has no pip; it does nothing when the model is already installed.",
+            f"{PROG} setup",
+        ),
+    )
     return parser, dict(commands.choices)
 
 
@@ -978,6 +1008,22 @@ def _run_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_setup(args: argparse.Namespace) -> int:
+    del args
+    name = f"{spacy_model.DEFAULT_MODEL} {spacy_model.MODEL_VERSION}"
+    status = spacy_model.model_status()
+    if status.ready:
+        print(f"{name} is already installed (spaCy {status.spacy_version}); nothing to do.")
+        return 0
+    spacy_model.check_spacy(status)
+    found = f", replacing {status.model_version}" if status.model_version else ""
+    print(f"Installing {name}{found} from github.com/explosion/spacy-models ...", flush=True)
+    command = spacy_model.install_model()
+    _note(f"ran: {shlex.join(command)}")
+    print(f"Installed {name}. Syntax metrics are on for new profiles and scores.")
+    return 0
+
+
 RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "build": _run_build,
     "score": _run_score,
@@ -985,6 +1031,7 @@ RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "metrics": _run_metrics,
     "evaluate": _run_evaluate,
     "cache": _run_cache,
+    "setup": _run_setup,
 }
 
 

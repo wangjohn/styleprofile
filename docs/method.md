@@ -11,6 +11,17 @@ spaCy) parse depth, clause density, part-of-speech mix and how sentences open. I
 three distributions, compared with Jensen-Shannon divergence: function-word transitions with
 content words masked, character trigrams, and part-of-speech trigrams.
 
+Most metrics count habits that carry over from topic to topic, but a few also follow the
+subject matter. Nominalizations are the clearest case. The metric counts nouns that name
+the action, state or quality of a different verb or adjective (decision, motion, darkness,
+ability, distance), judged from spelling with a short list of exceptions: words whose
+ending is part of the root (fence, city, nation, moment), words with no English base
+(science, quality, community, tradition), and nouns whose only related verb is the same
+word (question, document, influence). Even so, an essay about institutions and generations
+has more of them than one about fences and woodstoves, whoever wrote it. This is one more
+reason to keep a reference to one genre, and to write contrast drafts from the writer's own
+briefs.
+
 ### The reference profile
 
 `styleprofile build` makes a reference profile. It measures every metric per window (500

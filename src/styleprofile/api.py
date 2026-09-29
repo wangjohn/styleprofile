@@ -36,6 +36,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Generic, Literal, TypedDict, TypeVar, Unpack, cast
 
+from styleprofile import spacy_model
 from styleprofile.cache import MeasurementCache, disabled_by_environment
 from styleprofile.calibration import (
     MIN_CALIBRATION_DOCUMENTS,
@@ -116,7 +117,7 @@ from styleprofile.split import (
     stand_in_groups,
 )
 from styleprofile.surface import words
-from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
+from styleprofile.syntax import DEFAULT_MODEL, Parser, SyntaxUnavailableError, load_parser
 from styleprofile.weighting import FLOOR_DOCUMENTS
 
 AUTO = "auto"
@@ -126,7 +127,7 @@ STDIN_SHOWN = "<stdin>"
 AUTO_JOBS = 0
 DEFAULT_WINDOW_WORDS = 500
 DEFAULT_TOP_K = 300
-SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
+SETUP_COMMAND = "run `styleprofile setup`"
 # A reference below these is usable but thin; ``build`` notes why and how to fix it.
 ENOUGH_DOCUMENTS = 2
 ENOUGH_CHUNKS = 15
@@ -484,15 +485,10 @@ class Profile(_Result[ReferenceReport]):
                     )
                 )
             missing = (
-                (
-                    "the reference has syntax metrics but spaCy is not installed, so syntax "
-                    f"is left out of this score; {SYNTAX_INSTALL} to include it"
-                )
+                "the reference has syntax metrics but {missing}, so syntax is left out of "
+                "this score; {fix} to include it"
                 if self.has_syntax
-                else (
-                    "spaCy is not installed, so this score has surface metrics only; "
-                    f"{SYNTAX_INSTALL} to include syntax"
-                )
+                else "{missing}, so this score has surface metrics only; {fix} to include syntax"
             )
             parser = _parser(chosen.syntax, notes, missing, step)
             step(Phase.SCORE)
@@ -916,8 +912,8 @@ def build(
         )
         contrast_windows = contrast_cut.windows if contrast_cut is not None else None
         missing = (
-            "spaCy is not installed, so this profile has surface metrics only; for syntax "
-            f"metrics, {SYNTAX_INSTALL} and build again"
+            "{missing}, so this profile has surface metrics only; for syntax metrics, {fix} "
+            "and build again"
         )
         parser = _parser(settings.syntax, notes, missing, step)
         step(Phase.BUILD)
@@ -1037,8 +1033,7 @@ def evaluate(
                     )
                 )
         missing = (
-            "spaCy is not installed, so this uses surface metrics only; for syntax metrics, "
-            f"{SYNTAX_INSTALL} and run again"
+            "{missing}, so this uses surface metrics only; for syntax metrics, {fix} and run again"
         )
         parser = _parser(settings.syntax, notes, missing, step)
         # The drafts pool as the writer's texts do, and each edited set as its originals did,
@@ -2092,11 +2087,23 @@ def _or_without_syntax(
     begun."""
     try:
         return run(parser)
-    except SyntaxUnavailableError:
+    except SyntaxUnavailableError as error:
         if syntax is True or parser is None or parser.loaded:
             raise
-        notes.append(Note(missing, NoteCode.NO_SYNTAX))
+        notes.append(_no_syntax_note(missing, error))
         return run(None)
+
+
+def _no_syntax_note(missing: str, error: SyntaxUnavailableError) -> Note:
+    """The note that syntax is left out: ``missing`` with ``{missing}`` naming what is not
+    installed and ``{fix}`` how to install it, the ``syntax`` extra without spaCy or
+    `styleprofile setup` when only spaCy's English model is missing."""
+    cause, fix = (
+        (f"spaCy's English model ({DEFAULT_MODEL}) is not installed", SETUP_COMMAND)
+        if error.model_missing
+        else ("spaCy is not installed", spacy_model.syntax_install())
+    )
+    return Note(missing.format(missing=cause, fix=fix), NoteCode.NO_SYNTAX)
 
 
 def _parser(
@@ -2105,14 +2112,16 @@ def _parser(
     missing: str,
     step: Callable[[Phase], None],
 ) -> Parser | None:
-    """The parser ``syntax`` asks for; with ``"auto"`` and no spaCy, None and a note."""
+    """The parser ``syntax`` asks for; with ``"auto"`` and no spaCy, None and a note.
+
+    ``missing`` is the note's template (see ``_no_syntax_note``)."""
     if syntax is False:
         return None
     step(Phase.LOAD_PARSER)
     try:
         return _default_parser()
-    except SyntaxUnavailableError:
+    except SyntaxUnavailableError as error:
         if syntax is True:
             raise
-        notes.append(Note(missing, NoteCode.NO_SYNTAX))
+        notes.append(_no_syntax_note(missing, error))
         return None
