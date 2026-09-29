@@ -741,8 +741,10 @@ def calibrate_delta(
 
     Each range has its median, an upper confidence bound on its mean (``upper_mean``), its
     95th percentile, and ``similarity``: the share of their variation the chunks of one run
-    share, from that range's values (``run_similarity``). The means use the intraclass
-    correlation ``icc``, by default ``document_similarity`` of the overall values.
+    share, from that range's values (``run_similarity``). The overall mean uses the
+    intraclass correlation ``icc``, by default ``document_similarity`` of the overall
+    values; each area's mean uses its own values' ``document_similarity``, as its run
+    similarity does, since an area can vary by document far more than the whole.
 
     With ``upper`` (for calibration pieces, many per document), each 95th percentile is an
     upper confidence bound (``upper_quantile``) with ``icc`` too, the overall 99th
@@ -777,7 +779,11 @@ def calibrate_delta(
         "by_group": {
             group: {
                 "median": statistics.median(values),
-                "mean": upper_mean(values, deltas.area_sources[group], icc=icc),
+                "mean": upper_mean(
+                    values,
+                    deltas.area_sources[group],
+                    icc=document_similarity(values, deltas.area_sources[group]),
+                ),
                 "p95": p95(values, deltas.area_sources[group]),
                 "similarity": run_similarity(values, deltas.area_sources[group]),
             }
