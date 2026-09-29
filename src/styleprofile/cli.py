@@ -59,6 +59,7 @@ from styleprofile.profile import (
     load_report,
 )
 from styleprofile.schema import FailedDocument, FailLevels
+from styleprofile.split import SPLIT_ON
 
 PROG = "styleprofile"
 # Advice for library errors, which name the problem but never a flag.
@@ -106,6 +107,7 @@ FLAGS = {
     "top_k": "--top-k",
     "group_field": "--group-field",
     "pool": "--pool",
+    "split_on": "--split-on",
 }
 
 
@@ -208,6 +210,16 @@ def _add_input_flags(parser: argparse.ArgumentParser, *, inherited: bool) -> Non
         help="judge short texts as one batch (default: no)"
         if inherited
         else "join short texts into windows (default: when most are under a quarter window)",
+    )
+    parser.add_argument(
+        "--split-on",
+        choices=SPLIT_ON,
+        default=None if inherited else AUTO,
+        metavar="HOW",
+        help="heading, heading:N or rule: a verdict per part of each draft (auto, none: no split)"
+        if inherited
+        else "auto, heading, heading:N, rule or none: split texts into documents (default: "
+        "auto, when there are too few)",
     )
     parser.add_argument(
         "--no-syntax",
@@ -497,6 +509,7 @@ def _settings(args: argparse.Namespace) -> Settings:
         input_format=args.input_format,
         group_field=args.group_field,
         pool=AUTO if args.pool is None else args.pool,
+        split_on=args.split_on,
     )
 
 
@@ -759,6 +772,8 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["group_field"] = args.group_field
     if args.pool is not None:
         overrides["pool"] = args.pool
+    if args.split_on is not None:
+        overrides["split_on"] = args.split_on
     result = profile.score(samples, passages=args.by_paragraph, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)

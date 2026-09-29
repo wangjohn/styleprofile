@@ -65,6 +65,12 @@ class NoteCode(StrEnum):
     """Texts scored one by one are short, so each is judged on little text."""
     GROUPING = "grouping"
     """The group field groups records into groups too short to pool."""
+    SPLIT = "split"
+    """A text was split into documents at its headings or rules (the message says where),
+    or a split that was asked for found none to split at."""
+    STAND_INS = "stand_ins"
+    """A text with no headings or rules was cut into stand-in documents of consecutive
+    windows, whose calibration may be optimistic (if topics run on between parts)."""
 
 
 @dataclass(frozen=True)

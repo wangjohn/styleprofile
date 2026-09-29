@@ -843,6 +843,8 @@ def _document_label(chunk: Chunk) -> str:
         return f"line {line} ({group}) in {source}"
     if source == "stdin" or source.endswith(base_id(chunk.id)):
         return source
+    if not _record(chunk) and _PART_OF_SPLIT.search(base_id(chunk.id)):
+        return document_label(source, base_id(chunk.id))  # a part of a split text
     return f"record {base_id(chunk.id)} in {source}"
 
 
@@ -1070,7 +1072,13 @@ def summarize(chunk_metrics: Sequence[Metrics]) -> Summary:
 #   of one input (a file, or every file of a folder) with one value in it are one document,
 #   and records with no value are one more;
 # - an ungrouped window that ``pool`` joins from several short texts (the records of one
-#   JSONL file, the files of one folder input, or ``Text`` inputs) is a document of its own.
+#   JSONL file, the files of one folder input, or ``Text`` inputs) is a document of its own;
+# - a part of a split text is a document of its own (see ``split``). When the writer's texts
+#   are too few documents to calibrate well (``api.Settings.split_on``), Markdown, text and
+#   HTML texts among them are split at their headings or rules into parts of at least half
+#   a window, ``book.md#3-mud-season``; with fewer than three documents, one with neither
+#   is cut into stand-in documents of consecutive windows, ``book.md#3#w1``, whose
+#   calibration is less certain. JSONL records are never split: each is already a document.
 #
 # Windows of a document stay in it. Ids name chunks for people (``post#w2``,
 # ``thread=t1#r12``, ``c0012..c0019``) and are never read back to find a document, except
@@ -1144,6 +1152,11 @@ def bare_key(key: str) -> str | None:
 def _record(chunk: Chunk) -> bool:
     """Whether ``chunk`` is a JSONL record, or a window of records."""
     return _grouped(chunk) or _RECORD in (chunk.document or "")
+
+
+def is_record(chunk: Chunk) -> bool:
+    """Whether ``chunk`` is a JSONL record, grouped or not, or a window of records."""
+    return _record(chunk)
 
 
 def pair_key(chunk: Chunk) -> str:
@@ -2750,6 +2763,8 @@ _ESCAPED_SUFFIX = re.compile(r"(?:%23[rw]\d+)+(?=(?:@\d+)?$)")
 
 # A number that keeps a saved source unique (``posts (2)/a.md``, ``notes (2).md``).
 _SOURCE_NUMBER = re.compile(r" \(\d+\)(?=(?:\.[^/.]*)?(?:/|$))")
+# The id suffix of a part of a split text (``split.part_id``): ``#3``, ``#3-mud-season``.
+_PART_OF_SPLIT = re.compile(r"#\d+(?:-[\w-]*)?$")
 
 
 def shown_id(value: str) -> str:
@@ -2773,6 +2788,9 @@ def document_label(source: str, base: str) -> str:
     file_name = PurePosixPath(source).name
     if base.startswith(file_name + ":"):  # a record without an id, named by its line
         return source[: len(source) - len(file_name)] + base
+    part = _PART_OF_SPLIT.search(base)
+    if part and document_label(source, base[: part.start()]) == source:
+        return source + part.group(0)  # a part of a split file: ``book.md#3-mud-season``
     return f"{source}:{base}"
 
 

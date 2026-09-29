@@ -70,15 +70,18 @@ from styleprofile.profile import (
     Repeat,
     SourceNames,
     bare_key,
+    base_id,
     build_reference,
     check_report,
     chunk_document,
     cover_key,
+    document_label,
     drop_duplicates,
     dumps_report,
     expand_path,
     group_id,
     is_grouped,
+    is_record,
     literal_id,
     load_chunks,
     load_reference,
@@ -98,8 +101,21 @@ from styleprofile.schema import (
     ScoreReport,
     ScoreVerdict,
 )
+from styleprofile.split import (
+    ASKED_MIN_PARTS,
+    HEADING,
+    MIN_PARTS,
+    NONE,
+    SPLIT_ON,
+    STAND_IN,
+    SplitOn,
+    part_id,
+    plan_split,
+    stand_in_groups,
+)
 from styleprofile.surface import words
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
+from styleprofile.weighting import FLOOR_DOCUMENTS
 
 AUTO = "auto"
 # How the command line names standard input, apart from a file called ``stdin``.
@@ -159,6 +175,19 @@ class Settings:
       under a quarter of a window and pooling leaves ``ENOUGH_CHUNKS`` windows. Without
       ``group_field``, each joined window counts as a document. ``Profile.score`` does not
       inherit it: drafts are scored one by one unless it is asked for.
+    - ``split_on``: split long Markdown, text or HTML texts into documents, so one big file
+      or a few manuscripts get held-out calibration: ``"heading"`` at their headings
+      (``"heading:2"``: at level-2 headings and above, such as a book's chapters under its
+      parts), ``"rule"`` at their rules (``---``, ``***``, ``___``), ``"none"`` never. With
+      ``"auto"`` (see ``_split`` and ``split``), fewer than ``MIN_CALIBRATION_DOCUMENTS``
+      documents are split at their headings or rules, or, with neither, cut into 8
+      (``split.STAND_INS``) stand-in documents of consecutive windows, whose caveat the
+      report keeps as a warning; fewer than ``FLOOR_DOCUMENTS`` are split at their headings
+      or rules only, into parts of about a window or more; more are left as they are.
+      JSONL records are never split. Each split is noted. ``Profile.score`` does not inherit it, and
+      ``"auto"`` never splits drafts: each is one document unless
+      ``"heading"``, ``"heading:N"`` or ``"rule"`` is asked for, which splits a text into two
+      parts or more and gives a manuscript a verdict per chapter.
 
     A new setting is one field here: recording, reading back, inheriting and overriding
     all go through the fields.
@@ -172,6 +201,7 @@ class Settings:
     input_format: str = AUTO
     group_field: str | None = None
     pool: Literal["auto"] | bool = AUTO
+    split_on: SplitOn = AUTO
 
     def __post_init__(self) -> None:
         _count(self, "window_words", 0, "must be 0 (no windowing) or positive")
@@ -192,6 +222,9 @@ class Settings:
             )
         if not (type(self.pool) is bool or self.pool == AUTO):
             _invalid("pool", f"pool must be True, False or {AUTO!r}, not {self.pool!r}")
+        if self.split_on not in SPLIT_ON:
+            choices = ", ".join(repr(name) for name in SPLIT_ON)
+            _invalid("split_on", f"split_on must be one of {choices}, not {self.split_on!r}")
         if self.input_format not in INPUT_FORMATS:
             choices = ", ".join(repr(name) for name in INPUT_FORMATS)
             _invalid(
@@ -227,6 +260,7 @@ class SettingsOverrides(TypedDict, total=False):
     input_format: str
     group_field: str | None
     pool: Literal["auto"] | bool
+    split_on: SplitOn
 
 
 def _invalid(name: str, message: str) -> None:
@@ -357,7 +391,10 @@ class Profile(_Result[ReferenceReport]):
         only when the profile has it, and ``input_format`` is ``"auto"``: drafts are often
         in another format than the writer's corpus, and ``pool`` is ``False``: each draft is
         judged on its own (``pool=True`` judges short drafts as a batch, joined into
-        windows, and a note suggests it when they are short). ``group_field`` is inherited;
+        windows, and a note suggests it when they are short), and ``split_on`` is
+        ``"none"``: each draft is one document, however the reference's texts were split
+        (``split_on="heading"`` gives a manuscript a verdict per chapter; see
+        ``Settings.split_on``). ``group_field`` is inherited;
         drafts without it are read with a note, unless it is given here. ``settings``
         replaces them all, and keyword overrides (``window_words=0``, ``min_words=5``; see
         ``SettingsOverrides``) change single fields: leave one out to inherit it.
@@ -382,6 +419,7 @@ class Profile(_Result[ReferenceReport]):
                     syntax=AUTO if self.has_syntax else False,
                     input_format=AUTO,
                     pool=False,
+                    split_on=NONE,
                 )
             unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
             if unknown:
@@ -424,7 +462,7 @@ class Profile(_Result[ReferenceReport]):
                 require_groups="group_field" in overrides or settings is not None,
                 records=records,
             )
-            cut = _chunked(chunks, chosen, pooling, notes, records=records)
+            cut = _chunked(chunks, chosen, pooling, notes, records=records, split="score")
             reference_pooled = bool((self._report.get("settings") or {}).get("pool_used"))
             if cut.pooled is None and cut.short and len(chunks) > 1:
                 notes.append(
@@ -463,6 +501,7 @@ class Profile(_Result[ReferenceReport]):
                     "inputs": _described(items, names),
                     **chosen.to_report(),
                     "pool_used": cut.pooled is not None,
+                    "split_used": list(cut.split),
                 },
                 read_in_parts=chunks if passages and cut.pooled is None else None,
                 pooled=passages and cut.pooled is not None,
@@ -561,12 +600,13 @@ class DocumentResult:
     @property
     def shown(self) -> str:
         """How the command line names it: where it can be opened as typed when known
-        (``location``, plus a JSONL record's id: ``exports/c.jsonl:17``), else ``name``."""
+        (``location``, plus a JSONL record's id, ``exports/c.jsonl:17``, or a split file's
+        part, ``drafts/book.md#3-mud-season``), else ``name``."""
         if self.location is None:
             return self.name
-        if self.path and self.name.startswith(self.path + ":"):
-            return self.location + self.name[len(self.path) :]
-        return self.location
+        inside = self.path and self.name.startswith(self.path)
+        rest = self.name[len(self.path) :] if self.path and inside else ""
+        return self.location + rest if rest[:1] in (":", "#") else self.location
 
 
 class ScoreResult(_Result[ScoreReport]):
@@ -823,9 +863,19 @@ def build(
             else None
         )
         # Duplicates were dropped as the texts were read, before any pooling.
-        cut = _chunked(chunks, settings, pooling, notes, calibrated=True, records=records)
+        cut = _chunked(
+            chunks,
+            settings,
+            pooling,
+            notes,
+            calibrated=True,
+            records=records,
+            split="calibrate",
+        )
         # The contrast set pools when the writer's texts do, so the two stay alike in length.
-        contrast_windows = (
+        # A contrast set in one file is split as the writer's texts are: its AUC resamples
+        # and its likeness weights are learned by document.
+        contrast_cut = (
             _chunked(
                 contrast_chunks,
                 settings,
@@ -834,10 +884,12 @@ def build(
                 role="contrast ",
                 following=True,
                 records=contrast_records,
-            ).windows
+                split="calibrate",
+            )
             if contrast_chunks is not None
             else None
         )
+        contrast_windows = contrast_cut.windows if contrast_cut is not None else None
         parser = _parser(
             settings.syntax,
             notes,
@@ -860,9 +912,13 @@ def build(
                 ),
                 **settings.to_report(),
                 "pool_used": cut.pooled is not None,
+                "split_used": list(cut.split),
+                "contrast_split_used": list(contrast_cut.split) if contrast_cut else [],
             },
             keep_chunks=keep_chunks,
         )
+        # Saved, so ``show`` repeats them: what stand-in documents mean for this reference.
+        report["warnings"] += [*cut.warnings, *(contrast_cut.warnings if contrast_cut else ())]
         notes += _thin_reference(report, settings, cut.windows)
         step(Phase.DONE)
         sources = _sources([*chunks, *(contrast_chunks or [])])
@@ -955,7 +1011,16 @@ def evaluate(
         )
         # The drafts pool as the writer's texts do, and each edited set as its originals did,
         # so an edited window pairs with its original window by name.
-        cut = _chunked(reference_chunks, settings, pooling, notes, calibrated=True, records=records)
+        # The originals and edited sets are not split: edits pair with originals by name.
+        cut = _chunked(
+            reference_chunks,
+            settings,
+            pooling,
+            notes,
+            calibrated=True,
+            records=records,
+            split="calibrate",
+        )
         originals = _chunked(
             contrast_chunks,
             settings,
@@ -1001,8 +1066,10 @@ def evaluate(
                 # top_k shapes only a reference's saved distributions, which this never saves.
                 **{name: value for name, value in settings.to_report().items() if name != "top_k"},
                 "pool_used": cut.pooled is not None,
+                "split_used": list(cut.split),
             },
         )
+        report["warnings"] += cut.warnings
         step(Phase.DONE)
         loaded = [*reference_chunks, *contrast_chunks]
         loaded += [chunk for chunks in edited_chunks.values() for chunk in chunks]
@@ -1069,11 +1136,22 @@ def _thin_reference(
         rest = len(windows) - largest
         few = rest < MIN_CALIBRATION_PIECES or len(sizes) < MIN_CALIBRATION_DOCUMENTS
         if largest > rest and few:
+            [(document, _)] = sizes.most_common(1)
+            # A whole text, unlike a group of records or a part already split off, may
+            # divide at headings or rules the automatic split left alone.
+            first = next(w for w in windows if chunk_document(w) == document)
+            text = not is_record(first) and _PART not in document
+            how = (
+                " (split_on heading or split_on rule splits each text at its headings or "
+                "rules, where it has them)"
+            )
             note(
                 f"one document holds {largest:,} of its {_plural(len(windows), 'chunk')}, so "
                 f"its held-out range rests on the other {_plural(rest, 'chunk')}, where a "
                 f"range needs {MIN_CALIBRATION_PIECES} from {MIN_CALIBRATION_DOCUMENTS} or "
-                "more documents; add documents of a similar size, or split that one"
+                "more documents; add documents of a similar size"
+                + (", or split that one" + how if text else ""),
+                "split_on" if text else None,
             )
     if report["word_count"] < ENOUGH_WORDS:
         note(
@@ -1394,6 +1472,10 @@ class _Cut:
     windows: list[Chunk]
     pooled: Pooled | None
     short: bool
+    # How texts were split into documents, as ``split_used`` records it.
+    split: tuple[str, ...] = ()
+    # What stand-in documents mean for the report, one warning per text cut into them.
+    warnings: tuple[str, ...] = ()
 
 
 def _noun(chunks: Sequence[Chunk], records: Records | None) -> str:
@@ -1406,6 +1488,237 @@ def _noun(chunks: Sequence[Chunk], records: Records | None) -> str:
 
 
 def _chunked(
+    chunks: list[Chunk],
+    settings: Settings,
+    pooled: Literal["auto"] | bool,
+    notes: list[Note],
+    *,
+    role: str = "",
+    calibrated: bool = False,
+    following: bool = False,
+    like: Pooled | None = None,
+    records: Records | None = None,
+    split: Literal["calibrate", "score"] | None = None,
+) -> _Cut:
+    """The chunks to measure: split into documents as ``split`` says (``_split``; None
+    splits nothing), then windowed or pooled (``_pooled``), and last, texts left whole that
+    ``_split`` marked are cut into stand-in documents (``_stand_ins``)."""
+    stand_ins: set[str] = set()
+    used: set[str] = set()
+    if split is not None and settings.split_on != NONE:
+        chunks, stand_ins, used = _split(chunks, settings, notes, role, split == "calibrate")
+    cut = _pooled(
+        chunks,
+        settings,
+        pooled,
+        notes,
+        role=role,
+        calibrated=calibrated,
+        following=following,
+        like=like,
+        records=records,
+    )
+    windows, warnings = cut.windows, ()
+    if stand_ins:
+        windows, warnings = _stand_ins(windows, stand_ins, notes, role)
+        if warnings:
+            used.add(STAND_IN)
+    return dataclasses.replace(
+        cut, windows=windows, split=tuple(sorted(used)), warnings=tuple(warnings)
+    )
+
+
+def _split(
+    chunks: list[Chunk], settings: Settings, notes: list[Note], role: str, calibrating: bool
+) -> tuple[list[Chunk], set[str], set[str]]:
+    """``chunks`` with Markdown, text or HTML texts split into documents at their headings
+    or rules as ``settings.split_on`` asks (``split.plan_split``; JSONL records are never
+    split, and a ``.txt`` file's chapter lines are headings), each split noted and parts
+    that repeat another word for word dropped; the documents left whole that may be cut
+    into stand-ins; and the kinds of split made.
+
+    ``"auto"`` splits only when ``calibrating`` (the writer's texts, or the contrast set);
+    drafts never need a split to be judged. Then:
+
+    - with fewer than ``MIN_CALIBRATION_DOCUMENTS`` documents, too few to calibrate at all,
+      it splits every text it can into at least ``split.MIN_PARTS`` parts, and leaves the
+      rest for stand-ins;
+    - with fewer than ``FLOOR_DOCUMENTS`` documents (several manuscripts), it splits every
+      text its markers divide into two parts or more of a median of a whole window (a
+      manuscript's chapters, not a blog post's sections), never into stand-ins: below that many
+      documents each is worth only a few independent calibration pieces (their similarity
+      is floored), so chapters as documents calibrate more, and more tightly, than their
+      books. This is for the writer's texts; the contrast set is left as it is;
+    - with more, it splits nothing.
+
+    ``"heading"``, ``"heading:N"`` or ``"rule"`` split any text their markers divide into
+    two parts or more, and note those they found nothing to split at. Parts are at least half
+    a window (of ``DEFAULT_WINDOW_WORDS`` when windowing is off)."""
+    mode = settings.split_on
+    automatic = mode == AUTO
+    count = len(set(map(chunk_document, chunks)))
+    few = count < MIN_CALIBRATION_DOCUMENTS
+    if automatic and (not calibrating or count >= FLOOR_DOCUMENTS or (role and not few)):
+        return chunks, set(), set()
+    size = settings.window_words or DEFAULT_WINDOW_WORDS
+    minimum = MIN_PARTS if automatic and few else ASKED_MIN_PARTS
+    # Between the bands, a text's parts must hold a whole window each (a median): a
+    # manuscript's chapters split, a blog post's sections do not.
+    median = 1.0 if automatic and not few else 0.5
+    plans = [
+        None
+        if is_record(chunk)
+        else plan_split(chunk.text, size, mode, minimum, plain=_plain(chunk), median_windows=median)
+        for chunk in chunks
+    ]
+    # With a few documents, each is worth only a few independent calibration pieces, so the
+    # texts split at their structure whenever it gives more documents.
+    reason = (
+        f", since {_plural(count, 'document')} are too few to calibrate well"
+        if automatic and not few
+        else ""
+    )
+    out: list[Chunk] = []
+    whole: list[Chunk] = []
+    used: set[str] = set()
+    done: list[str] = []
+    parts = 0
+    for chunk, plan in zip(chunks, plans, strict=True):
+        if plan is None:
+            out.append(chunk)
+            whole += [] if is_record(chunk) else [chunk]
+            continue
+        document = chunk_document(chunk)
+        for number, (part, text) in enumerate(zip(plan.parts, plan.texts, strict=True), 1):
+            out.append(
+                Chunk(
+                    part_id(chunk.id, number, part.title),
+                    chunk.source,
+                    text,
+                    chunk.path,
+                    chunk.folder,
+                    f"{document}{_PART}{number}",
+                )
+            )
+        used.add(plan.kind)
+        parts += len(plan.parts)
+        done.append(
+            f"split {role}{_label(chunk)} into {_plural(len(plan.parts), 'document')} at "
+            f"{plan.describe()}"
+        )
+    if len(done) > NOTED_SPLITS or (reason and len(done) > 1):
+        where = "headings or rules" if len(used) > 1 else f"{next(iter(used))}s"
+        done = [f"split {len(done):,} {role}texts into {parts:,} documents at their {where}"]
+    if reason and done:
+        done = [done[0] + reason]
+    notes += [Note(message, NoteCode.SPLIT, setting="split_on") for message in done]
+    if done:
+        # A newsletter issue pasted twice is two parts with one text.
+        out, repeated = drop_duplicates(out)
+        notes += [repeated] if repeated else []
+    if not automatic and whole:
+        level = mode.partition(":")[2]
+        markers = f"level-{level} headings" if level else "headings" if mode == HEADING else "rules"
+        if len(whole) == 1:
+            message = f"{role}{_label(whole[0])} has no {markers} that split it"
+            kept = "it is kept whole"
+        else:
+            texts = len(chunks) - sum(map(is_record, chunks))
+            message = f"{len(whole):,} of {_plural(texts, role + 'text')} have no {markers} "
+            message += "that split them"
+            kept = "they are kept whole"
+        notes.append(
+            Note(
+                f"{message} into parts of at least half a window, so {kept}",
+                NoteCode.SPLIT,
+                setting="split_on",
+            )
+        )
+    stand_ins = {chunk_document(chunk) for chunk in whole} if automatic and few else set()
+    return out, stand_ins, used
+
+
+# Joins a split text's document to its part's number (see ``Chunk.document``).
+_PART = "\x1c"
+# More texts split than this are noted together.
+NOTED_SPLITS = 3
+
+
+def _plain(chunk: Chunk) -> bool:
+    """Whether ``chunk`` is a plain-text file, whose chapter lines are headings."""
+    return chunk.path is not None and Path(chunk.path).suffix.lower() == ".txt"
+
+
+def _label(chunk: Chunk) -> str:
+    """A text as notes name it: its saved source (a file), or a ``Text``'s name."""
+    return document_label(chunk.source, base_id(chunk.id))
+
+
+def _stand_ins(
+    windows: list[Chunk], documents: set[str], notes: list[Note], role: str
+) -> tuple[list[Chunk], list[str]]:
+    """``windows`` with those of each of ``documents`` that has ``split.MIN_PARTS`` windows
+    or more grouped, in order, into stand-in documents (``split.stand_in_groups``), named
+    ``book.md#3#w1``, each text with a note saying so; and, for the report, a warning on what
+    that means for each (the same list and none when there are none)."""
+    positions: dict[str, list[int]] = {}
+    for index, chunk in enumerate(windows):
+        document = chunk_document(chunk)
+        if document in documents:
+            positions.setdefault(document, []).append(index)
+    cut = [(document, found) for document, found in positions.items() if len(found) >= MIN_PARTS]
+    if not cut:
+        return windows, []
+    windows = list(windows)
+    warnings: list[str] = []
+    for document, found in cut:
+        groups = stand_in_groups(len(found))
+        first = windows[found[0]]
+        for number, run in enumerate(groups, 1):
+            for place, position in enumerate(run, 1):
+                chunk = windows[found[position]]
+                windows[found[position]] = Chunk(
+                    f"{part_id(base_id(chunk.id), number)}#w{place}",
+                    chunk.source,
+                    chunk.text,
+                    chunk.path,
+                    chunk.folder,
+                    f"{document}{_PART}{number}",
+                )
+        label = _label(first)
+        grouped = (
+            f"each of its {len(found):,} windows stands in for a document"
+            if len(groups) == len(found)
+            else f"its {len(found):,} windows are grouped into {len(groups)} stand-in "
+            "documents of consecutive text"
+        )
+        notes.append(
+            Note(
+                f"{role}{label} has no headings or rules that divide it into "
+                f"{MIN_PARTS} or more parts of at least half a window, so {grouped}",
+                NoteCode.STAND_INS,
+                setting="split_on",
+            )
+        )
+        if role:
+            warnings.append(
+                f"the {role}set's documents are {len(groups)} stand-ins, consecutive parts "
+                f"of one file ({label}), so its AUC interval and cross-validated weights "
+                "treat neighbouring parts as separate drafts and are less certain than they "
+                "look; give the drafts as separate files, or mark where each begins with a "
+                "heading or rule"
+            )
+        else:
+            warnings.append(
+                f"held-out calibration comes from {len(groups)} stand-in documents, "
+                f"consecutive parts of one file ({label}): calibration from them is less "
+                "sensitive, so short off-voice passages are caught less often; mark where "
+                "pieces begin with headings or rules, or give them as separate files"
+            )
+    return windows, warnings
+
+
+def _pooled(
     chunks: list[Chunk],
     settings: Settings,
     pooled: Literal["auto"] | bool,

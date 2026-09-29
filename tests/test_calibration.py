@@ -283,7 +283,8 @@ def test_a_few_large_documents_without_windows_are_calibrated(corpus: Path) -> N
         )
         for i in range(6)
     ]
-    profile = sp.build(books, sp.Settings(window_words=0, syntax=False))
+    # Kept whole: split at their titles, they would be 48 documents (see test_split).
+    profile = sp.build(books, sp.Settings(window_words=0, syntax=False, split_on="none"))
     lengths = profile.report["calibration"]["by_length"]
     # Every book contributes pieces; six are enough even counted as alike within a book.
     assert all(entry["documents"] == 6 and enough(entry) for entry in lengths.values())
@@ -522,7 +523,8 @@ def test_the_review_paragraph_abstains(tmp_path: Path, capsys: pytest.CaptureFix
 def test_a_reference_from_one_document_does_not_judge_short_texts(corpus: Path) -> None:
     files = sorted((corpus / "writer").glob("*.md"))
     one = "\n\n".join(path.read_text(encoding="utf-8") for path in files[:20])
-    profile = sp.build(sp.Text(one, "all.md"), sp.Settings(syntax=False))
+    # Kept whole: split, its 20 documents would calibrate it (see test_split).
+    profile = sp.build(sp.Text(one, "all.md"), sp.Settings(syntax=False, split_on="none"))
     assert profile.report["word_count"] > 15_000 and "calibration" not in profile.report
     # The writer's own paragraphs: none may read "somewhat" or worse; all abstain.
     results = [
