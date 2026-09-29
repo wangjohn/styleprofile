@@ -285,6 +285,9 @@ class AtLength:
     delta: dict[str, float] | None
     by_group: dict[str, dict[str, float]]
     likeness: dict[str, float] | None
+    # Without calibration, how many times wider than a window's the fixed steps are read
+    # for a shorter text (``stretch``); 1 at a window's length or more.
+    stretch: float = 1.0
 
     def row(self) -> dict[str, Any]:
         """What a score report keeps per chunk, so a saved report can be shown again."""
@@ -295,6 +298,7 @@ class AtLength:
             "delta_by_group": self.by_group,
             "likeness": self.likeness,
             "length_scale": nest(self.scale),
+            "stretch": self.stretch,
         }
 
 
@@ -335,6 +339,15 @@ def _interpolate(points: Sequence[tuple[float, float]], words: float) -> float:
             share = math.log(words / low) / math.log(high / low)
             return below + share * (above - below)
     return points[-1][1]
+
+
+def stretch(anchor_words: float, words: float) -> float:
+    """How much wider a range read at ``anchor_words`` should be for a text of ``words``:
+    sqrt(anchor_words / words) below it, since a rate's chance variation grows as the text
+    shrinks; 1 at or above it."""
+    if words <= 0 or words >= anchor_words:
+        return 1.0
+    return math.sqrt(anchor_words / words)
 
 
 class Lengths:
@@ -401,11 +414,19 @@ class Lengths:
     def _stats(
         self, words: float, stats: Callable[[_Anchor], Mapping[str, float] | None]
     ) -> dict[str, float] | None:
+        """A range at ``words``, interpolated between the anchors that have it. Below the
+        shortest of them it is widened by ``stretch``: a text shorter than every anchor
+        varies more than any of them, by about sqrt(anchor / words), as the noise in a rate
+        does."""
+        points = [anchor for anchor in self.anchors if stats(anchor)]
+        if not points:
+            return None
         median = self._value(words, lambda anchor: (stats(anchor) or {}).get("median"))
         p95 = self._value(words, lambda anchor: (stats(anchor) or {}).get("p95"))
         if median is None or p95 is None:
             return None
-        return {"median": median, "p95": p95}
+        widen = stretch(points[0].words, words)
+        return {"median": median * widen, "p95": p95 * widen}
 
     def at(self, words: int) -> AtLength:
         """The calibration for a chunk of ``words`` prose words."""
@@ -420,6 +441,7 @@ class Lengths:
                 delta=None,
                 by_group={},
                 likeness=None,
+                stretch=stretch(self.uncalibrated_words, words),
             )
         # Between the shortest anchor and the windows. Below the shortest (a text under
         # 75 words, which is not judged), its values are the least inflated available.
@@ -535,7 +557,10 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> di
     delta = _mean(deltas)
     ranges = [score["calibration"]["delta"] for score in scored if score["delta"] is not None]
     ceiling = pooled_ceiling(ranges, MIN_CEILING) if all(ranges) else None
-    level = delta_level(delta, ceiling) if judged and delta is not None else None
+    widen = _mean([score["calibration"].get("stretch", 1.0) for score in scored]) or 1.0
+    level = None
+    if judged and delta is not None:
+        level = delta_level(delta, ceiling) if ceiling else delta_level(delta / widen)
     result["delta"] = {
         "value": delta,
         "typical": _mean([item["median"] for item in ranges if item]) if all(ranges) else None,
@@ -544,14 +569,16 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> di
         "level": level,
     }
     result["verdict"] = TOO_SHORT if not judged or level is None else DISTANCE_WORDS[level]
-    result["by_group"] = _by_group(scored, judged=bool(judged))
+    result["by_group"] = _by_group(scored, judged=bool(judged), widen=widen)
     result["likeness"] = None
     if contrast_label is not None:
         result["likeness"] = _likeness(scored, contrast_label, judged=bool(judged))
     return result
 
 
-def _by_group(scored: Sequence[Mapping[str, Any]], *, judged: bool) -> dict[str, Any]:
+def _by_group(
+    scored: Sequence[Mapping[str, Any]], *, judged: bool, widen: float = 1.0
+) -> dict[str, Any]:
     groups = sorted({group for score in scored for group in score["delta_by_group"]})
     result: dict[str, Any] = {}
     for group in groups:
@@ -562,7 +589,9 @@ def _by_group(scored: Sequence[Mapping[str, Any]], *, judged: bool) -> dict[str,
         relative = round(value / ceiling, 2) if ceiling else None
         level = None
         if judged:
-            level = delta_level(relative, 1.0) if relative is not None else delta_level(value)
+            level = (
+                delta_level(relative, 1.0) if relative is not None else delta_level(value / widen)
+            )
         result[group] = {
             "value": value,
             "typical": _mean([item["median"] for item in ranges if item]) if all(ranges) else None,
@@ -606,6 +635,8 @@ def chunk_level(row: Mapping[str, Any]) -> int | None:
     if not calibration["judged"]:
         return None
     ceiling = pooled_ceiling([calibration["delta"]], MIN_CEILING) if calibration["delta"] else None
+    if not ceiling:
+        return delta_level((scored["delta"] or 0.0) / calibration.get("stretch", 1.0))
     return delta_level(scored["delta"] or 0.0, ceiling)
 
 

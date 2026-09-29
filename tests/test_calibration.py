@@ -400,6 +400,35 @@ def test_a_reference_from_one_document_does_not_judge_short_texts(corpus: Path) 
     assert profile.score(sp.Text(long), syntax=False).judged
 
 
+def _prefix(text: str, count: int) -> str | None:
+    """The first ``count`` words of a document's prose paragraphs, cut mid-sentence."""
+    body = "\n\n".join(
+        block for block in re.split(r"\n\s*\n", text) if block.strip() and not block.startswith("#")
+    )
+    ends = [match.end() for match in re.finditer(r"\S+", body)]
+    return body[: ends[count - 1]] if len(ends) >= count else None
+
+
+@pytest.mark.parametrize("first", [0, 6])
+def test_texts_shorter_than_a_window_get_a_wider_range_without_shorter_lengths(
+    corpus: Path, first: int
+) -> None:
+    # Two documents: calibrated windows, but no shorter length. Between half a window and a
+    # window, the windows' range is widened by sqrt(window / words); once it read 35% of
+    # the writer's own 300-word passages as "somewhat different" or worse.
+    files = sorted((corpus / "writer").glob("*.md"))
+    profile = sp.build([str(path) for path in files[first : first + 2]], sp.Settings(syntax=False))
+    lengths = profile.report["calibration"]["by_length"]
+    assert not any(enough(entry) for entry in lengths.values())
+    for count in (300, 350):
+        texts = [text for path in files[100:160] if (text := _prefix(_body(path), count))]
+        results = [profile.score(sp.Text(text), syntax=False) for text in texts]
+        judged = [result for result in results if result.judged]
+        assert len(judged) >= 50
+        somewhat = sum(result.verdict is not sp.Verdict.CLOSE for result in judged)
+        assert somewhat / len(judged) <= 0.1, f"{somewhat} of {len(judged)} at {count} words"
+
+
 def test_a_length_from_too_few_documents_abstains_and_says_why() -> None:
     # Two long documents: plenty of pieces, but only two documents behind them.
     texts = [
