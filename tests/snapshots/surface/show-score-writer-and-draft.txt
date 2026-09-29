@@ -10,23 +10,23 @@ By document   furthest from the reference first
       most different in: Long words (7+ letters) ▲▲▲, List items ▲▲▲
   sharpening.md     637  close                0.47  like reference
 
-Across 2 documents: very different   Delta 2.56
-  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.68 typically (a mean over 2 chunks, up to 0.86).
+Across 2 documents: very different   Delta 2.56; 1 of 2 documents reads clearly different or leans LLM on its own (see the table above)
+  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.68 typically (a mean over 2 chunks, up to 0.87).
   Pooled over every document from here on; the table above has each one's own.
 
 LLM-likeness: a few LLM traits   7.32
-  The reference's own writing at these lengths (620-637 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.71); the LLM drafts 14.22.
+  The reference's own writing at these lengths (620-637 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.73); the LLM drafts 14.22.
   Strongest LLM signals: Long words (7+ letters) ▲▲▲, List items ▲▲▲, Bold phrases ▲▲▲
 
 By area   Delta ÷ the top of the reference's usual range in each area
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
   Formatting                  10.38x  ████████████████████  very different
-  Vocabulary                   5.22x  ████████████████████  very different
-  Voice and stance             2.42x  ████████████████░░░░  very different
-  Punctuation                  1.42x  █████████░░░░░░░░░░░  somewhat different
-  Rhythm                       1.22x  ████████░░░░░░░░░░░░  somewhat different
-  Sentence shape               1.06x  ███████░░░░░░░░░░░░░  somewhat different
-  Function words               0.96x  ██████░░░░░░░░░░░░░░  close
+  Vocabulary                   5.17x  ████████████████████  very different
+  Voice and stance             2.40x  ████████████████░░░░  very different
+  Punctuation                  1.39x  █████████░░░░░░░░░░░  somewhat different
+  Rhythm                       1.19x  ████████░░░░░░░░░░░░  somewhat different
+  Sentence shape               1.03x  ███████░░░░░░░░░░░░░  somewhat different
+  Function words               0.95x  ██████░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference

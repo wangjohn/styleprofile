@@ -10,22 +10,22 @@ By document   furthest from the reference first
   examples/…ter/sharpening.md     637  close                0.57  like reference
 
 Across 2 documents: close   Delta 0.59
-  Lower is closer. The reference's own held-out writing at these lengths (637-640 words per chunk) scores 0.78 typically (a mean over 2 chunks, up to 0.96).
+  Lower is closer. The reference's own held-out writing at these lengths (637-640 words per chunk) scores 0.78 typically (a mean over 2 chunks, up to 0.97).
   Pooled over every document from here on; the table above has each one's own.
 
 LLM-likeness: like the reference   0.16
-  The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.74); the LLM drafts 13.88.
+  The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.76); the LLM drafts 13.88.
 
 By area   Delta ÷ the top of the reference's usual range in each area
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Vocabulary                   0.69x  █████░░░░░░░░░░░░░░░  close
-  Voice and stance             0.63x  ████░░░░░░░░░░░░░░░░  close
+  Vocabulary                   0.68x  █████░░░░░░░░░░░░░░░  close
   Function words               0.62x  ████░░░░░░░░░░░░░░░░  close
-  Punctuation                  0.58x  ████░░░░░░░░░░░░░░░░  close
-  Syntax                       0.58x  ████░░░░░░░░░░░░░░░░  close
-  How sentences open           0.55x  ████░░░░░░░░░░░░░░░░  close
-  Rhythm                       0.39x  ███░░░░░░░░░░░░░░░░░  close
-  Sentence shape               0.27x  ██░░░░░░░░░░░░░░░░░░  close
+  Voice and stance             0.62x  ████░░░░░░░░░░░░░░░░  close
+  Punctuation                  0.57x  ████░░░░░░░░░░░░░░░░  close
+  Syntax                       0.57x  ████░░░░░░░░░░░░░░░░  close
+  How sentences open           0.54x  ████░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.38x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.26x  ██░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.00x  ░░░░░░░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
