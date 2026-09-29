@@ -285,8 +285,9 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   blocks or front matter. A novel splits at its chapters, not its scene breaks. `build` says
   so (`note: split book.md into 14 documents at its level-1 headings`), and the reference
   gets held-out calibration and can take `--contrast`. With fewer than 10 documents, long
-  texts are split at their headings (or rules) the same way, so a few manuscripts get the
-  reference their chapters as separate files would. A single file with no such markers is cut into 8 stand-in
+  texts are split at their headings (or rules) the same way when their parts average a
+  window (about 500 words) or more, so a few manuscripts get the reference their chapters
+  as separate files would, while blog posts keep their `##` sections together. A single file with no such markers is cut into 8 stand-in
   documents of consecutive text, and the profile keeps a warning: calibration from them is
   less sensitive, so short off-voice passages are caught less often. Headings, rules or
   separate files are better. Ten or more documents are never split; `--split-on heading`

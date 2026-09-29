@@ -96,8 +96,11 @@ _NUMBER_WORDS = (
     "eighty|ninety|hundred|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|"
     "tenth|last"
 )
+# A well-formed roman numeral (``XII``, ``xiv``), not any word of its letters (``mild``).
+_ROMAN = r"(?=[ivxlcdm])m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})"
 _CHAPTER_LINE = re.compile(
-    rf"^\s{{0,3}}(chapter|part|book)\s+(\d+|[ivxlcdm]+|(?:{_NUMBER_WORDS})(?:-(?:{_NUMBER_WORDS}))?)"
+    rf"^\s{{0,3}}(chapter|part|book)\s+"
+    rf"(\d+|{_ROMAN}|(?:{_NUMBER_WORDS})(?:-(?:{_NUMBER_WORDS}))?)"
     r"(?:\s*[.:\u2014-]\s*\S.{0,60})?\s*$",
     re.IGNORECASE,
 )
@@ -310,14 +313,17 @@ def plan_split(
     min_parts: int = MIN_PARTS,
     *,
     plain: bool = False,
+    median_windows: float = 0.5,
 ) -> Plan | None:
     """The split of ``text`` into parts of about half a window of ``window_words`` or more,
     at the markers ``split_on`` allows (``auto``: headings or rules; ``heading:N``: headings
     of level N and above), or None when no level gives ``min_parts`` parts. ``plain`` reads
     chapter lines as headings (``markers``).
 
-    A level is usable when at least half of the parts its markers start hold half a window
-    of prose words (so its markers divide pieces of writing rather than paragraphs), and at
+    A level is usable when at least half of the parts its markers start hold
+    ``median_windows`` windows of prose words (half a window by default, so its markers
+    divide pieces of writing rather than paragraphs; a whole one to split a manuscript's
+    chapters but not a blog post's sections), and at
     least ``min_parts`` remain once parts under half a window join their neighbours. Of the
     usable levels, the one with the fewest parts is chosen (see the module docstring), with
     rules competing only when most sit where headings begin (``_rules_at_headings``); on a
@@ -374,13 +380,16 @@ def plan_split(
             for start, end in spans
         ]
         marked = [part for part in parts if part.start in titles]
-        if len(marked) < min_parts or statistics.median(p.words for p in marked) < half:
+        median = statistics.median(part.words for part in marked)
+        if len(marked) < min_parts or median < window_words * median_windows:
             continue
         merged = [_named(part, everything, lines) for part in _merge(parts, half)]
         if len(merged) < min_parts:
             continue
         texts = tuple("\n".join(lines[part.start : part.end]) for part in merged)
-        usable.append(Plan(kind, level, tuple(merged), texts))
+        # Named by the deepest level cut at (``heading:3`` on a book of ``#`` and ``##``).
+        deepest = max(marker.level for marker in cuts) if kind == HEADING else level
+        usable.append(Plan(kind, deepest, tuple(merged), texts))
     headings = [plan for plan in usable if plan.kind == HEADING]
     choices = usable if rules_above or not headings else headings
     # ``min`` keeps the first of equals: higher headings, then rules.

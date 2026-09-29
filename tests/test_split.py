@@ -464,6 +464,27 @@ def test_ten_or_more_documents_are_never_split_automatically(tmp_path: Path) -> 
     assert asked.report["document_count"] == 40
 
 
+def test_blog_posts_with_sections_stay_whole_while_manuscripts_split(tmp_path: Path) -> None:
+    # Five posts of about 1,500 words in ~375-word ## sections: sections of one post share
+    # its topic, so between the bands a part must hold a whole window, and they stay whole.
+    posts = tmp_path / "posts"
+    posts.mkdir()
+    for n in range(5):
+        sections = "\n\n".join(f"## Section {s}\n\n{_prose(375, n * 4 + s)}" for s in range(4))
+        (posts / f"{n}.md").write_text(f"# Post {n}\n\n{sections}", encoding="utf-8")
+    profile = sp.build(posts, SURFACE)
+    assert profile.report["document_count"] == 5
+    assert not _coded(profile.notes, sp.NoteCode.SPLIT)
+    # Asked for, they split at their sections, which are over half a window.
+    assert (
+        sp.build(posts, sp.Settings(syntax=False, split_on="heading")).report["document_count"]
+        == 20
+    )
+    # Three manuscripts' ~1,000-word chapters still split.
+    books = _manuscripts(tmp_path / "books", 3, words=1000)
+    assert sp.build(books, SURFACE).report["document_count"] == 24
+
+
 def test_texts_whose_sections_are_short_stay_whole(tmp_path: Path) -> None:
     # Headings every short paragraph divide nothing: a few such posts are left as they are.
     folder = tmp_path / "posts"
@@ -569,6 +590,10 @@ def test_a_heading_level_can_be_asked_for(tmp_path: Path) -> None:
     result = sp.build(WRITER, SURFACE).score(path, split_on="heading:2")
     assert len(result.documents) == 12
     assert result.documents[4].name == "book.md#5-chapter-ii-1"
+    # A level deeper than the book has cuts at its deepest, and says so.
+    deepest = plan_split(book, WINDOW, "heading:3", 2)
+    assert deepest is not None and deepest.describe() == "its level-2 headings"
+    assert len(deepest.parts) == 12
     kept = sp.build(WRITER, SURFACE).score(DRAFT, split_on="heading:3")
     assert _coded(kept.notes, sp.NoteCode.SPLIT) == [
         "draft.md has no level-3 headings that split it into parts of at least half a "
@@ -586,6 +611,12 @@ def test_plain_text_chapter_lines_are_headings(tmp_path: Path) -> None:
     assert markers("Chapter 12 of the report says so.\n", plain=True) == []
     assert markers("Text.\nChapter 3\nMore text.\n", plain=True) == []
     assert [m.level for m in markers("Part One\n\nBook II\n", plain=True)] == [1, 1]
+    # Roman numerals only when well formed: "Part mild" is a sentence fragment.
+    # ("Book mix" is MIX, 1009, and stays a heading.)
+    for line in ("Part mild", "Part did", "Chapter IIII", "Part VX"):
+        assert markers(f"Text.\n\n{line}\n\nMore.\n", plain=True) == [], line
+    for line in ("Chapter XIV", "PART MCMXC", "Book iv", "Chapter xl"):
+        assert len(markers(f"Text.\n\n{line}\n\nMore.\n", plain=True)) == 1, line
     path = tmp_path / "novel.txt"
     path.write_text(text, encoding="utf-8")
     assert _coded(sp.build(path, SURFACE).notes, sp.NoteCode.SPLIT) == [

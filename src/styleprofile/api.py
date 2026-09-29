@@ -183,8 +183,8 @@ class Settings:
       documents are split at their headings or rules, or, with neither, cut into 8
       (``split.STAND_INS``) stand-in documents of consecutive windows, whose caveat the
       report keeps as a warning; fewer than ``FLOOR_DOCUMENTS`` are split at their headings
-      or rules only, wherever they have them; more are left as they are. JSONL records are
-      never split. Each split is noted. ``Profile.score`` does not inherit it, and
+      or rules only, into parts of about a window or more; more are left as they are.
+      JSONL records are never split. Each split is noted. ``Profile.score`` does not inherit it, and
       ``"auto"`` never splits drafts: each is one document unless
       ``"heading"``, ``"heading:N"`` or ``"rule"`` is asked for, which splits a text into two
       parts or more and gives a manuscript a verdict per chapter.
@@ -1544,7 +1544,8 @@ def _split(
       it splits every text it can into at least ``split.MIN_PARTS`` parts, and leaves the
       rest for stand-ins;
     - with fewer than ``FLOOR_DOCUMENTS`` documents (several manuscripts), it splits every
-      text its markers divide into two parts or more, never into stand-ins: below that many
+      text its markers divide into two parts or more of a median of a whole window (a
+      manuscript's chapters, not a blog post's sections), never into stand-ins: below that many
       documents each is worth only a few independent calibration pieces (their similarity
       is floored), so chapters as documents calibrate more, and more tightly, than their
       books. This is for the writer's texts; the contrast set is left as it is;
@@ -1561,10 +1562,13 @@ def _split(
         return chunks, set(), set()
     size = settings.window_words or DEFAULT_WINDOW_WORDS
     minimum = MIN_PARTS if automatic and few else ASKED_MIN_PARTS
+    # Between the bands, a text's parts must hold a whole window each (a median): a
+    # manuscript's chapters split, a blog post's sections do not.
+    median = 1.0 if automatic and not few else 0.5
     plans = [
         None
         if is_record(chunk)
-        else plan_split(chunk.text, size, mode, minimum, plain=_plain(chunk))
+        else plan_split(chunk.text, size, mode, minimum, plain=_plain(chunk), median_windows=median)
         for chunk in chunks
     ]
     # With a few documents, each is worth only a few independent calibration pieces, so the

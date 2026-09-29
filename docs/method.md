@@ -115,10 +115,13 @@ so three long documents calibrate no short length however long they are. `build`
 - **Fewer than 3 documents:** each Markdown, text or HTML text is split at its structure
   into 3 parts or more, or, with none, cut into stand-ins (below).
 - **Fewer than 10 documents:** long texts are split at their headings (or rules) into 2
-  parts or more, never into stand-ins, e.g. "split 3 texts into 36 documents at their
-  headings, since 3 documents are too few to calibrate well". Chapters as documents give
-  the reference that the chapters as separate files would, which calibrates more lengths,
-  and more tightly, than the books (see the table below).
+  parts or more whose median is at least a whole window, never into stand-ins, e.g. "split
+  3 texts into 36 documents at their headings, since 3 documents are too few to calibrate
+  well". Chapters as documents give the reference that the chapters as separate files
+  would, which calibrates more lengths, and more tightly, than the books (see the table
+  below). The whole window (rather than half, as below 3 documents) keeps a blog post's
+  `##` sections, of a few hundred words, from splitting: sections of one post share its
+  topic, so held out against each other they calibrate tighter than posts do (see below).
 - **10 documents or more:** nothing is split. A folder of posts is left as it is.
 
 The contrast set is split only when it is fewer than 3 documents (its AUC resamples, and
@@ -203,6 +206,23 @@ documents cut into pieces (both cuts, all lengths; surface metrics, seed 11):
 window length.) Split, the manuscripts give the same reference as their chapters as files.
 Kept whole, one to three calibrate no short length; five do, but with wider ranges that
 catch fewer short LLM passages.
+
+Blog posts are another matter. The review measured 5 and 9 posts of about 1,550 words, each
+drawn from one essay's material, in `##` sections of about 450 words, split at those
+sections (with a half-window median, as first proposed) and kept whole, scoring new text on
+an unseen topic cut into pieces (surface metrics, two seeds):
+
+| Reference | "Clearly" or worse, all lengths | "Somewhat" or worse at 300 words (sentence cuts, per seed) | LLM pieces flagged at 75 / 150 words (sentence cuts) |
+|---|---|---|---|
+| 5 posts, split at `##` | 0% | 18.0% / 0% | 74–83% / 96% |
+| 5 posts, kept whole | 0% | 0% / 0% | 46–59% / 62–64% |
+| 9 posts, split at `##` | 0% | 9.8% / 10.2% | 71–87% / 95–97% |
+| 9 posts, kept whole | 0% | 3.3% / 0% | 46–66% / 40–67% |
+
+Splitting caught far more LLM text and gave no confident wrong answers, but sibling
+sections made "somewhat different" several times as common on new topics (about 60 pieces
+per cell, so noisy), and 9 posts became 27 documents while 10 stay 10. With the whole-window
+median, such posts are kept whole; `--split-on heading` still splits them when asked.
 
 ## Two scores
 
