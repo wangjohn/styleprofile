@@ -8,12 +8,25 @@ learn which habits separate that writer from LLM output.
 styleprofile supports Python 3.11, 3.12 and 3.13.
 
 ```bash
-pip install "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile"
+pip install "styleprofile[syntax]"
+styleprofile setup   # once: installs spaCy's English model (about 13 MB)
 ```
 
-Or, from a clone, `uv sync --extra syntax` and run `uv run styleprofile`. The `syntax` extra
-installs spaCy and `en_core_web_sm` for the parser-based metrics; without it, styleprofile
-uses the surface metrics only and says so. `python -m styleprofile` works too.
+The `syntax` extra adds spaCy for the parser-based metrics (clause structure, part-of-speech
+mix, how sentences open), and `styleprofile setup` downloads the English model they use.
+For the surface metrics only, `pip install styleprofile` is enough: it needs nothing beyond
+the standard library, and styleprofile says when it leaves syntax out. What changed in each
+version is in the [CHANGELOG](https://github.com/wangjohn/styleprofile/blob/main/CHANGELOG.md).
+
+To install the development version from GitHub instead:
+
+```bash
+pip install "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile"
+styleprofile setup
+```
+
+From a clone, `uv sync --extra syntax` installs everything, the model included; then run
+`uv run styleprofile`. `python -m styleprofile` works too.
 
 ## Quick start
 
@@ -26,11 +39,29 @@ styleprofile build posts/ --contrast llm-drafts/ -o writer.json
 
 # Score a draft. Window size and the other settings come from writer.json.
 styleprofile score draft.md writer.json
+
+# Several drafts at once: a verdict for each, furthest from the writer first.
+styleprofile score drafts/ writer.json
 ```
 
-To try it on the sample corpus in [`examples/`](examples/), run `make demo`: it scores a
-draft that slips into the LLM register in two paragraphs, with the experimental paragraph
-check (`--by-paragraph`), first against the seven sample essays (too few to check
+`build` cuts the writer's texts into ~500-word windows and measures how much the writer's
+own held-out writing varies, for whole windows and for pieces of about 75, 150 and 300
+words. `score` reads each draft against the range for its own length, so a paragraph is
+judged fairly and anything under 75 words gets "too short to judge" rather than a verdict.
+`--contrast` is optional: without it you get Delta (how far a draft is from the writer) but
+no LLM-likeness.
+
+On a terminal, each command shows its progress on one line of stderr. `build` keeps what it
+measures in a cache under `~/.cache/styleprofile`, so building again from the same texts is
+quick; the cache holds numbers derived from the texts, which is enough to recover much of
+their wording, so treat it like the texts. `STYLEPROFILE_NO_CACHE=1` turns it off, and
+`styleprofile cache --clear` deletes it (see [Speed](https://github.com/wangjohn/styleprofile#speed)). `score --by-paragraph`
+is an **experimental** check of where a draft drifts, with known false alarms (see
+[Where it drifts](https://github.com/wangjohn/styleprofile#where-it-drifts-experimental)).
+
+To try it on the sample corpus in [`examples/`](https://github.com/wangjohn/styleprofile/tree/main/examples), run `make demo`
+in a clone: it scores a draft that slips into the LLM register in two paragraphs, with the
+experimental paragraph check, first against the seven sample essays (too few to check
 paragraphs, as the output says), then against a synthetic corpus remixed from them, an
 optimistic stand-in for a larger archive, which finds the two.
 
@@ -53,16 +84,17 @@ directly to read it. `build` and `evaluate` keep only the first of documents wit
 word-for-word the same text, so a post and its copy can't calibrate against each other.
 
 `build` splits texts into ~500-word windows (`--window-words N`, or `--no-window`), and joins
-short ones, such as comments, into windows of the same size (see [Comments, tweets and
-emails](#comments-tweets-and-emails)). `score` uses whatever the reference used, so the two
-always match. `--contrast` can be repeated.
+short ones, such as comments, into windows of the same size (see
+[Comments, tweets and emails](https://github.com/wangjohn/styleprofile#comments-tweets-and-emails)).
+`score` uses whatever the reference used, so the two always match. `--contrast` can be
+repeated.
 
 `build` prints a short summary: how the reference scores its own held-out writing, what
 separates it from the contrast drafts, and any warnings; pass `--all` to see every metric.
 `score` prints the verdict and the biggest differences, and `--all` prints every metric there
 too. `--by-paragraph` (experimental, off by default) also reads each document in
 overlapping spans of 100 words or more and points to the paragraphs that drift from the
-writer (see [Where it drifts](#where-it-drifts-experimental)).
+writer (see [Where it drifts](https://github.com/wangjohn/styleprofile#where-it-drifts-experimental)).
 
 The profile holds summaries only (each metric's mean and spread, the held-out ranges and the
 contrast weights), so it stays small however large the corpus; `build --keep-chunks` also
@@ -81,12 +113,14 @@ More commands:
   ten close documents, the rest are counted; `--all` lists them); the figures after it are
   pooled over all of them ("Across 5 documents"). The JSON report lists each one under
   `documents`. Add `--by-paragraph` to also read each one in parts
-  ([Where it drifts](#where-it-drifts-experimental)).
+  ([Where it drifts](https://github.com/wangjohn/styleprofile#where-it-drifts-experimental)).
 - `styleprofile show writer.json` (or a saved score report) shows it again without
   recomputing anything.
 - `styleprofile metrics` lists every metric, what it means and its unit.
+- `styleprofile setup` installs spaCy's English model for the syntax metrics, and does
+  nothing when it's already installed.
 - `styleprofile evaluate` checks whether LLM-likeness survives editing of the contrast
-  drafts (see [Stress-testing LLM-likeness](#stress-testing-llm-likeness)).
+  drafts (see [Stress-testing LLM-likeness](https://github.com/wangjohn/styleprofile#stress-testing-llm-likeness)).
 - `styleprofile COMMAND --help` shows a command's options.
 
 ### Speed
@@ -151,7 +185,7 @@ The verdict words place each number against the writer's own range:
 Both are read against the writer's own range **at the draft's length**. Short texts vary
 far more than whole windows by chance, so `build` also measures the writer's held-out text
 in pieces of about 75, 150 and 300 words, and `score` judges each chunk against the range
-for its own length (see [docs/method.md](docs/method.md#length-aware-verdicts)). Under 75
+for its own length (see [docs/method.md](https://github.com/wangjohn/styleprofile/blob/main/docs/method.md#length-aware-verdicts)). Under 75
 words there is no verdict: the output says "too short to judge (36 words)" and shows the
 numbers and traits as indicative only. When several chunks are scored, each is judged at
 its own length, and chunks too short to judge are left out of the headline.
@@ -163,13 +197,14 @@ Areas are listed most different first; `--all` adds the raw Delta for each area.
 are on a log scale, full at 32x, so an LLM draft's areas (often 2x to over 20x) still rank
 against each other, while 1x, 1.5x and 2x stay apart. "Biggest differences" lists the
 metrics that moved most, with one ▲ or ▼ per standard deviation. See
-[docs/method.md](docs/method.md) for the metrics, the weighting math, the reliability checks
+[docs/method.md](https://github.com/wangjohn/styleprofile/blob/main/docs/method.md) for the metrics, the weighting math, the
+reliability checks
 and the resolution floors.
 
 ### Where it drifts (experimental)
 
 **Experimental, and off by default.** On writer text of a topic the reference never saw, it
-found a paragraph drifting in up to about a quarter of the writer's own documents (the table
+found a paragraph drifting in up to about a third of the writer's own documents (the table
 below), so it runs only when you ask for it with `--by-paragraph` (`passages=True` in the
 library), and what it finds is a lead to read, not a finding.
 
@@ -182,10 +217,10 @@ reference (a synthetic corpus remixed from the sample essays; see below):
 
 ```
 Where it drifts (experimental)   2 of 8 paragraphs drift, read in spans of at least 100 words
-  Line 9          a few LLM traits (1.04), close (Delta 1.15)
+  Line 9          a few LLM traits (0.92), close (Delta 1.14)
                   "But the store is more than a place to buy things — it's a…"
                   Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
-  Line 15         a few LLM traits (0.92), close (Delta 0.89)
+  Line 15         a few LLM traits (0.92), close (Delta 0.90)
                   "Ultimately, the future of the village hardware store depends…"
                   "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲, Long words (7+ letters) ▲▲▲
 ```
@@ -204,18 +239,19 @@ window reading clearly different.)
 
 Measured on synthetic corpora remixed from the sample essays (A on the reference's own
 topics; B, C and D on topics it never saw, D the widest shift), the share of the writer's
-own held-out documents with a paragraph drifting falsely:
+own held-out documents with a paragraph drifting falsely (with spaCy, as measured for
+0.2.0, after the change to the nominalization metric):
 
 | | A | B | C | D |
 |---|---|---|---|---|
-| single documents, without / with spaCy | 4% / 2% | 0% / 0% | 3% / 0% | 0% / **21%** |
-| 4–10 documents joined, without / with spaCy | 0% / 0% | 0% / 0% | 3% / 1% | 0% / **28%** |
+| single documents, without / with spaCy | 4% / 2% | 0% / 6% | 3% / 0% | 0% / **33%** |
+| 4–10 documents joined, without / with spaCy | 0% / 0% | 0% / 0% | 3% / 0% | 0% / **30%** |
 
-A run of two or three LLM blocks spliced in was found 76–99% of the time, and a single block
-57–76%. **A single short paragraph is often missed** (17–52% found under 30 words), and so
+A run of two or three LLM blocks spliced in was found 76–100% of the time, and a single
+block 57–74%. **A single short paragraph is often missed** (17–48% found under 30 words), and so
 is one paragraph in a long document, so "no paragraph drifts" does not mean the text is
 clean. Those corpora are synthetic and optimistic: expect more false drift on a real
-writer's new topics. [docs/method.md](docs/method.md#where-a-draft-drifts) has the full
+writer's new topics. [docs/method.md](https://github.com/wangjohn/styleprofile/blob/main/docs/method.md#where-a-draft-drifts) has the full
 tables.
 
 `--by-paragraph` lists every paragraph with its statistic (x its range, `*` for one that
@@ -229,11 +265,11 @@ says so. The JSON report has it all under `passages`, and the library as
 `ScoreResult.passages`.
 
 The thresholds need a reference big enough (see
-[Getting useful results](#getting-useful-results)). With the seven sample essays alone, no
+[Getting useful results](https://github.com/wangjohn/styleprofile#getting-useful-results)). With the seven sample essays alone, no
 paragraph drifts and the output says the reference is too small to set paragraph
 thresholds. That is why `make demo` scores the draft (with `--by-paragraph`) against the
 essays first, then against a larger synthetic corpus in the same voice (see
-[`examples/`](examples/README.md)).
+[`examples/`](https://github.com/wangjohn/styleprofile/blob/main/examples/README.md)).
 
 ### In a pre-commit hook or CI
 
@@ -453,7 +489,7 @@ is judged by weights its own original shaped. It reports:
 
 - the AUC against the reference's held-out chunks, with a 95% document-bootstrap interval
   and how it was found (`bootstrap.method`, as in the profile; see
-  [docs/method.md](docs/method.md)), for the original drafts and for each edited set;
+  [docs/method.md](https://github.com/wangjohn/styleprofile/blob/main/docs/method.md)), for the original drafts and for each edited set;
 - the median likeness over chunks (as in the reference's stored range), and how many
   drafts still read "leans LLM" or "like the LLM drafts";
 - **signal survival**: for the ten strongest contrast metrics, the drafts' mean z before
@@ -489,9 +525,9 @@ result = profile.score(sp.Text("A draft to check against the writer."))
 print(result.verdict, result.delta, result.likeness_verdict.words(result.contrast_label))
 ```
 
-See [docs/library.md](docs/library.md) for inputs, settings, notes and saving. `build`,
-`Profile.score` and `evaluate` take `progress`, `jobs` and `cache` as the command line does
-(`score` uses the cache only with `cache=True`).
+See [docs/library.md](https://github.com/wangjohn/styleprofile/blob/main/docs/library.md) for inputs, settings, notes and
+saving. `build`, `Profile.score` and `evaluate` take `progress`, `jobs` and `cache` as the
+command line does (`score` uses the cache only with `cache=True`).
 
 ## Development
 
@@ -502,6 +538,7 @@ make demo    # build, score and show on the sample corpus
 make bench          # time build and score on generated corpora; compare with the targets
 make bench-quick    # only the case CI runs: 200k words without spaCy
 make snapshots      # regenerate tests/snapshots/ after an intended change to CLI output
+make dist-check     # build the sdist and wheel, check them, smoke-test the wheel on 3.11
 ```
 
 `make bench` generates seeded synthetic corpora from `examples/` (`bench/gen.py`, written to
@@ -550,6 +587,15 @@ entry. To try an entry locally, pass the PR number:
 prints, or rebase onto a change that did, run `make snapshots`. It installs spaCy (the
 `syntax` extra) first, so the syntax snapshots refresh too. Review the diff in `tests/snapshots/` and commit it
 with the change, so reviewers see the output change.
+
+### Packaging and releases
+
+`make dist-check` builds the sdist and the wheel, checks what each contains, installs the wheel into a new Python 3.11 environment and runs `build`,
+`score` and the library example above on `examples/` from outside the repository.
+`make dist-check DIST="--syntax --sdist-tests"` also installs the `syntax` extra and runs
+`styleprofile setup`, which downloads spaCy's model, then runs the test suite from the
+unpacked sdist, as CI does. Releases are published to PyPI by pushing a `v*` tag;
+see [docs/releasing.md](https://github.com/wangjohn/styleprofile/blob/main/docs/releasing.md).
 
 The package began as the stylometry module of GoodProse.
 

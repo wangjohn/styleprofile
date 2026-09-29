@@ -441,7 +441,7 @@ METRICS: tuple[Metric, ...] = (
         PER_1K,
         _WORDS,
         syntax=True,
-        about="Nouns ending in -tion, -ment, -ness, -ity and similar.",
+        about="Nouns made with -tion, -ment, -ness, -ity and similar suffixes (not fence or city).",
     ),
     Metric(
         "sentence_openers",

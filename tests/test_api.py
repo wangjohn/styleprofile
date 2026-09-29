@@ -19,6 +19,7 @@ from styleprofile.cli import _flagged, main
 from styleprofile.display import format_evaluation
 from styleprofile.profile import (
     EVALUATION_VERSION,
+    VERSION,
     Chunk,
     base_id,
     build_reference,
@@ -510,9 +511,8 @@ def test_reports_from_older_versions_are_refused_with_rebuild_it(
 
     with pytest.raises(sp.StyleProfileError, match="rebuild it with `styleprofile build`") as error:
         sp.Profile.load(old_profile)
-    assert error.value.code == "outdated" and "report version 5; this one reads 6" in str(
-        error.value
-    )
+    assert error.value.code == "outdated"
+    assert f"report version 5; this one reads {VERSION}" in str(error.value)
     with pytest.raises(sp.StyleProfileError, match="an older styleprofile") as error:
         sp.Profile(_as_main_saved_it(profile.report))
     with pytest.raises(sp.StyleProfileError, match="score it again") as error:
@@ -529,7 +529,7 @@ def test_reports_from_older_versions_are_refused_with_rebuild_it(
         err = capsys.readouterr().err
         assert err == (
             f"error: {command[-1]} was made by an older styleprofile (report version 5; this "
-            f"one reads 6); {again}\n"
+            f"one reads {VERSION}); {again}\n"
         )
 
 

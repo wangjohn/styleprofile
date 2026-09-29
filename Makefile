@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: sync test lint format typecheck check demo bench bench-quick snapshots
+.PHONY: sync test lint format typecheck check demo bench bench-quick snapshots dist-check
 
 sync:
 	$(UV) sync --extra syntax
@@ -53,3 +53,10 @@ bench-quick:
 # It installs the syntax extra first, so the syntax snapshots are refreshed too.
 snapshots:
 	UPDATE_SNAPSHOTS=1 $(UV) run --extra syntax pytest tests/test_snapshots.py
+
+# Build the sdist and wheel, check their contents, and smoke-test the wheel in a clean Python
+# 3.11 environment outside the repository. DIST="--syntax" also installs the syntax extra and
+# runs `styleprofile setup`, which downloads spaCy's model; DIST="--sdist-tests" also runs the
+# test suite from the unpacked sdist. CI's package job passes both.
+dist-check:
+	$(UV) run python scripts/check_dist.py $(DIST)

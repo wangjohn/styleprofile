@@ -14,8 +14,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --extra syntax
@@ -30,15 +30,37 @@ jobs:
   no-syntax:
     name: test (Python 3.11, without spaCy)
     runs-on: ubuntu-latest
+    env:
+      # uv installs the spacy-model group by default (it's inert without spaCy); leave it
+      # out, here and in every `uv run`, so nothing of spaCy's is installed.
+      UV_NO_GROUP: spacy-model
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           python-version: "3.11"
       - run: uv sync --locked
       - name: Confirm spaCy is absent
         run: uv run python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('spacy') is not None)"
       - run: make test
+
+  package:
+    # What a user gets from PyPI: build the sdist and the wheel (the wheel from the sdist),
+    # check what each contains, then install the wheel with pip into a new Python 3.11
+    # environment and, from outside the repository, run build, score and the README's library
+    # example on examples/. It then installs the syntax extra, checks the note suggests
+    # `styleprofile setup`, runs setup (downloading spaCy's model) and builds with the parser.
+    # Finally it unpacks the sdist and runs its own test suite, as a downstream packager
+    # would. See scripts/check_dist.py; the same `make dist-check` runs it locally.
+    name: package (build, install the wheel on Python 3.11, smoke test)
+    runs-on: ubuntu-latest
+    env:
+      UV_NO_GROUP: spacy-model
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      - run: uv sync --locked
+      - run: make dist-check DIST="--syntax --sdist-tests"
 
   bench:
     # A separate job so the benchmark neither slows nor is slowed by the test matrix. It runs
@@ -53,16 +75,16 @@ jobs:
     name: benchmark (medium corpus, without spaCy)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 2  # HEAD^, the base
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           python-version: "3.12"
       - run: uv sync --locked
       - run: uv run python bench/run.py --quick --repeat 5 --against HEAD^ --check
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: bench-results
           path: bench/results.json

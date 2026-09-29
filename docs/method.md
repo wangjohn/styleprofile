@@ -11,6 +11,17 @@ spaCy) parse depth, clause density, part-of-speech mix and how sentences open. I
 three distributions, compared with Jensen-Shannon divergence: function-word transitions with
 content words masked, character trigrams, and part-of-speech trigrams.
 
+Most metrics count habits that carry over from topic to topic, but a few also follow the
+subject matter. Nominalizations are the clearest case. The metric counts nouns that name
+the action, state or quality of a different verb or adjective (decision, motion, darkness,
+ability, distance), judged from spelling with a short list of exceptions: words whose
+ending is part of the root (fence, city, nation, moment), words with no English base
+(science, quality, community, tradition), and nouns whose only related verb is the same
+word (question, document, influence). Even so, an essay about institutions and generations
+has more of them than one about fences and woodstoves, whoever wrote it. This is one more
+reason to keep a reference to one genre, and to write contrast drafts from the writer's own
+briefs.
+
 ### The reference profile
 
 `styleprofile build` makes a reference profile. It measures every metric per window (500
@@ -505,9 +516,10 @@ One Delta or likeness over a whole draft dilutes a paragraph or two in another r
 `examples/draft.md` has two paragraphs written like an LLM (lines 9 and 15, 93 of its 542
 words) and reads "close" overall. So `score --by-paragraph` (`passages=True` in the
 library) also reads each document in parts (`drift`). **It is experimental and off by
-default:** on corpus D below, a topic shift with spaCy, 21% of the writer's own held-out
-documents and 28% of long ones had a paragraph drift falsely, which is too often for a
-check that runs unasked. `-q` says nothing about paragraphs without it. A paragraph that reads
+default:** on corpus D below, a topic shift with spaCy, 33% of the writer's own held-out
+documents and 30% of long ones had a paragraph drift falsely (21% and 28% before the 0.2.0
+change to the nominalization metric; see "Re-measured for 0.2.0" below), which is too
+often for a check that runs unasked. `-q` says nothing about paragraphs without it. A paragraph that reads
 unlike the writer is said to *drift*; that is a different thing from a chunk *flagged* on its
 own (a whole window reading clearly different), which the headline notes.
 
@@ -655,9 +667,33 @@ on seen topics (at p = 0.1 / 0.02 / 0.005: 0.113 / 0.037 / 0.010 on A without sp
 0.023 / 0.007 with it) and runs heavier on unseen ones (C: 0.19 / 0.05–0.06 / 0.007–0.021),
 which the margin from the documents' spread and the tail's confidence bound absorb.
 
-What this does not catch well: a single short LLM paragraph (under 30 words, 17–52%), one
-paragraph in a long document (the per-document threshold rises with its length: 35–52% at
-24–164 paragraphs), and a single block (57–76%). Two or three blocks are found 76–99% of
+**Re-measured for 0.2.0.** The table above was measured before 0.2.0 changed the
+nominalization metric (`syntax.is_nominalization`: a stem of two or more letters and a list
+of words it does not count, such as fence, community and question). That changes only the
+spaCy columns. The same harness on 0.2.0, with spaCy:
+
+| | A | B | C | D |
+|---|---|---|---|---|
+| held-out documents with any drift | 1/50 (2%) | 2/32 (6%) | 0/32 (0%) | **11/33 (33%)** |
+| same, 1–2-sentence paragraphs | 0/50 (0%) | 0/32 (0%) | 0/32 (0%) | 3/33 (9%) |
+| 2 concatenated | 0/30 (0%) | 1/30 (3%) | 0/30 (0%) | **10/30 (33%)** |
+| 4, 6 or 10 concatenated | 0/90 (0%) | 0/90 (0%) | 0/90 (0%) | **27/90 (30%)** |
+| 1 / 2 / 3 blocks found | 69% / 81% / 97% | 74% / 91% / 99% | 60% / 76% / 99% | 66% / 92% / 100% |
+| prose insert under 30 words | 25% | 31% | 35% | 44% |
+| 1 block in a 24–164-paragraph document | 42% | 49% | 39% | 48% |
+| draft.md exactly lines 9 and 15 | 5/5 | 4/5 | 4/5 | 5/5 |
+
+A, B and C stay at or under about 6% false drift, but D with spaCy gets worse: 33% of single
+held-out documents (21% before; the old code measured again alongside gave the same 7/33)
+and 33% of two-document concatenations (10% before). The metric now counts fewer of the
+writer's nouns (fence, question, station) than of the LLM drafts', so it separates them
+more and weighs more in likeness, and nominalizations follow topic: on D's unseen topics
+the writer's own paragraphs rise on it. It is one more reason the check stays experimental
+and opt-in; the rows not repeated here were not measured again.
+
+What this does not catch well: a single short LLM paragraph (under 30 words, 17–48%), one
+paragraph in a long document (the per-document threshold rises with its length: 35–49% at
+24–164 paragraphs), and a single block (57–74%). Two or three blocks are found 76–100% of
 the time. So "no paragraph drifts" is not "clean": a single short paragraph in the LLM
 register is missed about as often as it is found. `draft.md`'s line 15 is such a paragraph
 (33 words); the folds find both planted paragraphs 3 to 5 times in 5, and the demo

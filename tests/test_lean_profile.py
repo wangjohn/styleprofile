@@ -39,7 +39,7 @@ def _json(path: Path) -> dict:
 
 
 def test_version_marks_the_lean_format() -> None:
-    assert VERSION == 6
+    assert VERSION >= 6  # the lean format arrived in 6
 
 
 def test_references_leave_out_chunk_rows_unless_asked(corpus: Path) -> None:

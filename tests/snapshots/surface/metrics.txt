@@ -70,7 +70,7 @@ Syntax
   Adjectives                                   /1k    Adjectives.
   Adverbs                                      /1k    Adverbs.
   Modal verbs (can, should)                    /1k    Modal verbs such as can, should and might.
-  Nominalizations (-tion, -ment)               /1k    Nouns ending in -tion, -ment, -ness, -ity and similar.
+  Nominalizations (-tion, -ment)               /1k    Nouns made with -tion, -ment, -ness, -ity and similar suffixes (not fence or city).
 
 How sentences open
   Opener: pronoun (I, It, You)                 %      Share of (3+ word) sentences that open with a pronoun.

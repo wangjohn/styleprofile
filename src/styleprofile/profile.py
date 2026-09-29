@@ -148,7 +148,9 @@ from styleprofile.weighting import (
 # Also in 6, before any release: reference profiles leave out per-chunk rows (unless built
 # with keep_chunks) and store ``document_count``; sources are saved by their input's name,
 # never as paths; the contrast AUC's ``bootstrap`` records its method and resamples.
-VERSION = 6
+# 7 (0.2.0): nominalizations_per_1k no longer counts words such as fence, city or sentence
+# (see ``syntax.is_nominalization``), so a version 6 profile's values would not match.
+VERSION = 7
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
 REFERENCE: Final = "reference"

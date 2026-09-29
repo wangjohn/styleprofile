@@ -31,7 +31,7 @@ class NoteCode(StrEnum):
     """The kinds of ``Note``. Front ends dispatch on these, so every note has one."""
 
     NO_SYNTAX = "no_syntax"
-    """spaCy is not installed, so syntax metrics are left out."""
+    """spaCy or its English model is not installed, so syntax metrics are left out."""
     REPEATED_INPUT = "repeated_input"
     """A file was given more than once and is read once."""
     REPEATED_ID = "repeated_id"

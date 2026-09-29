@@ -4,18 +4,57 @@ build-backend = "hatchling.build"
 
 [project]
 name = "styleprofile"
-version = "0.1.0"
+version = "0.2.0"
 description = "Stylometric profiles of a writer's texts: drift from a reference and LLM-likeness."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "John J. Wang" }]
+keywords = [
+  "stylometry",
+  "writing style",
+  "authorship",
+  "llm detection",
+  "burrows delta",
+  "nlp",
+  "spacy",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: English",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Text Processing :: Linguistic",
+  "Typing :: Typed",
+]
 dependencies = []
 
 [project.optional-dependencies]
-syntax = [
-  "spacy>=3.8,<4",
-  "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
-]
+# spaCy's English model is not on PyPI, and PyPI refuses a package that depends on a URL, so
+# the extra installs spaCy only and `styleprofile setup` installs the model (MODEL_VERSION in
+# src/styleprofile/syntax.py). A clone gets the model from the spacy-model group below. A
+# model works only with the spaCy minor version it was built for, so the bound follows the
+# model: bump MODEL_VERSION, the spacy-model group and this bound together (tests check).
+syntax = ["spacy>=3.8,<3.9"]
+
+[project.urls]
+Homepage = "https://github.com/wangjohn/styleprofile"
+Documentation = "https://github.com/wangjohn/styleprofile#readme"
+Source = "https://github.com/wangjohn/styleprofile"
+Issues = "https://github.com/wangjohn/styleprofile/issues"
+Changelog = "https://github.com/wangjohn/styleprofile/blob/main/CHANGELOG.md"
+
+[project.scripts]
+styleprofile = "styleprofile.cli:main"
 
 [dependency-groups]
 dev = [
@@ -23,15 +62,27 @@ dev = [
   "pytest>=8.3,<9",
   "ruff>=0.11,<1",
 ]
+# Development only: the model the package is tested with, so `uv sync --extra syntax` gives
+# contributors and CI a working parser. uv installs it by default (default-groups below); it
+# is inert without spaCy, and the no-spaCy CI job leaves it out with --no-group spacy-model.
+# Keep the version equal to MODEL_VERSION in src/styleprofile/syntax.py; tests check it.
+spacy-model = ["en-core-web-sm==3.8.0"]
 
-[project.scripts]
-styleprofile = "styleprofile.cli:main"
+[tool.uv]
+default-groups = ["dev", "spacy-model"]
 
-[tool.hatch.metadata]
-allow-direct-references = true
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/styleprofile"]
+
+# The sdist holds what it takes to run the test suite (the tests read examples/, docs/ and
+# bench/) and nothing else: no CI config, lock file, generated corpora, profiles or local
+# files. pyproject.toml, README.md and LICENSE are always included.
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests", "docs", "examples", "bench", "CHANGELOG.md"]
+exclude = ["bench/corpora", "bench/work", "bench/results.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
@@ -45,7 +96,7 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pyright]
-include = ["src", "tests", "bench"]
+include = ["src", "tests", "bench", "scripts"]
 # The benchmark's ignored checkouts of a base revision (bench/run.py --against) and its
 # generated corpora; the rest are pyright's defaults, which an exclude list replaces. Ruff
 # skips them already, as it skips every ignored path.
