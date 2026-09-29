@@ -23,10 +23,10 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Formatting                   0.27x  █░░░░░░░░░░░░░░░░░░░  close
 
 Where it drifts   2 of 8 paragraphs drift, read in spans of at least 100 words
-  Line 9          a few LLM traits (1.04), close (Delta 1.16)
+  Line 9          a few LLM traits (1.04), close (Delta 1.15)
                   "But the store is more than a place to buy things — it's a…"
                   Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
-  Line 15         a few LLM traits (0.98), close (Delta 0.91)
+  Line 15         a few LLM traits (0.92), close (Delta 0.89)
                   "Ultimately, the future of the village hardware store depends…"
                   "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲, Long words (7+ letters) ▲▲▲
 

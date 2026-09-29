@@ -403,11 +403,20 @@ own (a whole window reading clearly different), which the headline notes.
 - **The statistic.** Each span is scored like a chunk of its length (Lengths.at) and read as
   its score over the 95% bound at that length (floored as the verdicts are): LLM-likeness
   when the reference has a contrast set, else Delta. A paragraph's statistic is the lower of
-  its two spans. A span that is high only because of a neighbouring paragraph has the
-  neighbour's other span beside it, without the drifting paragraph, so the neighbour's
-  statistic stays low. A paragraph whose two spans both hold another that drifts, while it
-  is not in both of that one's, is explained by it and does not drift (`--by-paragraph`
-  says so).
+  its two spans. In span scoring only (verdicts are unchanged), each z of the parser's
+  metrics (syntax and sentence openers) counts at most 3 either way, the cap an unseen
+  habit gets: a 100-word span has few sentences, and one rare construction in it could
+  otherwise carry the span alone. The null below is scored the same way.
+- **Explained by a stronger neighbour.** A span that is high only because of a neighbouring
+  paragraph has the neighbour's other span beside it, without the drifting paragraph, so the
+  neighbour's statistic stays low. Paragraphs over their threshold are then taken strongest
+  first: one whose two spans both hold a paragraph at least as strong that still drifts,
+  while it is not in both of that one's spans, is explained by it and does not drift
+  (`--by-paragraph` says so). Only a paragraph still drifting can explain another, so there
+  are no chains, and a weaker paragraph never hides a stronger one. A paragraph that reads
+  unlike the writer on its own too (scored alone at its own length, over its bound) is never
+  explained away, so two LLM paragraphs side by side, as at the start of a draft, both
+  drift.
 - **A threshold per document, from the writer's documents.** Checking every paragraph of a
   70-paragraph document at a 95% bound would find some paragraph of the writer's own most of
   the time. So `build` reads up to 40,000 words of its own documents the same way, each span
@@ -440,15 +449,20 @@ own (a whole window reading clearly different), which the headline notes.
   `--by-paragraph` lists every paragraph's statistic ("x range") against the document's
   threshold. More than half the paragraphs drifting reads "drifts throughout (13 of 17
   paragraphs)", and `-q` "drifts throughout".
+- **Pooled input abstains.** Records pooled with `--pool` are short texts joined into
+  windows, not a document with paragraphs, so they are not read in parts: the JSON marks
+  each document `pooled`, and the output says in one dim line that paragraph checks don't
+  apply to pooled records (score without `--pool` for each record's own verdict).
 
 ### How well it holds
 
 Measured with `bench/drift.py`, the review's harness: 5 folds per corpus, each with a
 contrast set of 40 documents generated from 4 of the 5 LLM drafts, and inserts from the
 fifth. Inserts are runs of 1, 2 or 3 consecutive blocks of that draft (headings and lists
-included) at the start, middle or end of a held-out document, 9 per document. Documents are
-also scored with every paragraph split into 1–2 sentences, and concatenated 2, 4, 6 and 10 at
-a time (about 25 to 140 paragraphs), 6 of each per fold.
+included) at the start, middle or end of a held-out document, 9 per document, plus two
+adjacent prose paragraphs of it at the start, middle or end. Documents are also scored with
+every paragraph split into 1–2 sentences, and concatenated 2, 4, 6 and 10 at a time (about 25
+to 160 paragraphs), 6 of each per fold.
 
 - **A** is bench medium (seed 0): the reference is 150 documents, and 50 are held out, on
   the reference's own topics. It is optimistic: its documents are remixed from the same
@@ -459,26 +473,39 @@ a time (about 25 to 140 paragraphs), 6 of each per fold.
 - **C** is a topic shift the contrast covers but the reference does not: the held-out topics
   are `fence-lines` and `the-woodstove`, which the LLM drafts also write about, in documents
   of about 600 words.
+- **D** is a wider topic shift in longer documents: the reference is remixed from 4 essays,
+  and the held-out documents (about 1,200 words) from the other 3 (`sharpening`,
+  `the-woodstove`, `walking-in-rain`), plus those 3 real essays.
 
-| | A no spaCy | A spaCy | B no spaCy | B spaCy | C no spaCy | C spaCy |
-|---|---|---|---|---|---|---|
-| held-out documents with a false drift (~12 paragraphs) | 2/50 (4%) | 0/50 | 0/32 | 1/32 (3%) | 1/32 (3%) | 1/32 (3%) |
-| same, 1–2-sentence paragraphs (~50) | 0/50 | 0/50 | 0/32 | 1/32 (3%) | 2/32 (6%) | 2/32 (6%) |
-| 2 concatenated (~25 paragraphs) | 4/30 (13%) | 0/30 | 0/30 | 0/30 | 3/30 (10%) | 0/30 |
-| 4, 6 or 10 concatenated (48–140 paragraphs) | 0/90 | 0/90 | 0/90 | 0/90 | 3/90 (3%) | 0/90 |
-| any insert found / and nothing else | 83 / 78% | 82 / 82% | 81 / 80% | 84 / 77% | 81 / 79% | 76 / 75% |
-| 1 / 2 / 3 blocks found | 65 / 87 / 98% | 63 / 87 / 97% | 60 / 82 / 100% | 66 / 86 / 99% | 68 / 77 / 97% | 60 / 72 / 97% |
-| prose insert under 30 words | 33% | 31% | 29% | 38% | 34% | 29% |
-| 1 block, 1–2-sentence host paragraphs | 60% | 58% | 62% | 53% | 66% | 53% |
-| 1 block in a 24–140-paragraph document | 41% | 40% | 45% | 51% | 47% | 44% |
-| 1 block at the start / middle / end | 76 / 66 / 54% | 74 / 66 / 50% | 66 / 62 / 53% | 69 / 66 / 62% | 69 / 72 / 62% | 56 / 66 / 59% |
-| draft.md exactly lines 9 and 15 | 5/5 | 5/5 | 4/5 | 4/5 | 5/5 | 4/5 |
+| | A no spaCy | A spaCy | B no spaCy | B spaCy | C no spaCy | C spaCy | D no spaCy | D spaCy |
+|---|---|---|---|---|---|---|---|---|
+| held-out documents with any drift | 2/50 (4%) | 1/50 (2%) | 0/32 (0%) | 0/32 (0%) | 1/32 (3%) | 0/32 (0%) | 0/33 (0%) | 7/33 (21%) |
+| same, 1–2-sentence paragraphs | 0/50 (0%) | 0/50 (0%) | 0/32 (0%) | 0/32 (0%) | 2/32 (6%) | 0/32 (0%) | 0/33 (0%) | 2/33 (6%) |
+| 2 concatenated | 4/30 (13%) | 1/30 (3%) | 0/30 (0%) | 0/30 (0%) | 3/30 (10%) | 0/30 (0%) | 0/30 (0%) | 3/30 (10%) |
+| 4, 6 or 10 concatenated | 0/90 (0%) | 0/90 (0%) | 0/90 (0%) | 0/90 (0%) | 3/90 (3%) | 1/90 (1%) | 0/90 (0%) | 25/90 (28%) |
+| real held-out essays with any drift | - | - | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/3 (0%) | 1/3 (33%) |
+| distinct writer paragraphs behind those | 2 | 1 | 0 | 0 | 5 | 1 | 0 | 8 |
+| 1 / 2 / 3 blocks found | 69% / 87% / 97% | 72% / 86% / 97% | 57% / 88% / 96% | 67% / 91% / 98% | 69% / 82% / 97% | 66% / 76% / 97% | 62% / 86% / 96% | 76% / 93% / 99% |
+| insert found with nothing else drifting | 79% | 82% | 78% | 81% | 79% | 78% | 80% | 68% |
+| 1 block at start / middle / end | 68% / 78% / 60% | 78% / 78% / 60% | 66% / 53% / 53% | 69% / 59% / 72% | 81% / 66% / 59% | 75% / 59% / 62% | 67% / 58% / 61% | 76% / 76% / 76% |
+| adjacent LLM pair, both drift: start / middle / end | 84% / 68% / 74% | 84% / 76% / 72% | 69% / 50% / 78% | 72% / 56% / 88% | 78% / 78% / 81% | 75% / 69% / 81% | 64% / 52% / 79% | 76% / 70% / 97% |
+| prose insert under 30 words | 46% | 40% | 17% | 29% | 48% | 33% | 30% | 52% |
+| 1 block in a 24–164-paragraph document | 46% | 48% | 42% | 52% | 48% | 39% | 35% | 48% |
+| draft.md exactly lines 9 and 15 | 5/5 (100%) | 5/5 (100%) | 4/5 (80%) | 5/5 (100%) | 5/5 (100%) | 5/5 (100%) | 3/5 (60%) | 5/5 (100%) |
 
-A's 4 of 30 two-document concatenations are 2 distinct paragraphs of the writer (from 2 of
-its 50 held-out documents), repeated across concatenations; C's without spaCy are 4
-distinct paragraphs. Across
-all six setups, the writer's documents drift falsely 0–6% of the time, and 0–13% counting
-repeats, on seen and unseen topics alike.
+Every setup but D with spaCy keeps the writer's documents at or under about 10% false drift
+(13% counting repeats in A's two-document concatenations, which are 2 distinct paragraphs of
+the writer). **D with spaCy is over that:** 21% of its single held-out documents and 28% of
+its long concatenations have a paragraph drift. Those are 8 distinct paragraphs of the
+writer, repeated across documents, each just over its threshold (1.02–1.55 times the bound
+against thresholds of about 1.0–1.2), on topics the reference never saw, and carried mostly
+by vocabulary (long words, word length, nominalizations) rather than syntax; one is in a
+real essay (`the-woodstove.md`, 1 of the 3). Raising the minimum threshold to 1.2 would take
+D to 8% / 23% but costs detection and `draft.md` on the other setups, so it is not done.
+Before capping the parser's metrics in spans and restricting explanation to stronger
+paragraphs, D with spaCy drifted falsely in 67% of single documents and 86% of long ones
+(one rare parser metric carrying a 100-word span), and two adjacent LLM paragraphs at a
+document's start or end were never both found (now 64–97%).
 
 Before this rule (a constant floor of 1.2 times the bound, and single spans judged against a
 tail fitted to all spans), the same harness gave C 9–16% false drift in single documents and
@@ -489,15 +516,21 @@ on seen topics (at p = 0.1 / 0.02 / 0.005: 0.113 / 0.037 / 0.010 on A without sp
 0.023 / 0.007 with it) and runs heavier on unseen ones (C: 0.19 / 0.05–0.06 / 0.007–0.021),
 which the margin from the documents' spread and the tail's confidence bound absorb.
 
-What this does not catch well: a single short LLM paragraph (under 30 words, 29–38%), one
-paragraph in a long document (the per-document threshold rises with its length: 40–51% at
-24–140 paragraphs), a single block at the end of a document (50–62%), and, on a topic the
-reference lacks with spaCy, two-block inserts (72%). So "no paragraph drifts" is not "clean":
-a single short paragraph in the LLM register is missed more often than it is found.
-`draft.md`'s line 15 is such a paragraph (33 words); the folds find both planted paragraphs
-4 or 5 times in 5, and the demo reference finds both. Real writers vary more than these
-remixed corpora, so expect somewhat more false drift on real text, and on a new topic most of
-all.
+What this does not catch well: a single short LLM paragraph (under 30 words, 17–52%), one
+paragraph in a long document (the per-document threshold rises with its length: 35–52% at
+24–164 paragraphs), and a single block (57–76%). Two or three blocks are found 76–99% of
+the time. So "no paragraph drifts" is not "clean": a single short paragraph in the LLM
+register is missed about as often as it is found. `draft.md`'s line 15 is such a paragraph
+(33 words); the folds find both planted paragraphs 3 to 5 times in 5, and the demo
+reference finds both.
+
+**These are synthetic corpora.** Every held-out document in A–D is remixed from seven
+essays by one writer, so held-out text shares sentences with other held-out text, and in A
+with the reference; the null is fitted to such documents, and the inserts come from five LLM
+drafts on the same few topics. Real writers vary more from piece to piece, and D shows what
+a new topic does with spaCy. Expect more false drift on a real writer's new topics than
+these tables show, and treat a paragraph just over its threshold as a lead to read, not a
+finding.
 
 ## Resolution floors
 

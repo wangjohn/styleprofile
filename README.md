@@ -167,13 +167,16 @@ that *drifts* is not the same as a chunk *flagged* in the headline: a flagged ch
 window reading clearly different.)
 
 On synthetic corpora remixed from the sample essays, on the reference's own topics and on
-two kinds of topics it never saw, 0–6% of the writer's held-out documents had a paragraph
-drift (up to 13% counting a few paragraphs repeated across concatenated documents of 25–140
-paragraphs); a run of two or three LLM blocks spliced in was found 72–100% of the time, and
-a single paragraph 60–68%. **A single short paragraph is often missed** (29–38% found under
-30 words), and so is one paragraph in a long document, so "no paragraph drifts" does not
-mean the text is clean. Those corpora are optimistic: expect more false drift on a real
-writer's new topics. [docs/method.md](docs/method.md#where-a-draft-drifts) has the tables.
+three kinds of topics it never saw, 0–4% of the writer's held-out documents had a paragraph
+drift in seven of eight setups (up to 13% counting a few paragraphs repeated across
+concatenated documents of 25–160 paragraphs); on the widest topic shift with spaCy it was
+21% (28% in long documents), a handful of the writer's paragraphs just over their
+thresholds. A run of two or three LLM blocks spliced in was found 76–99% of the time, and a
+single block 57–76%. **A single short paragraph is often missed** (17–52% found under 30
+words), and so is one paragraph in a long document, so "no paragraph drifts" does not mean
+the text is clean, and one that drifts is a lead to read, not a finding. Those corpora are
+synthetic and optimistic: expect more false drift on a real writer's new topics.
+[docs/method.md](docs/method.md#where-a-draft-drifts) has the tables.
 
 `--by-paragraph` lists every paragraph with its statistic (x its range, `*` for one that
 drifts) against the document's threshold, and says why a paragraph above its range does not

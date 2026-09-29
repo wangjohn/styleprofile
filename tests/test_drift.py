@@ -498,7 +498,9 @@ def test_pooled_records_are_not_read_in_parts(tmp_path: Path, demo_profile: sp.P
     assert line in result.to_text()
     path = tmp_path / "score.json"
     result.save(path)
-    saved = sp.ScoreResult(load_report(path))
+    report = load_report(path)
+    assert report["kind"] == "score"
+    saved = sp.ScoreResult(report)
     assert line in saved.to_text() and all(d["pooled"] for d in saved.report["passages"] or [])
     # Unpooled, each record is its own document and none is pooled.
     plain = demo_profile.score(records, pool=False, passages=True)

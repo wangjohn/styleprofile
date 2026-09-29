@@ -1,7 +1,7 @@
 """Measure "Where it drifts": false flags on the writer's own documents, and how often LLM
 passages spliced into them are found. Adapted from the review harness of plan PR 12.
 
-    python bench/drift.py A|B|C [--syntax] [--out RESULTS.json]
+    python bench/drift.py A|B|C|D [--syntax] [--out RESULTS.json]
 
 Two corpora, each in 5 folds; every fold builds a reference whose contrast set (40 documents
 generated from 4 of the 5 LLM drafts) leaves out the draft its inserts come from:
@@ -13,11 +13,15 @@ generated from 4 of the 5 LLM drafts) leaves out the draft its inserts come from
 - ``C``: a topic shift the contrast set covers but the reference does not: the held-out
   topics are ``fence-lines`` and ``the-woodstove``, which LLM drafts exist for, in
   documents of about 600 words.
+- ``D``: a wider topic shift in longer documents: the reference is remixed from 4 essays,
+  and the held-out documents (about 1,200 words) from the other 3 (``sharpening``,
+  ``the-woodstove``, ``walking-in-rain``), plus those 3 real essays.
 
 Each held-out document is scored as it is and with 1-2-sentence paragraphs (false flags); with
 runs of 1, 2 or 3 consecutive blocks of the left-out draft (headings and lists included)
-inserted at its start, middle or end; and concatenated 2, 4, 6 and 10 at a time (up to
-about 140 paragraphs), with and without an insert. examples/draft.md is scored in every fold. The
+inserted at its start, middle or end; with two adjacent prose paragraphs of it at its
+start, middle or end; and concatenated 2, 4, 6 and 10 at a time (up to about 160
+paragraphs), with and without an insert. examples/draft.md is scored in every fold. The
 tables print as Markdown.
 """
 
@@ -138,11 +142,13 @@ def collect(corpus: str, syntax: bool) -> list[dict[str, Any]]:
         held = [(path.name, path.read_text()) for path in documents[150:]]
     else:
         essays = sorted((EXAMPLES / "writer").glob("*.md"))
-        pick = (
-            ("sharpening", "walking-in-rain") if corpus == "B" else ("fence-lines", "the-woodstove")
-        )
+        pick = {
+            "B": ("sharpening", "walking-in-rain"),
+            "C": ("fence-lines", "the-woodstove"),
+            "D": ("sharpening", "the-woodstove", "walking-in-rain"),
+        }[corpus]
         unseen = [path for path in essays if path.stem in pick]
-        words, seed = (900, 7) if corpus == "B" else (600, 11)
+        words, seed = {"B": (900, 7), "C": (600, 11), "D": (1200, 23)}[corpus]
         seen = [path for path in essays if path not in unseen]
         reference = _folder(_generate(_pool_from(seen), 150, words, f"{corpus}:ref:{seed}"))
         held = [
@@ -180,6 +186,17 @@ def collect(corpus: str, syntax: bool) -> list[dict[str, Any]]:
                             "doc": _score(profile, spliced, name),
                         }
                     )
+            pairs = [chunk for chunk, formatted in runs[2] if not formatted]
+            for where in ("start", "middle", "end"):
+                spliced, lines = _splice(text, rng.choice(pairs), where, rng)
+                results.append(
+                    {
+                        "kind": "pair",
+                        "where": where,
+                        "lines": lines,
+                        "doc": _score(profile, spliced, name),
+                    }
+                )
         for count in (2, 4, 6, 10):
             for repeat in range(6):
                 pick = random.Random(f"{corpus}:{fold}:{count}:{repeat}").sample(held, count)
@@ -243,6 +260,15 @@ def report(results: list[dict[str, Any]], title: str) -> None:
     print("\n| Inserts | n | found | and nothing else |\n|---|---|---|---|")
     for key, (count, hit, alone) in groups.items():
         print(f"| {key} | {count} | {hit / count:.0%} | {alone / count:.0%} |")
+    print("\n| Adjacent LLM pair | n | both drift | one | neither |\n|---|---|---|---|---|")
+    for where in ("start", "middle", "end"):
+        counts = [0, 0, 0]
+        pairs = [r for r in results if r["kind"] == "pair" and r["where"] == where and r["doc"]]
+        for result in pairs:
+            inside = [p for p in result["doc"] if _overlaps(p, result["lines"])]
+            found = sum(bool(p[4]) for p in inside)
+            counts[0 if found >= 2 else 1 if found else 2] += 1
+        print(f"| at the {where} | {len(pairs)} | " + " | ".join(map(str, counts)) + " |")
     drafts = [result["doc"] for result in results if result["kind"] == "draft"]
     exact = sum(bool(doc) and sorted(p[0] for p in doc if p[4]) == [9, 15] for doc in drafts if doc)
     print(f"\ndraft.md, exactly lines 9 and 15: {exact} of {len(drafts)}")
@@ -250,7 +276,7 @@ def report(results: list[dict[str, Any]], title: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
-    parser.add_argument("corpus", choices=["A", "B", "C"])
+    parser.add_argument("corpus", choices=["A", "B", "C", "D"])
     parser.add_argument("--syntax", action="store_true", help="build and score with spaCy")
     parser.add_argument("--out", type=Path, help="also save the raw results as JSON")
     args = parser.parse_args()
