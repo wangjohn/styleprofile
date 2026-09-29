@@ -14,12 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from styleprofile.calibration import (
+    FLAGGED_DISTANCE,
     MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
     MIN_JUDGED_WORDS,
     chunk_level,
     chunk_likeness_level,
     enough,
+    flagged_text,
     shortfall,
     too_short_text,
 )
@@ -505,9 +507,38 @@ def _bound(report: ScoreReport, entry: VerdictDelta | VerdictLikeness) -> str:
     return f"95% under {p95:.2f}"
 
 
-def _flagged_chunks(report: ScoreReport, reference: Baseline, style: _Style) -> list[str]:
-    """Up to a few chunks per list, only those that are flagged, each judged at its own
-    length; chunks too short to judge are never listed."""
+def _flagged_note(report: ScoreReport, reference: Baseline, style: _Style) -> str:
+    """What the headline adds when some judged chunks are flagged on their own
+    (``calibration.chunk_flagged``): "; 4 of 40 chunks read clearly different or lean LLM on
+    their own (see below)". The headline judges the chunks' mean, which a few such chunks
+    move little, so it always says so; the chunk lists below name them, or, when every
+    document is one chunk, the document table above does."""
+    verdict = report["reference"]["verdict"]
+    if not verdict["flagged"] or verdict["chunks_judged"] < 2:
+        return ""
+    documents = len(report["documents"])
+    contrast = reference["contrast"]
+    one = verdict["flagged"] == 1
+    lean = f" or lean{'s' * one} {contrast['label']}" if contrast else ""
+    if report["chunk_count"] > max(documents, 1):
+        count = flagged_text(verdict["flagged"], verdict["chunks_judged"], verdict["chunks"])
+        where = "see below"
+    else:
+        count = flagged_text(
+            verdict["flagged"], verdict["chunks_judged"], verdict["chunks"], unit="documents"
+        )
+        where = "see the table above"
+    verb = "reads" if one else "read"
+    note = f"; {count} {verb} clearly different{lean} on {'its' if one else 'their'} own ({where})"
+    return style.distance(note, FLAGGED_DISTANCE)
+
+
+def _flagged_chunks(
+    report: ScoreReport, reference: Baseline, style: _Style, *, full: bool = False
+) -> list[str]:
+    """Up to a few chunks per list (every one with ``full``), only those that are flagged,
+    each judged at its own length, the furthest by level first so that every chunk flagged
+    on its own is among the first; chunks too short to judge are never listed."""
     lines: list[str] = []
     contrast = reference["contrast"]
     if contrast and report["reference"]["verdict"]["likeness"]:
@@ -518,26 +549,39 @@ def _flagged_chunks(report: ScoreReport, reference: Baseline, style: _Style) -> 
             for chunk in report["chunks"]
             if (score := chunk["reference"].get("likeness")) is not None
         ]
-        most = [
-            (chunk, score, level)
-            for chunk, score in sorted(liked, key=lambda item: -item[1])
-            if (level := chunk_likeness_level(chunk))
-        ][:CHUNKS_SHOWN]
+        most = sorted(
+            (
+                (chunk, score, level)
+                for chunk, score in liked
+                if (level := chunk_likeness_level(chunk))
+            ),
+            key=lambda item: (-item[2], -item[1]),
+        )
         if most:
             lines += ["", style.bold(f"Most {name}-like chunks")]
-            for chunk, score, level in most:
+            for chunk, score, level in most[: None if full else CHUNKS_SHOWN]:
                 word = style.distance(f"{likeness_words(level, name):22}", level)
                 lines.append(f"  {score:5.2f}  {word}  {_chunk_label(chunk)}")
-    ranked = sorted(report["chunks"], key=lambda chunk: -(chunk["reference"]["delta"] or 0))
-    flagged = [(chunk, level) for chunk in ranked if (level := chunk_level(chunk))][:CHUNKS_SHOWN]
+            lines += _more(len(most), full, style)
+    flagged = sorted(
+        ((chunk, level) for chunk in report["chunks"] if (level := chunk_level(chunk))),
+        key=lambda item: (-item[1], -(item[0]["reference"]["delta"] or 0)),
+    )
     if flagged:
         lines += ["", style.bold("Least like the reference")]
-        for chunk, level in flagged:
+        for chunk, level in flagged[: None if full else CHUNKS_SHOWN]:
             word = style.distance(f"{DISTANCE_WORDS[level]:22}", level)
             lines.append(
                 f"  {chunk['reference']['delta'] or 0.0:5.2f}  {word}  {_chunk_label(chunk)}"
             )
+        lines += _more(len(flagged), full, style)
     return lines
+
+
+def _more(count: int, full: bool, style: _Style) -> list[str]:
+    """The line under a chunk list that shows only the first ``CHUNKS_SHOWN`` of ``count``."""
+    hidden = 0 if full else count - CHUNKS_SHOWN
+    return [style.dim(f"  … and {hidden} more (--all lists them)")] if hidden > 0 else []
 
 
 def _chunk_label(row: ScoredChunk) -> str:
@@ -677,7 +721,8 @@ def _comparison_view(
             "",
             style.bold(headline)
             + style.distance(style.bold(verdict["verdict"]), level)
-            + f"   Delta {delta:.2f}",
+            + f"   Delta {delta:.2f}"
+            + _flagged_note(report, reference, style),
             style.dim(
                 f"  Lower is closer. "
                 f"{_delta_baseline(_judged_view(report), reference, verdict['delta'])}"
@@ -717,7 +762,7 @@ def _comparison_view(
     lines += ["", *_differences(view, reference, style, judged=judged)]
     # With every document one chunk, the chunk lists would repeat the document table.
     if report["chunk_count"] > max(len(documents), 1):
-        lines += _flagged_chunks(report, reference, style)
+        lines += _flagged_chunks(report, reference, style, full=full)
     if full:
         divergences = [
             (name, amount)

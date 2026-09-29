@@ -439,6 +439,8 @@ class DocumentResult:
     chunks_judged: int = 0
     reason: str | None = None
     path: str | None = None
+    # Its judged chunks that are flagged on their own (``ScoreResult.flagged``).
+    flagged: int = 0
     location: str | None = field(default=None, compare=False)
 
     @classmethod
@@ -463,6 +465,7 @@ class DocumentResult:
             chunks_judged=entry["chunks_judged"],
             reason=entry["reason"],
             path=entry["path"],
+            flagged=entry["flagged"],
             location=location,
         )
 
@@ -542,6 +545,15 @@ class ScoreResult(_Result[ScoreReport]):
         """Whether any chunk is long enough to judge; if not, the verdicts are
         ``TOO_SHORT`` and ``reason`` says why."""
         return self._verdict["judged"]
+
+    @property
+    def flagged(self) -> int:
+        """How many of the judged chunks read clearly different or worse, or lean toward
+        the contrast set or more, on their own (``calibration.chunk_flagged``). The verdict
+        judges the chunks' mean, which answers whether the text as a whole is like the
+        writer: a few very different chunks among many close ones move it little, so check
+        this (and the chunk lists the CLI prints) for them."""
+        return self._verdict["flagged"]
 
     @property
     def reason(self) -> str | None:

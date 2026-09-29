@@ -34,7 +34,7 @@ from styleprofile.api import (
     Settings,
     SettingsOverrides,
 )
-from styleprofile.calibration import too_short_text
+from styleprofile.calibration import flagged_text, too_short_text
 from styleprofile.core import (
     LikenessVerdict,
     Note,
@@ -544,9 +544,11 @@ def _headline(
     *,
     too_short: str | None = None,
     note: str = "",
+    flagged: str = "",
 ) -> str:
     """One line with the same verdict words as the full comparison view; ``too_short``
-    replaces the verdict and figures of a text too short to judge."""
+    replaces the verdict and figures of a text too short to judge, and ``flagged`` ("4 of 40
+    chunks") ends it with how many chunks are flagged on their own."""
     if delta is None:
         return f"{name}: no metrics could be compared with the reference"
     if too_short:
@@ -554,7 +556,13 @@ def _headline(
     parts = [f"{name}: {verdict} (Delta {delta:.2f}{note})"]
     if likeness is not None and likeness_verdict is not None and label:
         parts.append(f"{label}-likeness {likeness_verdict.words(label)} ({likeness:.2f})")
-    return "; ".join(parts)
+    return "; ".join(parts) + (f" ({flagged} flagged)" if flagged else "")
+
+
+def _flag_count(flagged: int, judged: int, chunks: int) -> str:
+    """ "4 of 40 chunks" for ``-q`` when a verdict over several judged chunks has some
+    flagged on their own, else ""."""
+    return flagged_text(flagged, judged, chunks) if flagged and judged > 1 else ""
 
 
 def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
@@ -578,6 +586,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
                 if doc.judged
                 else too_short_text({"chunks": doc.chunks, "words": doc.words}),
                 note=not_judged(doc.chunks, doc.chunks_judged),
+                flagged=_flag_count(doc.flagged, doc.chunks_judged, doc.chunks),
             )
             for doc in ranked
         ]
@@ -603,6 +612,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
             result.likeness_verdict,
             label,
             note=note,
+            flagged=_flag_count(verdict["flagged"], verdict["chunks_judged"], verdict["chunks"]),
         )
     ]
 
