@@ -213,7 +213,8 @@ def test_small_parts_join_their_neighbours_and_micro_splits_are_refused() -> Non
     )
     plan = plan_split(text, WINDOW)
     assert plan is not None
-    assert [part.title for part in plan.parts] == ["One", "Interlude", "Three"]
+    # A merged part is named by the larger: the interlude joins Two, the coda Three.
+    assert [part.title for part in plan.parts] == ["One", "Two", "Three"]
     assert all(part.words >= WINDOW / 2 for part in plan.parts)
     assert sum(len(part) for part in plan.texts) + len(plan.texts) - 1 == len(text)
     # Headings every short paragraph mark paragraphs, not pieces of writing: no split.
@@ -296,19 +297,52 @@ def test_a_file_without_headings_gets_stand_in_documents(bare_file: Path) -> Non
     profile = sp.build(bare_file, SURFACE, contrast=DRAFTS)
     [note] = _coded(profile.notes, sp.NoteCode.STAND_INS)
     windows = profile.report["chunk_count"]
-    assert windows == STAND_INS and note.startswith(
-        "bare.md has no headings or rules that split it into documents, so each of its 8 "
-        "windows stands in for a document for held-out calibration. These are consecutive "
-        "parts of one file: if topics run from one part into the next, the ranges come out "
-        "too narrow and verdicts on new text can read harsher than they should"
+    assert windows == STAND_INS and note == (
+        "bare.md has no headings or rules that divide it into 3 or more parts of at least "
+        "half a window, so each of its 8 windows stands in for a document"
     )
     assert profile.report["document_count"] == min(windows, STAND_INS) >= 7
     assert profile.report["settings"]["split_used"] == ["stand-in"]
+    assert profile.report["settings"]["contrast_split_used"] == []
     assert "calibration" in profile.report and profile.report["contrast"] is not None
-    # Scores against it say their verdict may be harsh.
-    result = profile.score(DRAFT)
-    assert any("stand-in documents" in warning for warning in result.warnings)
-    assert not any("stand-in" in w for w in sp.build(WRITER, SURFACE).score(DRAFT).warnings)
+    # What that means is said once, in the report, so show repeats it; scores don't.
+    [warning] = [w for w in profile.warnings if "stand-in" in w]
+    assert warning == (
+        "held-out calibration comes from 8 stand-in documents, consecutive parts of one file "
+        "(bare.md): calibration from them is less sensitive, so short off-voice passages are "
+        "caught less often; mark where pieces begin with headings or rules, or give them as "
+        "separate files"
+    )
+    assert warning in profile.to_text()
+    assert not any("stand-in" in w for w in profile.score(DRAFT).warnings)
+
+
+def test_a_one_file_contrast_set_is_split_and_recorded(tmp_path: Path) -> None:
+    drafts = [path.read_text(encoding="utf-8") for path in sorted(DRAFTS.glob("*.md"))]
+    headed = tmp_path / "llm.md"
+    headed.write_text("\n\n".join(drafts), encoding="utf-8")
+    profile = sp.build(WRITER, SURFACE, contrast=headed)
+    assert "split contrast llm.md into 5 documents at its level-1 headings" in _coded(
+        profile.notes, sp.NoteCode.SPLIT
+    )
+    assert profile.report["settings"]["contrast_split_used"] == ["heading"]
+    assert profile.report["settings"]["split_used"] == []
+    bare = tmp_path / "bare-llm.md"
+    bare.write_text("\n\n".join(map(_without_headings, drafts)), encoding="utf-8")
+    profile = sp.build(WRITER, SURFACE, contrast=bare)
+    assert profile.report["settings"]["contrast_split_used"] == ["stand-in"]
+    [warning] = [w for w in profile.warnings if "stand-in" in w]
+    assert warning.startswith("the contrast set's documents are") and "drafts" in warning
+    assert "writer" not in warning
+
+
+def test_too_few_headings_fall_back_to_stand_ins_with_an_accurate_note(tmp_path: Path) -> None:
+    path = tmp_path / "two.md"
+    path.write_text(
+        f"# Half 1\n\n{_prose(2500)}\n\n# Half 2\n\n{_prose(2500, 5)}", encoding="utf-8"
+    )
+    [note] = _coded(sp.build(path, SURFACE).notes, sp.NoteCode.STAND_INS)
+    assert note.startswith("two.md has no headings or rules that divide it into 3 or more parts")
 
 
 def test_stand_ins_are_consecutive_windows(bare_file: Path) -> None:
@@ -360,21 +394,64 @@ def test_a_bench_corpus_in_one_file_splits_into_its_documents(tmp_path: Path) ->
 # What is split.
 
 
-def test_folders_of_three_or_more_files_are_not_split(tmp_path: Path) -> None:
-    folder = tmp_path / "posts"
+def _manuscripts(folder: Path, count: int, chapters: int = 8, words: int = 1400) -> Path:
+    """``count`` manuscripts of ``chapters`` chapters under ``# Chapter N`` headings."""
     folder.mkdir()
-    for n in range(3):
-        sections = "\n\n".join(f"## S{s}\n\n{_prose(300, n + s)}" for s in range(4))
-        (folder / f"{n}.md").write_text(f"# Post {n}\n\n{sections}", encoding="utf-8")
+    for n in range(count):
+        body = "\n\n".join(
+            f"# Chapter {c}\n\n{_prose(words, n * chapters + c)}" for c in range(1, chapters + 1)
+        )
+        (folder / f"book{n}.md").write_text(body, encoding="utf-8")
+    return folder
+
+
+def _calibrated(profile: sp.Profile) -> list[str]:
+    lengths = profile.report.get("calibration", {}).get("by_length", {})
+    return sorted((length for length, entry in lengths.items() if "delta" in entry), key=int)
+
+
+def test_a_few_manuscripts_are_split_when_that_calibrates_more(tmp_path: Path) -> None:
+    folder = _manuscripts(tmp_path / "books", 3)
     profile = sp.build(folder, SURFACE)
-    assert profile.report["document_count"] == 3
+    assert _coded(profile.notes, sp.NoteCode.SPLIT) == [
+        "split 3 texts into 24 documents at their headings: as 3 documents the reference "
+        "could likely calibrate no short length, and split, 75, 150 and 300 words"
+    ]
+    assert profile.report["document_count"] == 24
+    assert _calibrated(profile) == ["75", "150", "300"]
+    assert profile.report["settings"]["split_used"] == ["heading"]
+    unsplit = sp.build(folder, sp.Settings(syntax=False, split_on="none"))
+    assert unsplit.report["document_count"] == 3 and _calibrated(unsplit) == []
+    # Never into stand-ins: a manuscript without headings among them stays whole.
+    (folder / "bare.md").write_text(_prose(5000, 7), encoding="utf-8")
+    mixed = sp.build(folder, SURFACE)
+    assert mixed.report["document_count"] == 25 and "stand-in" not in str(mixed.report["settings"])
+
+
+def test_ten_or_more_documents_are_never_split_automatically(tmp_path: Path) -> None:
+    folder = _manuscripts(tmp_path / "posts", 10, chapters=4, words=300)
+    profile = sp.build(folder, SURFACE)
+    assert profile.report["document_count"] == 10
     assert not _coded(profile.notes, sp.NoteCode.SPLIT)
     # Asked for, each file is split at its headings.
     asked = sp.build(folder, sp.Settings(syntax=False, split_on="heading"))
     assert _coded(asked.notes, sp.NoteCode.SPLIT) == [
-        f"split posts/{n}.md into 4 documents at its level-2 headings" for n in range(3)
+        "split 10 texts into 40 documents at their headings"
     ]
-    assert asked.report["document_count"] == 12
+    assert asked.report["document_count"] == 40
+
+
+def test_texts_that_already_calibrate_are_not_split(tmp_path: Path) -> None:
+    # Three long essays that split into two halves each gain no calibrated length.
+    folder = tmp_path / "essays"
+    folder.mkdir()
+    for n in range(3):
+        (folder / f"{n}.md").write_text(
+            f"# A\n\n{_prose(300, n)}\n\n# B\n\n{_prose(300, n + 3)}", encoding="utf-8"
+        )
+    profile = sp.build(folder, SURFACE)
+    assert profile.report["document_count"] == 3
+    assert not _coded(profile.notes, sp.NoteCode.SPLIT)
 
 
 def test_a_folder_of_one_file_and_stdin_split(
@@ -421,6 +498,114 @@ def test_asking_for_a_split_that_is_not_there_is_noted(bare_file: Path) -> None:
         "is kept whole"
     ]
     assert profile.report["document_count"] == 1
+
+
+def test_scene_breaks_do_not_beat_chapters() -> None:
+    chapters = []
+    for n in range(1, 13):
+        body = _prose(700, n)
+        if n in (3, 7, 10):
+            body += f"\n\n* * *\n\n{_prose(400, n + 20)}"
+        chapters.append(f"# Chapter {n}\n\n{body}")
+    plan = plan_split("# The Long Valley\n\nby A. Writer\n\n" + "\n\n".join(chapters), WINDOW)
+    assert plan is not None and (plan.kind, len(plan.parts)) == (HEADING, 12)
+    # The title and byline join Chapter 1, which keeps its name.
+    assert [part.title for part in plan.parts][:2] == ["Chapter 1", "Chapter 2"]
+    # Rules win only where they sit before headings: a newsletter's issues.
+    issues = "\n\n---\n\n".join(
+        f"title: Issue {n}\ndate: 2024-01-0{n}\n\n# The week\n\n{_prose(300, n)}\n\n"
+        f"# Reading\n\n{_prose(300, n + 1)}"
+        for n in range(1, 6)
+    )
+    plan = plan_split(issues, WINDOW)
+    assert plan is not None and plan.kind == RULE
+    # A part after a rule is named by its title: line, or else its first heading.
+    assert [part.title for part in plan.parts] == [f"Issue {n}" for n in range(1, 6)]
+    plain = plan_split(issues.replace("title: ", "about: "), WINDOW)
+    assert plain is not None and {part.title for part in plain.parts} == {"The week"}
+
+
+def test_a_metadata_block_inside_a_text_is_not_a_heading() -> None:
+    text = "Intro.\n\n---\ntitle: Issue 2\ndate: 2024-01-02\n---\n\n# The week\n"
+    assert [(m.line, m.kind) for m in markers(text)] == [(2, RULE), (7, HEADING)]
+
+
+def test_a_heading_level_can_be_asked_for(tmp_path: Path) -> None:
+    book = "\n\n".join(
+        f"# Part {p}\n\n"
+        + "\n\n".join(f"## Chapter {p}.{c}\n\n{_prose(600, c)}" for c in range(1, 5))
+        for p in ("I", "II", "III")
+    )
+    assert len(plan_split(book, WINDOW).parts) == 3  # type: ignore[union-attr]
+    chapters = plan_split(book, WINDOW, "heading:2", 2)
+    assert chapters is not None and len(chapters.parts) == 12
+    assert (
+        chapters.parts[0].title == "Chapter I.1" and chapters.describe() == "its level-2 headings"
+    )
+    path = tmp_path / "book.md"
+    path.write_text(book, encoding="utf-8")
+    result = sp.build(WRITER, SURFACE).score(path, split_on="heading:2")
+    assert len(result.documents) == 12
+    assert result.documents[4].name == "book.md#5-chapter-ii-1"
+    kept = sp.build(WRITER, SURFACE).score(DRAFT, split_on="heading:3")
+    assert _coded(kept.notes, sp.NoteCode.SPLIT) == [
+        "draft.md has no level-3 headings that split it into parts of at least half a "
+        "window, so it is kept whole"
+    ]
+
+
+def test_plain_text_chapter_lines_are_headings(tmp_path: Path) -> None:
+    labels = ["Chapter 1", "CHAPTER II", "Chapter Three", "Chapter 4: The End"]
+    text = "\n\n".join(f"{label}\n\n{_prose(600, n)}" for n, label in enumerate(labels))
+    found = markers(text, plain=True)
+    assert [(m.kind, m.level, m.title) for m in found] == [(HEADING, 2, t) for t in labels]
+    assert markers(text) == []  # only in plain text
+    # Only alone between blank lines: not a sentence that starts with the word.
+    assert markers("Chapter 12 of the report says so.\n", plain=True) == []
+    assert markers("Text.\nChapter 3\nMore text.\n", plain=True) == []
+    assert [m.level for m in markers("Part One\n\nBook II\n", plain=True)] == [1, 1]
+    path = tmp_path / "novel.txt"
+    path.write_text(text, encoding="utf-8")
+    assert _coded(sp.build(path, SURFACE).notes, sp.NoteCode.SPLIT) == [
+        "split novel.txt into 4 documents at its level-2 headings"
+    ]
+
+
+def test_parts_that_repeat_another_are_dropped(tmp_path: Path) -> None:
+    issue = f"# Issue A\n\n{_prose(600)}"
+    path = tmp_path / "dups.md"
+    path.write_text(
+        "\n\n".join(
+            [issue, f"# Issue B\n\n{_prose(600, 4)}", issue, f"# Issue C\n\n{_prose(600, 8)}"]
+        ),
+        encoding="utf-8",
+    )
+    profile = sp.build(path, SURFACE)
+    assert profile.report["document_count"] == 3
+    [note] = _coded(profile.notes, sp.NoteCode.DUPLICATES)
+    assert "dups.md#3-issue-a repeats dups.md#1-issue-a" in note
+
+
+def test_the_split_suggestion_is_never_circular(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "preface.md"
+    chapters = "\n\n".join(f"# Chapter {n}\n\n{_prose(300, n)}" for n in range(1, 8))
+    path.write_text(f"# Preface\n\n{_prose(6000)}\n\n{chapters}", encoding="utf-8")
+    thin = _coded(sp.build(path, SURFACE).notes, sp.NoteCode.THIN_REFERENCE)
+    held = [message for message in thin if message.startswith("one document holds")]
+    assert held and not any("split" in message for message in held)
+    # A whole file among others is told how, with each flag written out.
+    folder = tmp_path / "mixed"
+    folder.mkdir()
+    (folder / "big.md").write_text(f"{_prose(6000)}", encoding="utf-8")
+    for n in range(2):
+        (folder / f"{n}.md").write_text(_prose(300, n), encoding="utf-8")
+    code = main(["build", str(folder), "-o", str(tmp_path / "p.json"), "--no-syntax"])
+    assert code == 0
+    # Wrapped lines may break at a hyphen, so compare without whitespace.
+    shown = "".join(capsys.readouterr().err.split())
+    assert "orsplitthatone(--split-onheadingor--split-onrulesplits" in shown
 
 
 def test_split_on_is_a_setting() -> None:

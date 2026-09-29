@@ -551,7 +551,7 @@ def test_one_giant_group_is_a_thin_reference(tmp_path: Path) -> None:
         re.fullmatch(
             r"one document holds 2\d of its 2\d chunks, so its held-out range rests on the "
             r"other 1 chunk, where a range needs 20 from 3 or more documents; add documents "
-            r"of a similar size, or split that one",
+            r"of a similar size",
             message,
         )
         for message in thin

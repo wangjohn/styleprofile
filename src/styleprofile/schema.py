@@ -91,7 +91,8 @@ class InputSettings(TypedDict, total=False):
     pool: Literal["auto"] | bool
     # Whether short texts were joined into windows (``pool`` is what was asked).
     pool_used: bool
-    split_on: Literal["auto", "heading", "rule", "none"]
+    # "auto", "heading", "heading:1" to "heading:6", "rule" or "none" (``split.SplitOn``).
+    split_on: str
     # How texts were split into documents (``split_on`` is what was asked): "heading",
     # "rule" and "stand-in" (consecutive windows of a text with neither), sorted; empty when
     # nothing was split.
@@ -107,6 +108,8 @@ class ReportSettings(InputSettings):
     syntax_used: SyntaxUsed | None
     # A reference's contrast inputs; None when built without them.
     contrast: NotRequired[list[str] | None]
+    # How a reference's contrast set was split, as ``split_used`` (empty without one).
+    contrast_split_used: NotRequired[list[str]]
 
 
 class EvaluationSettings(InputSettings):
