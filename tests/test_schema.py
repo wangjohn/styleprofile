@@ -192,6 +192,13 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     made.append(("evaluation with retrain", evaluation.report, EvaluationReport))
     plain_evaluation = sp.evaluate(WRITER, CONTRAST, {"light": edited}, sp.Settings(syntax=False))
     made.append(("evaluation", plain_evaluation.report, EvaluationReport))
+    # Fail flags record ``fail`` and ``failed``; the LLM draft reaches both levels.
+    reference = tmp / "writer.json"
+    sp.build(WRITER, contrast=CONTRAST).save(reference)
+    failed = tmp / "failed.json"
+    argv = ["score", "--fail-above", "clearly", "--fail-likeness", "few", "-o", str(failed)]
+    assert main([*argv, str(CONTRAST / "old-maps.md"), str(DRAFT), str(reference)]) == 3
+    made.append(("score with fail flags", json.loads(failed.read_text("utf-8")), ScoreReport))
     return made + [
         (f"{name}, saved", json.loads(dumps_report(report)), kind) for name, report, kind in made
     ]

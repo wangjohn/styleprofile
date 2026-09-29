@@ -64,10 +64,15 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[Any, Baseline
         "word_count": 400 * chunks,
         "settings": {"syntax": None},
         "summary": {"voice": {"llm_markers_per_1k": {"mean": 5.0}, "hedges_per_1k": {"mean": 2.0}}},
+        "documents": [],
         "chunks": [
             {
                 "id": f"c{index}",
-                "metrics": {"size": {"words": 400.0}},
+                "source": "draft.md",
+                "metrics": {
+                    "size": {"words": 400.0},
+                    "voice": {"llm_markers_per_1k": 5.0, "hedges_per_1k": 2.0},
+                },
                 "reference": {
                     "delta": 0.8,
                     "delta_by_group": {group: amount for group, (amount, _) in AREAS.items()},

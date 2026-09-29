@@ -29,13 +29,14 @@ import json
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any, Generic, Literal, TypedDict, TypeVar, Unpack, cast
 
 from styleprofile.calibration import too_short_text
 from styleprofile.core import (
+    DISTANCES,
     LIKENESSES,
     LikenessVerdict,
     Note,
@@ -62,6 +63,7 @@ from styleprofile.profile import (
     drop_duplicates,
     dumps_report,
     expand_path,
+    literal_id,
     load_chunks,
     load_reference,
     report_kind,
@@ -71,6 +73,7 @@ from styleprofile.profile import (
 )
 from styleprofile.schema import (
     Baseline,
+    DocumentEntry,
     EvaluationReport,
     InputSettings,
     ReferenceReport,
@@ -80,6 +83,8 @@ from styleprofile.schema import (
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
 
 AUTO = "auto"
+# How the command line names standard input, apart from a file called ``stdin``.
+STDIN_SHOWN = "<stdin>"
 DEFAULT_WINDOW_WORDS = 500
 DEFAULT_TOP_K = 300
 SYNTAX_INSTALL = "pip install 'styleprofile[syntax]'"
@@ -375,7 +380,12 @@ class Profile(_Result[ReferenceReport]):
                 settings={"inputs": _described(items, names), **chosen.to_report()},
             )
             step(Phase.DONE)
-            return ScoreResult(report, notes=notes, sources=_sources(chunks))
+            return ScoreResult(
+                report,
+                notes=notes,
+                sources=_sources(chunks),
+                locations=_locations(items, names),
+            )
 
     def __repr__(self) -> str:
         where = f" from {self._path}" if self._path else ""
@@ -385,15 +395,100 @@ class Profile(_Result[ReferenceReport]):
         )
 
 
+@dataclass(frozen=True)
+class DocumentResult:
+    """One document of a score, judged on its own chunks the way a whole score is judged.
+
+    A document is a file, a JSONL record or a ``Text``; windowing cuts it into ``chunks``.
+    ``name`` is how reports list it: a file by its saved path (``posts/2024/a.md``), a
+    JSONL record by its file and id (``comments.jsonl:17``), a ``Text`` by its name.
+    ``path`` is the saved path of the file it came from (``comments.jsonl`` for a record,
+    ``<text>`` for a ``Text``), and ``location`` where to open it as the inputs were typed
+    (``drafts/2024/a.md``); ``location`` is None for a ``Text`` and for a report loaded from
+    a file, since reports never save typed paths. Neither is ever an absolute path unless
+    the input was typed as one.
+
+    ``delta`` and ``likeness`` are means over the document's chunks long enough to judge
+    (``chunks_judged`` of them), and ``verdict`` and ``likeness_verdict`` put them in words
+    against the writer's range at each chunk's own length, by the same function as
+    ``ScoreResult.verdict`` for a whole score. When none of its chunks is long enough,
+    ``judged`` is False, the verdicts are ``TOO_SHORT``, ``reason`` says why, and the
+    figures cover every chunk as an indication only; ``verdict`` is ``NOT_COMPARABLE`` when
+    no metric could be compared. A document that is not judged, or not comparable, never
+    fails a threshold (``ScoreResult.failing``).
+
+    ``differences`` are the metrics (``"group.name"``) furthest from the reference, as
+    (metric, mean z), largest first; ``signals`` the metrics that add most to its likeness,
+    as (metric, mean z, share of the likeness). Both hold up to three entries, and
+    ``signals`` is empty without a contrast set. The shares are approximate: each chunk
+    records only its five strongest signals (``weighting.SIGNALS_SHOWN``), so a metric just
+    outside some chunks' five counts as 0 there, and the shares are means over the chunks of
+    those records.
+    """
+
+    name: str
+    words: int
+    chunks: int
+    delta: float | None
+    verdict: Verdict
+    likeness: float | None = None
+    likeness_verdict: LikenessVerdict | None = None
+    differences: tuple[tuple[str, float], ...] = ()
+    signals: tuple[tuple[str, float, float], ...] = ()
+    judged: bool = True
+    chunks_judged: int = 0
+    reason: str | None = None
+    path: str | None = None
+    location: str | None = field(default=None, compare=False)
+
+    @classmethod
+    def from_report(cls, entry: DocumentEntry, location: str | None = None) -> DocumentResult:
+        """A document from a score report's ``documents``; ``location`` is where its
+        file was typed, if known."""
+        likeness = entry["likeness_verdict"]
+        return cls(
+            name=entry["name"],
+            words=entry["words"],
+            chunks=entry["chunks"],
+            delta=entry["delta"],
+            verdict=Verdict(entry["verdict"]),
+            likeness=entry["likeness"],
+            likeness_verdict=LikenessVerdict(likeness) if likeness else None,
+            differences=tuple((item["metric"], item["z"]) for item in entry["differences"]),
+            signals=tuple(
+                (item["metric"], item["z"], item["contribution"])
+                for item in entry.get("signals", [])
+            ),
+            judged=entry["judged"],
+            chunks_judged=entry["chunks_judged"],
+            reason=entry["reason"],
+            path=entry["path"],
+            location=location,
+        )
+
+    @property
+    def shown(self) -> str:
+        """How the command line names it: where it can be opened as typed when known
+        (``location``, plus a JSONL record's id: ``exports/c.jsonl:17``), else ``name``."""
+        if self.location is None:
+            return self.name
+        if self.path and self.name.startswith(self.path + ":"):
+            return self.location + self.name[len(self.path) :]
+        return self.location
+
+
 class ScoreResult(_Result[ScoreReport]):
     """Drafts scored against a profile: what ``styleprofile score`` prints and saves.
 
-    ``delta``, ``verdict`` and the likeness figures are pooled over the chunks of every
-    input that are long enough to judge, each read against the writer's range at its own
-    length, so scoring several documents at once gives one figure for all of them;
-    per-document results arrive with plan PR 7. ``report["chunks"]`` has each chunk's own.
-    When no chunk is long enough, ``judged`` is False, both verdicts are ``TOO_SHORT``,
-    ``reason`` says why, and the figures cover every chunk as an indication only.
+    ``documents`` has a result for each document scored, each judged at its own chunks'
+    lengths. ``delta``, ``verdict`` and the likeness figures are pooled over the chunks of
+    every document that are long enough to judge, each read against the writer's range at
+    its own length, so with several documents one very different draft can make the pooled
+    verdict read "very different" while the others are close: read ``documents`` to judge
+    each draft. With one document the two agree. ``report["chunks"]`` has each chunk's own
+    scores. When no chunk is long enough, ``judged`` is False, both verdicts are
+    ``TOO_SHORT``, ``reason`` says why, and the figures cover every chunk as an indication
+    only.
     """
 
     def __init__(
@@ -402,19 +497,44 @@ class ScoreResult(_Result[ScoreReport]):
         *,
         notes: Sequence[Note] = (),
         sources: Sequence[str] = (),
+        locations: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(report, notes=notes, sources=sources)
         # A score report carries a copy of what rendering needs from its reference.
         self._reference: Baseline = report["reference"]["baseline"]
+        # Each saved source's path as the inputs were typed; never saved.
+        self._locations = dict(locations or {})
 
     @property
     def chunk_count(self) -> int:
         return self._report["chunk_count"]
 
     @property
+    def documents(self) -> tuple[DocumentResult, ...]:
+        """Each scored document's own result, in the order the inputs gave them. The CLI
+        lists them furthest from the reference first."""
+        return tuple(
+            DocumentResult.from_report(entry, self._locations.get(entry["path"]))
+            for entry in self._report["documents"]
+        )
+
+    def failing(
+        self, above: Verdict | None = None, likeness: LikenessVerdict | None = None
+    ) -> tuple[DocumentResult, ...]:
+        """The documents at least ``above`` from the reference (``Verdict.CLEARLY_DIFFERENT``
+        catches clearly and very different), or at least ``likeness`` like the contrast set,
+        in input order: what ``styleprofile score --fail-above`` and ``--fail-likeness``
+        check. A document without a verdict (too short to judge, or not comparable) never
+        fails either check."""
+        return tuple(
+            document for document in self.documents if any(fails(document, above, likeness))
+        )
+
+    @property
     def delta(self) -> float | None:
-        """Mean Delta over the judged chunks: distance from the writer in the writer's own
-        standard deviations. None when no metric could be compared."""
+        """Mean Delta over the judged chunks, pooled across documents (see ``documents`` for
+        each one's): distance from the writer in the writer's own standard deviations. None
+        when no metric could be compared."""
         return self._report["reference"]["delta_mean"]
 
     @property
@@ -450,7 +570,8 @@ class ScoreResult(_Result[ScoreReport]):
 
     @property
     def likeness(self) -> float | None:
-        """Mean likeness to the contrast set, when the profile was built with one."""
+        """Mean likeness to the contrast set over every scored chunk, pooled across
+        documents, when the profile was built with one."""
         return self._report["reference"]["likeness_mean"]
 
     @property
@@ -467,9 +588,14 @@ class ScoreResult(_Result[ScoreReport]):
             return LikenessVerdict.TOO_SHORT
         return LIKENESSES[entry["level"]]
 
-    def to_text(self, *, full: bool = False, color: bool = False) -> str:
-        """The comparison ``styleprofile score`` prints; ``full`` shows every metric."""
-        return format_summary(self._report, self._reference, color=color, full=full)
+    def to_text(self, *, full: bool = False, color: bool = False, width: int = 80) -> str:
+        """The comparison ``styleprofile score`` prints; ``full`` shows every metric and
+        every document, and the document table fits ``width`` columns."""
+        # The document table names each document as -q does: where it was typed, if known.
+        shown = {document.name: document.shown for document in self.documents}
+        return format_summary(
+            self._report, self._reference, color=color, full=full, width=width, shown=shown
+        )
 
     def __repr__(self) -> str:
         if self.delta is None:
@@ -477,6 +603,26 @@ class ScoreResult(_Result[ScoreReport]):
         if not self.judged:
             return f"<ScoreResult: {too_short_text(self._verdict)}>"
         return f"<ScoreResult: {self.verdict} (Delta {self.delta:.2f})>"
+
+
+def fails(
+    document: DocumentResult, above: Verdict | None, likeness: LikenessVerdict | None
+) -> tuple[bool, bool]:
+    """Whether ``document`` reaches ``above`` on Delta, and ``likeness`` on likeness, as
+    ``ScoreResult.failing`` checks: never for a document without a Delta verdict (too short
+    to judge, or not comparable)."""
+    if not document.judged or document.verdict not in DISTANCES:
+        return False, False
+    return (
+        _reaches(document.verdict, above, DISTANCES),
+        _reaches(document.likeness_verdict, likeness, LIKENESSES),
+    )
+
+
+def _reaches(verdict: Any, limit: Any, levels: Sequence[Any]) -> bool:
+    """Whether ``verdict`` is at or past ``limit`` on ``levels``; never for no limit, or a
+    verdict that is not one of the levels."""
+    return limit is not None and verdict in levels and levels.index(verdict) >= levels.index(limit)
 
 
 class Evaluation(_Result[EvaluationReport]):
@@ -833,7 +979,7 @@ def _text_chunks(texts: Sequence[Text], role: str) -> Iterator[Chunk]:
             while f"text{number}" in taken:
                 number += 1
             name = f"text{number}"
-        yield Chunk(name, role, text.text)
+        yield Chunk(literal_id(name), role, text.text)
 
 
 def _read(
@@ -892,6 +1038,29 @@ def _read(
         if note:
             notes.append(note)
     return chunks
+
+
+def _locations(items: Sequence[Input], names: SourceNames) -> dict[str, str]:
+    """Each saved source's path as its input was typed: ``drafts/2024/a.md`` for the saved
+    ``2024/a.md`` inside ``drafts``, for the command line to name files the user can open.
+    Nothing here is saved."""
+    # Standard input is named apart from a file called ``stdin``.
+    locations: dict[str, str] = {"stdin": STDIN_SHOWN}
+    for item in items:
+        if isinstance(item, Text | Chunk):
+            continue
+        value = os.fspath(item)
+        root = names.roots.get(value)
+        if value == "-" or root is None:
+            continue
+        for source, file in names.files.items():
+            if source == root:
+                locations[source] = value
+            elif source.startswith(f"{root}/") or not root:
+                inner = source[len(root) + 1 :] if root else source
+                if Path(file).is_relative_to(expand_path(value).resolve()):
+                    locations[source] = os.path.join(value, inner)
+    return locations
 
 
 def _windowed(chunks: list[Chunk], window_words: int) -> list[Chunk]:

@@ -1,0 +1,44 @@
+$ styleprofile show '<tmp>/mixed.json'
+[exit 0]
+--- stdout
+STYLE COMPARISON   2 documents, 2 chunks, 1,257 words   vs writer.json (7 chunks)
+
+By document   furthest from the reference first
+  2 documents: 1 very different, 1 close
+  document        words  verdict             Delta  LLM-likeness
+  old-maps.md       620  very different       4.61  leans
+      most different in: Long words (7+ letters) ▲▲▲, List items ▲▲▲
+  sharpening.md     637  close                0.57  like reference
+
+Across 2 documents: very different   Delta 2.59
+  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.78 typically (a mean over 2 chunks, up to 0.94).
+  Pooled over every document from here on; the table above has each one's own.
+
+LLM-likeness: a few LLM traits   6.95
+  The reference's own writing at these lengths (620-637 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.67); the LLM drafts 13.86.
+  Strongest LLM signals: Long words (7+ letters) ▲▲▲, List items ▲▲▲, Bold phrases ▲▲▲
+
+By area   Delta ÷ the top of the reference's usual range in each area
+  close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
+  Formatting                  10.38x  ████████████████████  very different
+  Vocabulary                   5.42x  ████████████████████  very different
+  Voice and stance             2.46x  ████████████████░░░░  very different
+  How sentences open           1.75x  ████████████░░░░░░░░  clearly different
+  Punctuation                  1.51x  ██████████░░░░░░░░░░  clearly different
+  Syntax                       1.49x  ██████████░░░░░░░░░░  somewhat different
+  Rhythm                       1.29x  █████████░░░░░░░░░░░  somewhat different
+  Sentence shape               1.17x  ████████░░░░░░░░░░░░  somewhat different
+  Function words               0.98x  ███████░░░░░░░░░░░░░  close
+
+Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
+                                                   this text   reference
+  Long words (7+ letters)                                20%         11%   ▲▲▲
+  List items                                         7.3 /1k     0.0 /1k   ▲▲▲  reference never varies; 1 of 2 chunks differ
+  Bold phrases                                       7.3 /1k     0.0 /1k   ▲▲▲  reference never varies; 1 of 2 chunks differ
+  Opener: verb                                           11%        0.7%   ▲▲▲
+  Headings                                           7.2 /1k     1.6 /1k   ▲▲▲
+  "these"                                            4.8 /1k     0.0 /1k   ▲▲▲  reference never varies; 1 of 2 chunks differ
+  Nominalizations (-tion, -ment)                    13.6 /1k     3.1 /1k   ▲▲▲
+  We / us / our                                      8.9 /1k     1.1 /1k   ▲▲▲
+
+Pass --all to see every metric.

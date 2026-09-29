@@ -326,6 +326,7 @@ def _handmade_comparison() -> tuple[Any, Baseline]:
         "word_count": 400,
         "settings": {"syntax": None},
         "summary": {"voice": {"llm_markers_per_1k": {"mean": 5.0}, "hedges_per_1k": {"mean": 2.0}}},
+        "documents": [],
         "chunks": [_handmade_row("c1", 0.5, {"llm_markers_per_1k": 3.0, "hedges_per_1k": -0.1})],
         "reference": {
             "path": "ref.json",
@@ -339,11 +340,18 @@ def _handmade_comparison() -> tuple[Any, Baseline]:
     return report, reference
 
 
-def _handmade_row(chunk_id: str, delta: float, voice: dict[str, float]) -> dict[str, Any]:
-    """A scored 400-word chunk, judged against an uncalibrated reference."""
+def _handmade_row(
+    chunk_id: str, delta: float, voice: dict[str, float], values: dict[str, float] | None = None
+) -> dict[str, Any]:
+    """A scored 400-word chunk of draft.md, judged against an uncalibrated reference: its
+    voice z-scores and metric values."""
     return {
         "id": chunk_id,
-        "metrics": {"size": {"words": 400.0}},
+        "source": "draft.md",
+        "metrics": {
+            "size": {"words": 400.0},
+            "voice": values or {"llm_markers_per_1k": 5.0, "hedges_per_1k": 2.0},
+        },
         "reference": {
             "delta": delta,
             "delta_by_group": {"voice": 0.6},
@@ -590,8 +598,8 @@ def test_never_varying_differences_do_not_cancel() -> None:
     report["chunk_count"] = 2
     report["summary"]["voice"]["llm_markers_per_1k"]["mean"] = 0.0
     report["chunks"] = [
-        _handmade_row("up", 0.5, {"llm_markers_per_1k": 3.0}),
-        _handmade_row("down", 0.5, {"llm_markers_per_1k": -3.0}),
+        _handmade_row("up", 0.5, {"llm_markers_per_1k": 3.0}, {"llm_markers_per_1k": 0.0}),
+        _handmade_row("down", 0.5, {"llm_markers_per_1k": -3.0}, {"llm_markers_per_1k": 0.0}),
     ]
     differences = format_summary(report, reference).split("Biggest differences")[1]
 
@@ -1436,7 +1444,8 @@ def test_each_command_has_short_help_with_an_example(
     assert exit_.value.code == 0
     out = capsys.readouterr().out
     assert f"example:\n  styleprofile {command}" in out
-    assert len(out.splitlines()) < 40
+    # score also lists its exit codes, for hooks and CI.
+    assert len(out.splitlines()) < (50 if command == "score" else 40)
 
 
 def test_version_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1532,7 +1541,8 @@ def test_score_tries_the_reference_text_field_then_the_defaults(
     capsys.readouterr()
 
     assert main(["score", str(drafts), str(reference), "-q"]) == 0
-    assert capsys.readouterr().out.startswith(f"{drafts}: ")
+    # A record without an id is named by its line, after the file as typed.
+    assert capsys.readouterr().out.startswith(f"{drafts}:1: ")
     # An explicit --text-field is the only field read.
     assert main(["score", str(drafts), str(reference), "--text-field", "post"]) == 1
     assert "no string field among post" in capsys.readouterr().err
@@ -1598,7 +1608,7 @@ def test_quiet_names_stdin(
     stdin = io.TextIOWrapper(io.BytesIO(GENERIC.encode("utf-8")))
     monkeypatch.setattr(sys, "stdin", stdin)
     assert main(["score", "-", str(reference), "-q"]) == 0
-    assert capsys.readouterr().out.startswith("stdin: ")
+    assert capsys.readouterr().out.startswith("<stdin>: ")
 
 
 def test_build_prints_a_short_summary_unless_asked_for_all(

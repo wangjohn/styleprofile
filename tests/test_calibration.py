@@ -508,9 +508,12 @@ def test_chunks_left_out_add_nothing_to_the_differences(
         return capsys.readouterr().out.split("Biggest differences", 1)[1].split("\n\n", 1)[0]
 
     assert differences(samples) == differences(samples[1:])
+    # -q gives each document its own line (plan PR 7): the short one abstains, and last.
     assert main(["score", "-q", *samples, str(reference)]) == 0
-    line = capsys.readouterr().out
-    assert line.startswith("3 inputs: ") and "; 1 of 3 chunks not judged: too short)" in line
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 3
+    assert lines[-1] == f"{tmp_path / 'fence.md'}: too short to judge (36 words)"
+    assert not any("too short" in line for line in lines[:-1])
 
 
 def test_without_shorter_lengths_only_texts_near_a_window_are_judged(
