@@ -154,14 +154,70 @@ different". So every verdict is read against the writer's own range *at the text
   long enough to judge; the rest are left out of the verdict, the means, the differences,
   the arrows and the signals, and a warning names them and says why. If none is long
   enough, it is "too short to judge" and its numbers are indicative. The mean is read
-  against a pooled bound, which the output prints: the mean of the chunks' medians plus the
-  root sum of squares of their (95% bound − median) over n, which for n chunks of one
-  length is the usual median + (bound − median) / sqrt(n).
+  against a bound for a mean, which the output prints (see below).
 - **`evaluate` stays on window calibration.** It builds its reference without the shorter
   lengths: its drafts and edited drafts are windowed exactly like the reference, its AUCs
   compare chunk scores directly and need no verdict bound, and its per-draft counts judge
   window-sized chunks. An edited set much shorter than its originals is visible in its
   length ratio.
+
+### A mean over many chunks
+
+The headline, each area and likeness read the mean of the n judged chunks against a bound
+for that mean, built from each chunk's range at its own length:
+
+- **Centred on the mean, not the median.** Held-out Deltas are skewed to the right, so their
+  median sits below their mean, and a mean over many chunks settles on the mean. Every
+  stored range (the windows', each length's, overall, per area and for likeness) therefore
+  also stores `mean`: an upper confidence bound on its pieces' mean, the mean plus 1.28
+  standard errors with n_eff as for the 95% bound, so a mean from few documents is set
+  higher rather than trusted as exact. A range stored without one is read at its median.
+- **Narrowing with n, but not to nothing.** Each chunk's spread is s = 95% bound − centre.
+  The chunks of one run share whatever sets that text apart from the calibration pieces
+  (its documents, its format, how it was cut), and that part does not average away. So they
+  are taken to share r = 0.05 of their variation, and the bound is the mean of the centres
+  plus sqrt((1 − r) × Σ s² + r × (Σ s)²) / n. For n chunks of one length that is
+  centre + s × sqrt(r + (1 − r) / n): 0.23 s at 200 chunks rather than 0.07 s.
+- **One chunk is unchanged**: its bound is its own 95% bound. The floors of 0.5 (Delta and
+  areas) and 0.25 (likeness) still apply.
+
+Before, the bound was the mean of the chunks' medians plus the root sum of squares of their
+(95% bound − median) over n, which closes in on the median as n grows. On the synthetic
+corpus below, the writer's own held-out chunks (439 of them, 75 to 300 words, cut as runs
+of sentences) have a mean Delta of 0.855 and a median-centred bound of 0.837 over all of
+them: the median is 0.810, 0.045 below the mean, and the spread term, 0.027, is smaller than
+that gap. Batches of 200 of them read "somewhat different" 66% of the time and at least one
+area did in every batch; the gap is there at every length (0.015–0.065), so it is the skew,
+not the mixing of lengths. The value and the bound average the same chunks with the same
+weights, and the conservative 95% bound only widens the spread term. Centring on the mean
+alone (0.869 + 0.024 = 0.893) fixes the headline there, but not the areas or a run whose text
+differs a little in kind: cutting held-out text as whole paragraphs rather than runs of
+sentences moves an area's mean by up to about a tenth of its spread, and whole comments
+scored against pieces of joined comments sit 0.13 of a spread above the overall centre. r =
+0.05 (sqrt 0.22) covers such shifts with room for the noise of a mean over a few hundred
+chunks; the writer's held-out pieces are alike within a document by only about 0.01 there.
+
+Batches drawn from the writer's own held-out chunks (80 documents, cut by the tests' own
+cutters to lengths drawn from 75 to 300 words), against a reference of 80 other documents:
+
+| batch | "somewhat different" or worse, before → after | any area "somewhat" or worse, before → after |
+|---|---|---|
+| 1 | 2.5% → 2.5% | 13.5–17.0% → 13.5–17.0% |
+| 5 | 1.5–3.5% → 0.0–1.5% | 14.5–21.5% → 7.0–10.0% |
+| 20 | 0.5–6.5% → 0.0% | 14.0–33.0% → 1.0–3.5% |
+| 50 | 0.5–15.5% → 0.0% | 28.5–84.5% → 0.0–1.0% |
+| 200 | 0.0–65.5% → 0.0% | 63.5–100% → 0.0% |
+
+Batches of held-out LLM chunks cut the same way still read "clearly different" or lean LLM
+99–100% of the time at every size, and a batch of the writer's chunks with a few LLM chunks
+mixed in is still flagged: 10% of LLM chunks read "somewhat different" or worse in 81% of
+batches of 20 and 98% of batches of 50 (it was 98–100%). Against 3,000 generated comments
+joined ten to a document, the 38 of 300 held-out comments long enough to judge (35 of them
+close alone) read "somewhat different" together before (Delta 1.17 against a bound of 1.12)
+and close now (bound 1.28). Their sentence shape still reads "somewhat different": a
+comment is one paragraph while the pieces cut from joined comments span several, a shift
+of 0.4 of that area's spread, which is the calibration's to match rather than the bound's
+to absorb.
 
 ### How well it holds
 
@@ -189,8 +245,9 @@ of sentences that split paragraphs.
 
 Every z uses a spread of at least half of one occurrence per chunk for counts (5% of the
 mean for other metrics), so a habit that is almost always absent cannot turn one use into
-dozens of standard deviations. Verdicts compare an average over n chunks with a band
-1/sqrt(n) as wide as a single chunk's, since averages vary less. That band never narrows
+dozens of standard deviations. Verdicts compare an average over n chunks with a band that
+narrows as n grows, since averages vary less (see "A mean over many chunks"). That band
+never narrows
 below 0.5 for Delta and its areas (half a standard deviation per metric), so an area the
 writer never varies in, like Markdown in plain essays, cannot turn a trace into "very
 different". Likeness counts only the part of each z toward the contrast drafts, about half
