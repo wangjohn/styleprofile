@@ -26,10 +26,10 @@ from styleprofile.schema import Baseline, GroupRange
 # The demo's areas: sentence shape's raw Delta is higher, but it is well inside its own wide
 # held-out range, while voice is just past a narrow one.
 AREAS: dict[str, tuple[float, GroupRange]] = {
-    "sentence_shape": (1.45, {"median": 0.73, "p95": 2.24}),
-    "voice": (1.34, {"median": 0.80, "p95": 0.95}),
-    "punctuation": (0.68, {"median": 0.46, "p95": 0.88}),
-    "markdown": (0.07, {"median": 0.006, "p95": 0.024}),
+    "sentence_shape": (1.45, {"median": 0.73, "mean": 0.73, "p95": 2.24}),
+    "voice": (1.34, {"median": 0.80, "mean": 0.80, "p95": 0.95}),
+    "punctuation": (0.68, {"median": 0.46, "mean": 0.46, "p95": 0.88}),
+    "markdown": (0.07, {"median": 0.006, "mean": 0.006, "p95": 0.024}),
 }
 
 
@@ -48,6 +48,7 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[Any, Baseline
             "sources": 7,
             "delta": {
                 "median": 0.78,
+                "mean": 0.78,
                 "p95": 0.99,
                 "max": 1.2,
                 "by_group": {group: stats for group, (_, stats) in AREAS.items()},
@@ -81,7 +82,9 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[Any, Baseline
                     "calibration": {
                         "judged": True,
                         "reason": None,
-                        "delta": {"median": 0.78, "p95": 0.99} if calibrated else None,
+                        "delta": {"median": 0.78, "mean": 0.78, "p95": 0.99}
+                        if calibrated
+                        else None,
                         "delta_by_group": (
                             {group: stats for group, (_, stats) in AREAS.items()}
                             if calibrated

@@ -915,7 +915,7 @@ def test_contrast_summary_shows_interval_and_length_baseline() -> None:
         "sources": 8,
         "effects": {"voice": {"llm_markers_per_1k": 2.0}},
         "calibration": {
-            "reference": {"median": 0.1, "p95": 0.4, "max": 0.6},
+            "reference": {"median": 0.1, "mean": 0.1, "p95": 0.4, "max": 0.6},
             "contrast": {"median": 0.7, "min": 0.3},
             "auc": 0.96,
             "auc_ci": [0.9, 1.0],
