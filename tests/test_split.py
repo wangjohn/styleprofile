@@ -428,6 +428,17 @@ def test_a_few_manuscripts_are_split_when_that_calibrates_more(tmp_path: Path) -
     assert mixed.report["document_count"] == 25 and "stand-in" not in str(mixed.report["settings"])
 
 
+def test_manuscripts_that_calibrate_already_are_kept_whole_with_a_hint(tmp_path: Path) -> None:
+    folder = _manuscripts(tmp_path / "books", 5, chapters=6, words=2400)
+    profile = sp.build(folder, SURFACE)
+    assert profile.report["document_count"] == 5
+    assert _coded(profile.notes, sp.NoteCode.SPLIT) == [
+        "5 texts divide at their headings into 30 parts; they are kept whole, since as 5 "
+        "documents the reference can likely calibrate 75, 150 and 300 words already, and "
+        "split_on heading would split them"
+    ]
+
+
 def test_ten_or_more_documents_are_never_split_automatically(tmp_path: Path) -> None:
     folder = _manuscripts(tmp_path / "posts", 10, chapters=4, words=300)
     profile = sp.build(folder, SURFACE)

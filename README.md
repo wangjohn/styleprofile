@@ -276,20 +276,25 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   them widens every spread and blurs every score.
 - **Enough text.** Aim for 15 or more chunks (windows) from several documents, and 20,000
   or more words, in the reference. `build` warns when a reference is thinner than that.
-- **One big file just works.** A manuscript, or a newsletter archive in one Markdown, text
-  or HTML file, is split into documents where it divides: at its top headings (`# Title`,
-  or `##` when one `#` title heads the file), at rules (`---`, `***`, `___` or `* * *` on
-  their own lines), or between the `<article>`s of an HTML page, whichever gives the fewest
-  parts of at least half a window, never inside code blocks or front matter. `build` says
+- **One big file, or a few manuscripts, just work.** A manuscript, or a newsletter
+  archive in one Markdown, text or HTML file, is split into documents where it divides: at
+  its top headings (`# Title`, or `##` when one `#` title heads the file; in a `.txt` file,
+  lines like `Chapter 12` or `PART ONE`), at rules (`---`, `***`, `___` or `* * *`) when
+  they sit before headings as a newsletter's issues do, or between the `<article>`s of an
+  HTML page, whichever gives the fewest parts of at least half a window, never inside code
+  blocks or front matter. A novel splits at its chapters, not its scene breaks. `build` says
   so (`note: split book.md into 14 documents at its level-1 headings`), and the reference
-  gets held-out calibration and can take `--contrast`. A file with no such markers is cut
-  into 8 stand-in documents of consecutive text, with a note: if topics run from one part
-  into the next, their ranges come out too narrow and verdicts on new text can read harsher
-  than they should, so headings, rules or separate files are better. This happens only when the writer's texts are fewer than 3
-  documents; `--split-on heading` (or `rule`) splits every file, and `--split-on none`
-  never. `score` does not split a draft unless asked: `score book.md writer.json
-  --split-on heading` (or `rule`) gives each chapter its own verdict; `--split-on auto`
-  never splits a draft, since a draft needs no held-out calibration.
+  gets held-out calibration and can take `--contrast`. Two to nine manuscripts are split
+  the same way when that calibrates more short lengths, which it does for up to about
+  three; the note says why. A single file with no such markers is cut into 8 stand-in
+  documents of consecutive text, and the profile keeps a warning: calibration from them is
+  less sensitive, so short off-voice passages are caught less often. Headings, rules or
+  separate files are better. Ten or more documents are never split; `--split-on heading`
+  (or `rule`) splits every file, and `--split-on none` never.
+- **A verdict per chapter.** `score` keeps each draft whole (`--split-on auto` never splits
+  a draft, which needs no held-out calibration). `score book.md writer.json --split-on
+  heading` gives each chapter its own verdict; for a book of `# Part`s with `## Chapter`s,
+  `--split-on heading:2` splits at the chapters.
 - **Contrast drafts from the writer's own briefs.** Have LLMs write from the same briefs or
   outlines the writer worked from, and use several models; the weights only know the drafts
   they were learned from.

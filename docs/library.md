@@ -162,15 +162,17 @@ joined in order into windows when most are short (see `pool` below). Files and r
 JSONL, `syntax`, `top_k`, `input_format`, `group_field` (the JSONL field that groups
 records into documents), `pool` (`"auto"`, `True` or `False`: join short texts into
 windows; `"auto"` does when the median text is under a quarter of a window) and `split_on`
-(`"auto"`, `"heading"`, `"rule"` or `"none"`: split a long text into documents at its
-headings or rules; `"auto"` does when the texts are fewer than 3 documents, as
-`sp.build(sp.Text(manuscript, "book"))` is, and cuts one with neither into stand-ins). A
-profile records them verbatim, plus `pool_used` and `split_used`, and `profile.settings`
+(`"auto"`, `"heading"`, `"heading:N"`, `"rule"` or `"none"`: split long texts into
+documents at their headings or rules; `"auto"` does when the texts are too few documents to
+calibrate well, as `sp.build(sp.Text(manuscript, "book"))` is, and cuts a lone text with
+neither into stand-ins). A profile records them verbatim, plus `pool_used`, `split_used` and
+`contrast_split_used`, and `profile.settings`
 reads them back. `Profile.score(inputs, settings=None, **overrides)` inherits them, except
 that it uses spaCy only when the profile has syntax metrics, reads drafts with
 `input_format="auto"`, scores each draft on its own (`pool=False`; pass `pool=True` to
 judge short drafts as one batch), and keeps each draft whole (`split_on="none"`; pass
-`split_on="heading"` for a verdict per chapter). Pass whole `Settings` to replace them, or keyword
+`split_on="heading"`, or `"heading:2"` for chapters under parts, for a verdict per
+chapter). Pass whole `Settings` to replace them, or keyword
 overrides (`window_words=0`) to change single fields, as `styleprofile score` takes flags.
 Leave a keyword out to inherit it; the keywords are typed (`api.SettingsOverrides`), so a
 type checker catches a misspelled one. A different window size or syntax setting is warned

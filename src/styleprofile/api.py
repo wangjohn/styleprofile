@@ -1579,6 +1579,25 @@ def _split(
         )
         now, then = likely_calibrated(before), likely_calibrated(after)
         if len(then) <= len(now):
+            divide = [plan for plan in plans if plan is not None]
+            if divide and now:
+                # Calibrated already, so left whole; more documents still narrow the
+                # ranges' uncertainty, so say how to get them.
+                where = {plan.kind for plan in divide}
+                markers = "headings or rules" if len(where) > 1 else f"{next(iter(where))}s"
+                texts = _plural(len(divide), "text")
+                notes.append(
+                    Note(
+                        f"{texts} {'divides' if len(divide) == 1 else 'divide'} at their "
+                        f"{markers} into "
+                        f"{sum(len(plan.parts) for plan in divide):,} parts; they are kept "
+                        f"whole, since as {_plural(count, 'document')} the reference can "
+                        f"likely calibrate {_lengths(now)} already, and split_on "
+                        f"{'heading' if 'heading' in where else 'rule'} would split them",
+                        NoteCode.SPLIT,
+                        setting="split_on",
+                    )
+                )
             return chunks, set(), set()
         reason = (
             f": as {_plural(count, 'document')} the reference could likely calibrate "
