@@ -26,8 +26,19 @@ import statistics
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import Any
+from typing import Any, cast
 
+from styleprofile.schema import (
+    ChunkCalibration,
+    GroupRange,
+    LengthCalibration,
+    LengthDelta,
+    LikenessAtLength,
+    ScoreVerdict,
+    VerdictArea,
+    VerdictDelta,
+    VerdictLikeness,
+)
 from styleprofile.surface import Metrics, classify, plain_sentences
 from styleprofile.weighting import (
     DISTANCE_WORDS,
@@ -229,7 +240,7 @@ def held_out_pieces(
 Pieces = tuple[Sequence[ZScores], Sequence[str], Sequence[float]]
 
 
-def calibrate_lengths(pieces: Mapping[int, Pieces]) -> tuple[dict[int, dict[str, Any]], float]:
+def calibrate_lengths(pieces: Mapping[int, Pieces]) -> tuple[dict[int, LengthCalibration], float]:
     """Every length's stored calibration (``calibrate_length``), from its pieces' held-out
     z-scores (``held_out_pieces``), documents and word counts; and the intraclass
     correlation their bounds share (``similarity``)."""
@@ -268,7 +279,7 @@ def calibrate_length(
     *,
     deltas: HeldDeltas | None = None,
     icc: float | None = None,
-) -> dict[str, Any]:
+) -> LengthCalibration:
     """One length's stored calibration, from its pieces' held-out z-scores
     (``held_out_pieces``), their documents and their word counts, with the intraclass
     correlation ``icc`` for its bounds (estimated from these pieces alone when None).
@@ -277,7 +288,7 @@ def calibrate_length(
     independent pieces they are worth (``effective``); the rms and the Delta range only when
     there are enough (``enough``).
     """
-    entry: dict[str, Any] = {
+    entry: LengthCalibration = {
         "pieces": len(held),
         "documents": len(set(piece_documents)),
         "words": statistics.median(words) if words else 0.0,
@@ -296,7 +307,8 @@ def calibrate_length(
     entry["reliability"] = nest(
         {key: round(value, RMS_DIGITS) for key, value in reliability(held, piece_documents).items()}
     )
-    entry["delta"] = delta
+    # With ``upper``, less ``max`` and ``effective``: median, p95, p99 and the areas.
+    entry["delta"] = cast(LengthDelta, delta)
     return entry
 
 
@@ -337,14 +349,14 @@ class AtLength:
     reason: str | None
     rms: dict[Key, float]
     scale: dict[Key, float]
-    delta: dict[str, float] | None
-    by_group: dict[str, dict[str, float]]
-    likeness: dict[str, float] | None
+    delta: GroupRange | None
+    by_group: dict[str, GroupRange]
+    likeness: LikenessAtLength | None
     # Without calibration, how many times wider than a window's the fixed steps are read
     # for a shorter text (``stretch``); 1 at a window's length or more.
     stretch: float = 1.0
 
-    def row(self) -> dict[str, Any]:
+    def row(self) -> ChunkCalibration:
         """What a score report keeps per chunk, so a saved report can be shown again."""
         return {
             "judged": self.judged,
@@ -362,12 +374,12 @@ class _Anchor:
     words: float
     covers: float  # the shortest text this anchor judges without a shorter one
     rms: dict[Key, float]
-    delta: dict[str, float] | None
-    by_group: dict[str, dict[str, float]]
-    likeness: dict[str, float] | None
+    delta: GroupRange | None
+    by_group: dict[str, GroupRange]
+    likeness: LikenessAtLength | None
 
 
-def _likeness_range(stored: Mapping[str, Any] | None) -> dict[str, float] | None:
+def _likeness_range(stored: Mapping[str, Any] | None) -> LikenessAtLength | None:
     if not stored or "reference" not in stored:
         return None
     return {
@@ -377,7 +389,7 @@ def _likeness_range(stored: Mapping[str, Any] | None) -> dict[str, float] | None
     }
 
 
-def _range(stats: Mapping[str, Any] | None) -> dict[str, float] | None:
+def _range(stats: Mapping[str, Any] | None) -> GroupRange | None:
     if not stats or stats.get("p95") is None:
         return None
     return {"median": stats.get("median", stats["p95"]), "p95": stats["p95"]}
@@ -467,8 +479,8 @@ class Lengths:
         return _interpolate(points, words) if points else None
 
     def _stats(
-        self, words: float, stats: Callable[[_Anchor], Mapping[str, float] | None]
-    ) -> dict[str, float] | None:
+        self, words: float, stats: Callable[[_Anchor], GroupRange | None]
+    ) -> GroupRange | None:
         """A range at ``words``, interpolated between the anchors that have it. Below the
         shortest of them it is widened by ``stretch``: a text shorter than every anchor
         varies more than any of them, by about sqrt(anchor / words), as the noise in a rate
@@ -518,7 +530,7 @@ class Lengths:
             for group in sorted(groups)
             if (stats := self._stats(words, lambda anchor, group=group: anchor.by_group.get(group)))
         }
-        likeness = None
+        likeness: LikenessAtLength | None = None
         likeness_stats = self._stats(words, lambda anchor: anchor.likeness)
         target = self._value(words, lambda anchor: (anchor.likeness or {}).get("target"))
         if likeness_stats and target is not None:
@@ -577,7 +589,7 @@ def _mean(values: Sequence[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
-def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> dict[str, Any]:
+def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> ScoreVerdict:
     """The headline verdict over a score report's chunk rows.
 
     Only chunks long enough to judge count; if none is, the verdict is "too short to judge"
@@ -589,25 +601,14 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> di
     used = judged or list(rows)
     scored = [row["reference"] for row in used]
     words = sum(int(row["metrics"]["size"]["words"] or 0) for row in rows)
-    result: dict[str, Any] = {
-        "judged": bool(judged),
-        "words": words,
-        "chunks": len(rows),
-        "chunks_judged": len(judged),
-        "reason": None,
-    }
+    reason: str | None = None
     if not judged:
         reasons = {row["reference"]["calibration"]["reason"] for row in rows}
-        result["reason"] = (
+        reason = (
             reasons.pop()
             if len(reasons) == 1
             else f"none of the {len(rows)} chunks is long enough to judge"
         )
-    # As for ``Note.setting``: the setting the reason names, for a front end to swap in its
-    # own name for it (the CLI's flag).
-    result["setting"] = (
-        "window_words" if result["reason"] and "window_words" in result["reason"] else None
-    )
     deltas = [score["delta"] for score in scored if score["delta"] is not None]
     delta = _mean(deltas)
     ranges = [score["calibration"]["delta"] for score in scored if score["delta"] is not None]
@@ -616,26 +617,39 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> di
     level = None
     if judged and delta is not None:
         level = delta_level(delta, ceiling) if ceiling else delta_level(delta / widen)
-    result["delta"] = {
+    overall: VerdictDelta = {
         "value": delta,
         "typical": _mean([item["median"] for item in ranges if item]) if all(ranges) else None,
         "p95": _mean([item["p95"] for item in ranges if item]) if all(ranges) else None,
         "ceiling": ceiling,
         "level": level,
     }
-    result["verdict"] = TOO_SHORT if not judged or level is None else DISTANCE_WORDS[level]
-    result["by_group"] = _by_group(scored, judged=bool(judged), widen=widen)
-    result["likeness"] = None
-    if contrast_label is not None:
-        result["likeness"] = _likeness(scored, contrast_label, judged=bool(judged))
-    return result
+    return {
+        "judged": bool(judged),
+        "words": words,
+        "chunks": len(rows),
+        "chunks_judged": len(judged),
+        "reason": reason,
+        # As for ``Note.setting``: the setting the reason names, for a front end to swap in
+        # its own name for it (the CLI's flag).
+        "setting": "window_words" if reason and "window_words" in reason else None,
+        "delta": overall,
+        # Plain strings, as a saved report reads them back.
+        "verdict": str(TOO_SHORT if not judged or level is None else DISTANCE_WORDS[level]),
+        "by_group": _by_group(scored, judged=bool(judged), widen=widen),
+        "likeness": (
+            _likeness(scored, contrast_label, judged=bool(judged))
+            if contrast_label is not None
+            else None
+        ),
+    }
 
 
 def _by_group(
     scored: Sequence[Mapping[str, Any]], *, judged: bool, widen: float = 1.0
-) -> dict[str, Any]:
+) -> dict[str, VerdictArea]:
     groups = sorted({group for score in scored for group in score["delta_by_group"]})
-    result: dict[str, Any] = {}
+    result: dict[str, VerdictArea] = {}
     for group in groups:
         present = [score for score in scored if group in score["delta_by_group"]]
         value = statistics.fmean(score["delta_by_group"][group] for score in present)
@@ -659,7 +673,7 @@ def _by_group(
 
 def _likeness(
     scored: Sequence[Mapping[str, Any]], label: str, *, judged: bool
-) -> dict[str, Any] | None:
+) -> VerdictLikeness | None:
     present = [score for score in scored if score.get("likeness") is not None]
     if not present:
         return None
@@ -678,7 +692,7 @@ def _likeness(
         "target": target,
         "ceiling": ceiling,
         "level": level,
-        "verdict": TOO_SHORT if level is None else likeness_words(level, label),
+        "verdict": str(TOO_SHORT) if level is None else likeness_words(level, label),
     }
 
 

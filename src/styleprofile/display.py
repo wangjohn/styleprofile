@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from styleprofile.calibration import (
     MIN_CALIBRATION_DOCUMENTS,
@@ -36,9 +36,26 @@ from styleprofile.metrics import (
 )
 from styleprofile.metrics import title as group_title
 from styleprofile.profile import summarize
+from styleprofile.schema import (
+    AucResult,
+    Baseline,
+    BaselineLength,
+    Contrast,
+    EvaluationReport,
+    LengthBaseline,
+    MetricStats,
+    ReferenceReport,
+    ReportBase,
+    ScoreReport,
+    ScoreVerdict,
+    Survival,
+    VerdictDelta,
+    VerdictLikeness,
+)
 from styleprofile.weighting import (
     DISTANCE_WORDS,
     LENGTH_AUC_WARNING,
+    TOO_SHORT,
     delta_level,
     likeness_words,
 )
@@ -115,8 +132,8 @@ def value(number: float | None, unit: str) -> str:
     return text
 
 
-def _range(stats: dict[str, Any], unit: str) -> str:
-    if stats.get("sd") is None or stats.get("mean") is None:
+def _range(stats: MetricStats, unit: str) -> str:
+    if stats["sd"] is None or stats["mean"] is None:
         return ""
     low = max(0.0, stats["mean"] - stats["sd"])
     return f"{value(low, unit).split(' ')[0]} - {value(stats['mean'] + stats['sd'], unit)}"
@@ -147,7 +164,7 @@ def _row(text: str, *cells: str) -> str:
     ).rstrip()
 
 
-def _key_rows(report: dict[str, Any]) -> list[tuple[str, list[tuple[str, str]]]]:
+def _key_rows(report: ReportBase) -> list[tuple[str, list[tuple[str, str]]]]:
     sections = []
     for title, metrics in KEY_VIEW:
         present = [
@@ -158,7 +175,7 @@ def _key_rows(report: dict[str, Any]) -> list[tuple[str, list[tuple[str, str]]]]
     return sections
 
 
-def _profile_view(report: dict[str, Any], style: _Style, full: bool) -> list[str]:
+def _profile_view(report: ReferenceReport | ScoreReport, style: _Style, full: bool) -> list[str]:
     multi = report["chunk_count"] > 1
     header = _row("", "typical") + ("   usual range" if multi else "")
     sections = (
@@ -178,31 +195,35 @@ def _profile_view(report: dict[str, Any], style: _Style, full: bool) -> list[str
             text, unit = label(name)
             row = _row(text, value(stats["mean"], unit))
             lines.append(f"{row}   {_range(stats, unit)}".rstrip() if multi else row)
+    if "reference" in report:
+        # A score report shown on its own is not a reference.
+        return lines
     return lines + _reference_lines(report, style)
 
 
-def _reference_lines(report: dict[str, Any], style: _Style) -> list[str]:
+def _reference_lines(report: ReferenceReport, style: _Style) -> list[str]:
     """How the profile works as a reference: its held-out Delta range and any contrast."""
     lines: list[str] = []
-    held = (report.get("calibration") or {}).get("delta")
-    if held:
+    # Both need chunks from two or more documents; contrast also needs --contrast.
+    calibration = report.get("calibration")
+    if calibration:
+        held = calibration["delta"]
         lines += [
             "",
             style.bold("As a reference")
             + style.dim(
                 f"   held-out Delta {held['median']:.2f} typically, 95% under {held['p95']:.2f} "
-                f"({report['calibration']['sources']} documents)"
+                f"({calibration['sources']} documents)"
             ),
         ]
-        lengths = report["calibration"].get("by_length")
-        if lengths is not None:
-            lines.append(style.dim(f"  {_lengths_line(lengths)}"))
-    if report.get("contrast"):
-        lines += _contrast_summary(report["contrast"], style)
+        lines.append(style.dim(f"  {_lengths_line(calibration['by_length'])}"))
+    contrast = report.get("contrast")
+    if contrast:
+        lines += _contrast_summary(contrast, style)
     return lines
 
 
-def _lengths_line(lengths: dict[str, Any]) -> str:
+def _lengths_line(lengths: Mapping[str, BaselineLength]) -> str:
     """Which shorter lengths the reference is calibrated for, and on how many pieces."""
     calibrated = [
         f"{length} words ({entry['pieces']} pieces)"
@@ -231,7 +252,7 @@ def _lengths_line(lengths: dict[str, Any]) -> str:
     return f"{text}. Under {MIN_JUDGED_WORDS} words, no verdict."
 
 
-def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
+def _contrast_summary(contrast: Contrast, style: _Style) -> list[str]:
     name = contrast["label"]
     calibration = contrast["calibration"]
     effects = [
@@ -240,8 +261,8 @@ def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
         for metric, effect in values.items()
     ]
     top = sorted(effects, key=lambda item: -abs(item[0]))[:4]
-    auc = calibration.get("auc")
-    interval = calibration.get("auc_ci")
+    auc = calibration["auc"]
+    interval = calibration["auc_ci"]
     separation = ""
     if auc is not None:
         separation = f"; separates them from the reference with AUC {auc:.2f}"
@@ -266,13 +287,13 @@ def _contrast_summary(contrast: dict[str, Any], style: _Style) -> list[str]:
         f"  Compared with the reference, {name} drafts have: "
         + ", ".join(f"{label(metric)[0]} {'▲' if effect > 0 else '▼'}" for effect, metric in top),
     ]
-    length = calibration.get("length_baseline")
+    length = calibration["length_baseline"]
     if length:
         lines.insert(3, style.dim(f"  {_length_line(length, name)}"))
     return lines
 
 
-def _length_line(length: dict[str, Any], name: str) -> str:
+def _length_line(length: LengthBaseline, name: str) -> str:
     """How well word count alone separates the contrast set, and what that means."""
     auc = length["auc"]
     if auc >= LENGTH_AUC_WARNING:
@@ -287,7 +308,7 @@ def _length_line(length: dict[str, Any], name: str) -> str:
     )
 
 
-def _judged_view(report: dict[str, Any]) -> dict[str, Any]:
+def _judged_view(report: ScoreReport) -> ScoreReport:
     """The report as far as its verdict goes: only the chunks long enough to judge, with
     their own summary, or every chunk when none is (then everything shown is indicative).
     A chunk left out of the verdict adds nothing to the differences, arrows or signals."""
@@ -302,7 +323,7 @@ def _judged_view(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _chunk_z(report: dict[str, Any]) -> dict[tuple[str, str], list[float]]:
+def _chunk_z(report: ScoreReport) -> dict[tuple[str, str], list[float]]:
     """Each metric's z per chunk, over how many times more that metric swings at the
     chunk's length than in a reference window (``length_scale``), so a short chunk's arrows
     count standard deviations of the writer's own text at its length."""
@@ -316,7 +337,7 @@ def _chunk_z(report: dict[str, Any]) -> dict[tuple[str, str], list[float]]:
     return totals
 
 
-def _average_z(report: dict[str, Any], reference: dict[str, Any]) -> dict[tuple[str, str], float]:
+def _average_z(report: ScoreReport, reference: Baseline) -> dict[tuple[str, str], float]:
     """Each metric's z against the reference, averaged over the scored chunks.
 
     For a metric the reference never varies on, every differing chunk scores the cap in one
@@ -324,7 +345,7 @@ def _average_z(report: dict[str, Any], reference: dict[str, Any]) -> dict[tuple[
     """
     averaged: dict[tuple[str, str], float] = {}
     for (group, name), zs in _chunk_z(report).items():
-        if reference["summary"].get(group, {}).get(name, {}).get("sd"):
+        if reference["summary"][group][name]["sd"]:
             averaged[(group, name)] = sum(zs) / len(zs)
         else:
             size = sum(abs(z) for z in zs) / len(zs)
@@ -334,7 +355,7 @@ def _average_z(report: dict[str, Any], reference: dict[str, Any]) -> dict[tuple[
     return averaged
 
 
-def _comparison_rows(report: dict[str, Any], reference: dict[str, Any], style: _Style) -> list[str]:
+def _comparison_rows(report: ScoreReport, reference: Baseline, style: _Style) -> list[str]:
     averaged = _average_z(report, reference)
     lines = ["", style.bold("All metrics"), style.dim(_row("", "this text", "reference"))]
     for group, metrics in report["summary"].items():
@@ -343,9 +364,10 @@ def _comparison_rows(report: dict[str, Any], reference: dict[str, Any], style: _
         lines += ["", style.bold(group_title(group))]
         for name, stats in metrics.items():
             text, unit = label(name)
-            ref = reference["summary"].get(group, {}).get(name, {})
+            # The reference may lack a metric the sample has (syntax, say).
+            ref = reference["summary"].get(group, {}).get(name)
             z = averaged.get((group, name))
-            row = _row(text, value(stats["mean"], unit), value(ref.get("mean"), unit))
+            row = _row(text, value(stats["mean"], unit), value(ref["mean"] if ref else None, unit))
             # No trailing spaces on rows without arrows.
             if z is not None and (arrow := _arrow(z)):
                 row += f"   {style.distance(arrow, z_level(z))}"
@@ -354,7 +376,7 @@ def _comparison_rows(report: dict[str, Any], reference: dict[str, Any], style: _
 
 
 def _differences(
-    report: dict[str, Any], reference: dict[str, Any], style: _Style, *, judged: bool = True
+    report: ScoreReport, reference: Baseline, style: _Style, *, judged: bool = True
 ) -> list[str]:
     """Metrics whose average z over chunks sits furthest from the reference, in standard
     deviations of the writer's own text at each chunk's length (see ``_chunk_z``).
@@ -384,7 +406,7 @@ def _differences(
         count = report["chunk_count"]
         note = (
             ""
-            if ref.get("sd")
+            if ref["sd"]
             else style.dim(
                 "  reference never varies"
                 + (f"; {differing[(group, name)]} of {count} chunks differ" if count > 1 else "")
@@ -397,9 +419,9 @@ def _differences(
     return lines
 
 
-def _at_length(report: dict[str, Any], reference: dict[str, Any]) -> str:
+def _at_length(report: ScoreReport, reference: Baseline) -> str:
     """How the verdict's ranges were matched to length, for the lines that quote them."""
-    if (reference.get("calibration") or {}).get("by_length") is None:
+    if reference["calibration"] is None:
         return ""
     counts = [int(row["metrics"]["size"]["words"] or 0) for row in report["chunks"]]
     if len(counts) == 1:
@@ -408,12 +430,12 @@ def _at_length(report: dict[str, Any], reference: dict[str, Any]) -> str:
 
 
 def _likeness(
-    report: dict[str, Any], reference: dict[str, Any], style: _Style, verdict: dict[str, Any]
+    report: ScoreReport, reference: Baseline, style: _Style, verdict: ScoreVerdict
 ) -> list[str]:
-    entry = verdict.get("likeness")
-    if entry is None:
-        return []
+    entry = verdict["likeness"]
     contrast = reference["contrast"]
+    if entry is None or contrast is None:
+        return []
     name = contrast["label"]
     level = entry["level"]
     shares: dict[str, list[float]] = {}
@@ -454,9 +476,7 @@ def _likeness(
     return lines
 
 
-def _delta_baseline(
-    report: dict[str, Any], reference: dict[str, Any], entry: dict[str, Any]
-) -> str:
+def _delta_baseline(report: ScoreReport, reference: Baseline, entry: VerdictDelta) -> str:
     if entry["typical"] is None:
         return "Text by the reference's own writer usually scores around 0.8."
     return (
@@ -465,33 +485,42 @@ def _delta_baseline(
     )
 
 
-def _bound(report: dict[str, Any], entry: dict[str, Any]) -> str:
+def _bound(report: ScoreReport, entry: VerdictDelta | VerdictLikeness) -> str:
     """The bound the verdict reads: one chunk's 95% bound, or the tighter one for a mean
-    over several chunks (``pooled_ceiling``), which is what the verdict words compare with."""
+    over several chunks (``pooled_ceiling``), which is what the verdict words compare with.
+    Only quoted with a range (``typical`` not None), which has both."""
+    ceiling, p95 = entry["ceiling"], entry["p95"]
     if report["chunk_count"] > 1:
-        return f"a mean over {report['chunk_count']} chunks, up to {entry['ceiling']:.2f}"
-    if entry["ceiling"] is not None and entry["ceiling"] > entry["p95"] + 5e-3:
+        return f"a mean over {report['chunk_count']} chunks, up to {ceiling:.2f}"
+    if ceiling is not None and p95 is not None and ceiling > p95 + 5e-3:
         # The floor that keeps a near-zero range from inflating verdicts.
-        return f"95% under {entry['p95']:.2f}; close up to {entry['ceiling']:.2f}"
-    return f"95% under {entry['p95']:.2f}"
+        return f"95% under {p95:.2f}; close up to {ceiling:.2f}"
+    return f"95% under {p95:.2f}"
 
 
-def _flagged_chunks(report: dict[str, Any], reference: dict[str, Any], style: _Style) -> list[str]:
+def _flagged_chunks(report: ScoreReport, reference: Baseline, style: _Style) -> list[str]:
     """Up to a few chunks per list, only those that are flagged, each judged at its own
     length; chunks too short to judge are never listed."""
     lines: list[str] = []
-    contrast = reference.get("contrast")
-    if contrast and report["reference"]["verdict"].get("likeness"):
+    contrast = reference["contrast"]
+    if contrast and report["reference"]["verdict"]["likeness"]:
         name = contrast["label"]
-        ranked = sorted(report["chunks"], key=lambda chunk: -chunk["reference"]["likeness"])
-        flagged = [(chunk, level) for chunk in ranked if (level := chunk_likeness_level(chunk))][
-            :CHUNKS_SHOWN
+        # Against a contrast reference every chunk has a likeness.
+        liked = [
+            (chunk, score)
+            for chunk in report["chunks"]
+            if (score := chunk["reference"].get("likeness")) is not None
         ]
-        if flagged:
+        most = [
+            (chunk, score, level)
+            for chunk, score in sorted(liked, key=lambda item: -item[1])
+            if (level := chunk_likeness_level(chunk))
+        ][:CHUNKS_SHOWN]
+        if most:
             lines += ["", style.bold(f"Most {name}-like chunks")]
-            for chunk, level in flagged:
+            for chunk, score, level in most:
                 word = style.distance(f"{likeness_words(level, name):22}", level)
-                lines.append(f"  {chunk['reference']['likeness']:5.2f}  {word}  {chunk['id']}")
+                lines.append(f"  {score:5.2f}  {word}  {chunk['id']}")
     ranked = sorted(report["chunks"], key=lambda chunk: -(chunk["reference"]["delta"] or 0))
     flagged = [(chunk, level) for chunk in ranked if (level := chunk_level(chunk))][:CHUNKS_SHOWN]
     if flagged:
@@ -518,7 +547,7 @@ class _Area:
     ceiling: float | None
 
 
-def _areas(verdict: dict[str, Any]) -> list[_Area]:
+def _areas(verdict: ScoreVerdict) -> list[_Area]:
     """Each scored area, most different first: by verdict, then by Delta relative to the
     top of the area's usual held-out range at the text's length.
 
@@ -603,7 +632,7 @@ def _area_deltas(areas: list[_Area], style: _Style) -> list[str]:
 
 
 def _comparison_view(
-    report: dict[str, Any], reference: dict[str, Any], style: _Style, full: bool
+    report: ScoreReport, reference: Baseline, style: _Style, full: bool
 ) -> list[str]:
     scored = report["reference"]
     verdict = scored["verdict"]
@@ -612,7 +641,8 @@ def _comparison_view(
         return ["", style.warn("No metrics could be compared with the reference.")]
     judged = verdict["judged"]
     if judged:
-        level = verdict["delta"]["level"]
+        # Always set for a judged verdict with a Delta.
+        level = verdict["delta"]["level"] or 0
         # The shading is described only when it is shown; the words carry the same reading.
         shading = " Darker orange is further away." if style.color else ""
         lines = [
@@ -627,7 +657,8 @@ def _comparison_view(
             ),
         ]
     else:
-        reason = verdict["reason"]
+        # Always set for a verdict that is not judged.
+        reason = verdict["reason"] or TOO_SHORT
         lines = [
             "",
             style.bold("Overall: ") + style.bold(too_short_text(verdict)),
@@ -645,7 +676,7 @@ def _comparison_view(
             f" {left_out} of {report['chunk_count']} chunks {verb} too short to judge and "
             f"{verb} left out (see the note below)."
         )
-    if reference.get("contrast"):
+    if reference["contrast"]:
         lines += ["", *_likeness(view, reference, style, verdict)]
     areas = _areas(verdict)
     lines += ["", *_area_lines(areas, style, judged=judged)]
@@ -674,7 +705,7 @@ def _comparison_view(
 
 
 def format_reference_summary(
-    report: dict[str, Any], *, color: bool = False, full: bool = False
+    report: ReferenceReport, *, color: bool = False, full: bool = False
 ) -> str:
     """The short view ``build`` prints: size, held-out range, contrast and warnings; ``full``
     adds every metric (``format_summary`` shows the key ones)."""
@@ -689,19 +720,22 @@ def format_reference_summary(
     return "\n".join(lines)
 
 
-def _size(report: dict[str, Any]) -> str:
+def _size(report: ReportBase) -> str:
     chunk_word = "chunk" if report["chunk_count"] == 1 else "chunks"
     return f"{report['chunk_count']} {chunk_word}, {report['word_count']:,} words"
 
 
 def format_summary(
-    report: dict[str, Any],
-    reference: dict[str, Any] | None = None,
+    report: ReferenceReport | ScoreReport,
+    reference: Baseline | None = None,
     *,
     color: bool = False,
     full: bool = False,
 ) -> str:
-    """Terminal view of a report; ``full`` shows every metric instead of the key ones."""
+    """Terminal view of a report; ``full`` shows every metric instead of the key ones.
+
+    A score report is compared with ``reference``, its ``reference.baseline``; without it,
+    or for a reference profile, this shows the report's own metrics."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
     style = _Style(color, truecolor=color and truecolor)
     size = _size(report)
@@ -709,7 +743,7 @@ def format_summary(
         ref_name = Path(report["reference"]["path"] or "reference").name
         lines = [
             style.bold("STYLE COMPARISON")
-            + style.dim(f"   {size}   vs {ref_name} ({reference.get('chunk_count', '?')} chunks)")
+            + style.dim(f"   {size}   vs {ref_name} ({reference['chunk_count']} chunks)")
         ]
         lines += _comparison_view(report, reference, style, full)
     else:
@@ -722,35 +756,36 @@ def format_summary(
     return "\n".join(lines)
 
 
-def _exact(result: dict[str, Any]) -> str | None:
+def _exact(result: AucResult) -> str | None:
     """How to describe an AUC whose interval is exact rather than resampled, or None.
 
     Every resample of a perfectly separated sample gives the same AUC, so its "interval" has
     no width; printed as one it would read as certainty however few documents there are.
     """
-    found = result.get("bootstrap") or {}
-    if found.get("method") != "exact" or not result.get("auc_ci"):
+    found = result["bootstrap"]
+    interval = result["auc_ci"]
+    if found["method"] != "exact" or not interval:
         return None
-    counts = (found.get("reference_documents"), found.get("contrast_documents"))
-    kind = "no difference" if result["auc_ci"][0] == 0.5 else "perfect separation"
-    if None in counts:
-        return kind
-    return f"{kind} on {counts[0]} reference and {counts[1]} contrast documents"
+    kind = "no difference" if interval[0] == 0.5 else "perfect separation"
+    return (
+        f"{kind} on {found['reference_documents']} reference and "
+        f"{found['contrast_documents']} contrast documents"
+    )
 
 
-def _auc_cell(result: dict[str, Any]) -> str:
-    auc = result.get("auc")
+def _auc_cell(result: AucResult) -> str:
+    auc = result["auc"]
     if auc is None:
         return "-"
     if _exact(result):
         # The table is narrow; the note under it says what "exact" means.
         return f"{auc:.2f} (exact)"
-    interval = result.get("auc_ci")
+    interval = result["auc_ci"]
     return f"{auc:.2f} ({interval[0]:.2f}-{interval[1]:.2f})" if interval else f"{auc:.2f}"
 
 
-def _survival(entry: dict[str, Any], style: _Style) -> str:
-    z, remaining = entry.get("z"), entry.get("remaining")
+def _survival(entry: Survival, style: _Style) -> str:
+    z, remaining = entry["z"], entry["remaining"]
     if z is None:
         return "-"
     if remaining is None:
@@ -763,7 +798,7 @@ def _survival(entry: dict[str, Any], style: _Style) -> str:
     return f"{z:+.1f} " + style.distance(change, level)
 
 
-def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
+def format_evaluation(result: EvaluationReport, *, color: bool = False) -> str:
     """Terminal view of an evaluation report (``styleprofile evaluate``)."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
     style = _Style(color, truecolor=color and truecolor)
@@ -797,12 +832,15 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
             f'"{likeness_words(2, name)}" or "{likeness_words(3, name)}".'
         )
     )
-    edits = [(set_label, entry["edits"]) for set_label, entry in sets.items() if entry.get("edits")]
+    # The originals have no edit statistics.
+    edits = [
+        (set_label, stats) for set_label, entry in sets.items() if (stats := entry.get("edits"))
+    ]
     if edits:
         lines += ["", style.bold("How much the edits changed")]
         for set_label, stats in edits:
-            changed = stats.get("ngram13_changed_median")
-            ratio = stats.get("word_ratio_median")
+            changed = stats["ngram13_changed_median"]
+            ratio = stats["word_ratio_median"]
             parts = [
                 f"{100 * changed:.0f}% of 13-word sequences rewritten"
                 if changed is not None
@@ -844,7 +882,7 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
                 "against the original z of the drafts it covers, not the column above."
             )
         )
-    retrain = result.get("retrain")
+    retrain = result["retrain"]
     if retrain:
         lines += [
             "",
@@ -852,7 +890,7 @@ def format_evaluation(result: dict[str, Any], *, color: bool = False) -> str:
             + style.dim(f"   AUC {_auc_cell(retrain)} over all drafts"),
         ]
         for item, entry in retrain["by_set"].items():
-            before = entry.get("before")
+            before = entry["before"]
             lines.append(
                 f"  {item:12}{_auc_cell(entry):>20}"
                 + (style.dim(f"   was {before:.2f}") if before is not None else "")

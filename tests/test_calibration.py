@@ -52,6 +52,7 @@ from styleprofile.profile import (
     window,
     write_report,
 )
+from styleprofile.schema import ReferenceReport, ScoreReport
 from styleprofile.surface import prose, words
 from styleprofile.weighting import (
     DISTANCE_WORDS,
@@ -107,7 +108,7 @@ def _body(path: Path) -> str:
 
 
 @cache
-def _examples_reference() -> dict[str, Any]:
+def _examples_reference() -> ReferenceReport:
     return build_reference(
         window(load_chunks([str(WRITER)]), WINDOW),
         parser=None,
@@ -116,11 +117,11 @@ def _examples_reference() -> dict[str, Any]:
     )
 
 
-def _reference() -> dict[str, Any]:
+def _reference() -> ReferenceReport:
     return copy.deepcopy(_examples_reference())
 
 
-def _score(texts: Sequence[str], reference: dict[str, Any]) -> dict[str, Any]:
+def _score(texts: Sequence[str], reference: ReferenceReport) -> ScoreReport:
     chunks = [Chunk(f"t{index}", f"t{index}", text) for index, text in enumerate(texts)]
     return score(chunks, reference, parser=None, settings={"window_words": WINDOW})
 
@@ -358,7 +359,8 @@ def test_pooled_ceiling_is_mean_ceiling_for_equal_ranges() -> None:
 
 def test_a_profile_from_before_length_calibration_is_refused(tmp_path: Path) -> None:
     for missing in ("chunk_words", "by_length"):
-        reference = _reference()
+        # Edited to lack a key, so no longer a ReferenceReport.
+        reference: Any = _reference()
         del reference["calibration"][missing]
         path = tmp_path / f"no-{missing}.json"
         write_report(reference, path)
@@ -381,7 +383,7 @@ def test_the_review_paragraph_abstains(tmp_path: Path, capsys: pytest.CaptureFix
     assert verdict["delta"]["level"] is None
     assert verdict["likeness"]["verdict"] == TOO_SHORT
     assert all(area["level"] is None for area in verdict["by_group"].values())
-    assert "under 75 words" in verdict["reason"]
+    assert "under 75 words" in (verdict["reason"] or "")
 
     reference = tmp_path / "writer.json"
     write_report(_reference(), reference)
@@ -546,7 +548,7 @@ def test_the_demo_draft_gets_a_sensible_verdict() -> None:
 Counts = dict[tuple[str, int], list[int]]
 
 
-def _count(reference: dict[str, Any], texts: Sequence[str], counts: Counts) -> None:
+def _count(reference: ReferenceReport, texts: Sequence[str], counts: Counts) -> None:
     for name, cutter in CUTTERS.items():
         for length in CALIBRATION_LENGTHS:
             pieces = [piece for text in texts for piece in cutter(text, length)]

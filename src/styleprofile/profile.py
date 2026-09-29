@@ -18,10 +18,10 @@ import stat
 import statistics
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Final, TypedDict, cast
 
 from styleprofile.calibration import (
     CALIBRATION_LENGTHS,
@@ -46,6 +46,29 @@ from styleprofile.formats import (
     html_to_markdown,
     looks_like_html,
     looks_like_jsonl,
+)
+from styleprofile.schema import (
+    Baseline,
+    BaselineCalibration,
+    BaselineLength,
+    Calibration,
+    ChunkRow,
+    ChunkScore,
+    Contrast,
+    DeltaRange,
+    EvaluationReport,
+    LengthCalibration,
+    LikenessSignal,
+    MetricStats,
+    Problem,
+    ReferenceReport,
+    Report,
+    ReportSettings,
+    ScoredChunk,
+    ScoreReport,
+    Summary,
+    Unseen,
+    find_problem,
 )
 from styleprofile.surface import (
     Metrics,
@@ -102,12 +125,22 @@ from styleprofile.weighting import (
 VERSION = 6
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
-REFERENCE = "reference"
-SCORE = "score"
+REFERENCE: Final = "reference"
+SCORE: Final = "score"
 # Written by ``styleprofile evaluate`` (see the evaluate module); shown, never scored against.
-EVALUATION = "evaluation"
+EVALUATION: Final = "evaluation"
 KINDS = (REFERENCE, SCORE, EVALUATION)
-UNREADABLE = "not a style profile this version of styleprofile can read; rebuild it"
+# The shape of each kind of report, which ``load_report`` checks.
+SCHEMAS: dict[str, type] = {
+    REFERENCE: ReferenceReport,
+    SCORE: ScoreReport,
+    EVALUATION: EvaluationReport,
+}
+# The message ends with the remedy, since the kind that says which command wrote it is unknown.
+UNREADABLE = (
+    "not a style profile this version of styleprofile can read; make it again with "
+    "`styleprofile build` (or `score` or `evaluate`, whichever wrote it)"
+)
 TEXT_FIELDS: tuple[str, ...] = ("text", "body_markdown", "output", "content", "body")
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 # What a directory walk reads; other files are reported as skipped.
@@ -689,7 +722,7 @@ def _collapse(sample: dict[str, float], reference: dict[str, float]) -> dict[str
     return collapsed
 
 
-def _stats(values: Sequence[float]) -> dict[str, float | int | None]:
+def _stats(values: Sequence[float]) -> MetricStats:
     if not values:
         return {"n": 0, "mean": None, "sd": None, "cv": None, "min": None, "max": None}
     mean = statistics.fmean(values)
@@ -704,21 +737,26 @@ def _stats(values: Sequence[float]) -> dict[str, float | int | None]:
     }
 
 
-def summarize(chunk_metrics: Sequence[Metrics]) -> dict[str, dict[str, dict[str, Any]]]:
-    summary: dict[str, dict[str, dict[str, Any]]] = {}
+def summarize(chunk_metrics: Sequence[Metrics]) -> Summary:
+    # Every metric any chunk has, in the order chunks first have them.
+    names: dict[str, dict[str, None]] = {}
     for metrics in chunk_metrics:
         for group, values in metrics.items():
             for name in values:
-                summary.setdefault(group, {}).setdefault(name, {})
-    for group, names in summary.items():
-        for name in names:
-            values = [
-                value
-                for metrics in chunk_metrics
-                if (value := metrics.get(group, {}).get(name)) is not None
-            ]
-            names[name] = _stats(values)
-    return summary
+                names.setdefault(group, {})[name] = None
+    return {
+        group: {
+            name: _stats(
+                [
+                    value
+                    for metrics in chunk_metrics
+                    if (value := metrics.get(group, {}).get(name)) is not None
+                ]
+            )
+            for name in group_names
+        }
+        for group, group_names in names.items()
+    }
 
 
 # Windowing already-windowed chunks stacks suffixes (``post#w1#w2``); all of them go.
@@ -739,18 +777,19 @@ def base_id(chunk_id: str) -> str:
     return _WINDOW_SUFFIX.sub("", chunk_id)
 
 
-def _z_against(metrics: Metrics, summary: dict[str, Any], floor: dict[Key, float]) -> ZScores:
+def _z_against(metrics: Metrics, summary: Summary, floor: dict[Key, float]) -> ZScores:
     scored: ZScores = {}
     for group, values in metrics.items():
         if group in UNSCORED_GROUPS:
             continue
         for name, value in values.items():
             stats = summary.get(group, {}).get(name)
-            if value is None or not stats or stats.get("mean") is None:
+            mean = stats.get("mean") if stats else None
+            if value is None or not stats or mean is None:
                 continue
             z = z_score(
                 value,
-                stats["mean"],
+                mean,
                 stats.get("sd"),
                 stats.get("n", 0),
                 floor.get((group, name), 0.0),
@@ -769,7 +808,7 @@ class _Prepared:
     lengths: Lengths
 
 
-def _prepare(reference: dict[str, Any]) -> _Prepared:
+def _prepare(reference: ReferenceReport) -> _Prepared:
     return _Prepared(
         floor=floors(reference["summary"]),
         effects=flatten((reference.get("contrast") or {}).get("effects", {})),
@@ -780,15 +819,15 @@ def _prepare(reference: dict[str, Any]) -> _Prepared:
 def _score(
     metrics: Metrics,
     distributions: dict[str, Counter[str]],
-    reference: dict[str, Any],
+    reference: ReferenceReport,
     prepared: _Prepared,
     at: AtLength,
-) -> dict[str, Any]:
+) -> ChunkScore:
     """One chunk's scores, with Delta weights and likeness scaled by the reference's
     held-out rms at the chunk's own length (``at``)."""
     z_scores = _z_against(metrics, reference["summary"], prepared.floor)
     summary = reference["summary"]
-    unseen = [
+    unseen: list[Unseen] = [
         {"metric": f"{group}.{name}", "value": metrics[group][name], "reference_value": mean}
         for (group, name), z in z_scores.items()
         if z and not summary[group][name].get("sd")
@@ -796,7 +835,11 @@ def _score(
     ]
     overall, by_group = delta(z_scores, delta_weights(at.rms))
     deviations = sorted(z_scores.items(), key=lambda item: -abs(item[1]))[:DEVIATIONS_SHOWN]
-    scored: dict[str, Any] = {
+    liked: _Liked = {}
+    if prepared.effects:
+        score, signals = likeness(z_scores, prepared.effects, at.rms)
+        liked = {"likeness": score, "likeness_signals": signals}
+    return {
         "delta": overall,
         "delta_by_group": by_group,
         "divergence": {
@@ -818,13 +861,16 @@ def _score(
         ],
         "unseen_in_reference": unseen,
         "z": nest(z_scores),
+        **liked,
+        "calibration": at.row(),
     }
-    if prepared.effects:
-        score, signals = likeness(z_scores, prepared.effects, at.rms)
-        scored["likeness"] = score
-        scored["likeness_signals"] = signals
-    scored["calibration"] = at.row()
-    return scored
+
+
+class _Liked(TypedDict, total=False):
+    """A chunk's likeness, against a reference with a contrast set."""
+
+    likeness: float
+    likeness_signals: list[LikenessSignal]
 
 
 def _mean_of(values: Sequence[float | None]) -> float | None:
@@ -832,7 +878,7 @@ def _mean_of(values: Sequence[float | None]) -> float | None:
     return statistics.fmean(present) if present else None
 
 
-def report_kind(report: dict[str, Any]) -> str:
+def report_kind(report: Mapping[str, Any]) -> str:
     """``"reference"``, ``"score"`` or ``"evaluation"``, from the report's ``kind``."""
     kind = report.get("kind")
     if kind not in KINDS:
@@ -842,71 +888,144 @@ def report_kind(report: dict[str, Any]) -> str:
     return kind
 
 
-def load_report(path: Path) -> dict[str, Any]:
-    """Read any styleprofile report: reference, score or evaluation."""
+def load_report(path: Path, name: str | None = None) -> Report:
+    """Read any styleprofile report: reference, score or evaluation.
+
+    A report of another version, or one that lacks a key its kind needs (see ``schema``), is
+    refused with code ``outdated``. Messages call the file ``name``, by default ``path``."""
+    name = str(path) if name is None else name
     if path.is_dir():
-        raise StyleProfileError(f"{path} is a directory, not a profile", code="directory")
+        raise StyleProfileError(f"{name} is a directory, not a profile", code="directory")
     if not path.exists():
-        raise StyleProfileError(f"{path} not found", code="not_found")
+        raise StyleProfileError(f"{name} not found", code="not_found")
     try:
         report = json.loads(_read_text(path))
     except (json.JSONDecodeError, StyleProfileError):
         report = None
     if not isinstance(report, dict) or ("summary" not in report and "kind" not in report):
-        raise StyleProfileError(f"{path} is not a style profile", code="not_a_profile")
+        raise StyleProfileError(f"{name} is not a style profile", code="not_a_profile")
     kind = report.get("kind")
-    if kind not in KINDS or (kind != EVALUATION and "summary" not in report):
-        # A pre-release report without ``kind``, or a kind this version does not know.
-        raise StyleProfileError(f"{path} is {UNREADABLE}", code="outdated")
-    check_version(report, str(path))
-    return report
+    if kind not in KINDS:
+        # A pre-release report without ``kind``, or a kind this version does not know. One
+        # with a version says which.
+        if kind is None and isinstance(report.get("version"), int):
+            check_version(report, name)
+        raise StyleProfileError(f"{name} is {UNREADABLE}", code="outdated")
+    check_report(report, name)
+    return cast(Report, report)
 
 
-def check_version(report: dict[str, Any], name: str = "the report") -> None:
+def check_report(report: Mapping[str, Any], name: str = "the report") -> None:
+    """Refuse a report of a known kind (see ``report_kind``) that this styleprofile cannot
+    read: one of another version (``check_version``), or one whose shape its kind does not
+    have (``schema.find_problem``): a key missing, a part of the wrong kind, or a null where
+    one is needed, naming the part. All get code ``outdated``."""
+    check_version(report, name)
+    kind = report_kind(report)
+    problem = find_problem(report, SCHEMAS[kind]) or _unmatched(report, kind)
+    if problem is None:
+        return
+    # The version does not change with every format change before a release, so a report of
+    # this version can still lack a key that a later build added.
+    what = (
+        f"has no {problem.path}, which this version of styleprofile needs"
+        if problem.reason == "missing"
+        else f"has an unreadable {problem.path} ({problem.reason})"
+    )
+    raise StyleProfileError(
+        f"{name} {what}: it was made by an earlier development version, or edited; {_again(kind)}",
+        code="outdated",
+    )
+
+
+def _unmatched(report: Mapping[str, Any], kind: str) -> Problem | None:
+    """The first part one section of a well-shaped report names but another lacks: a metric
+    a score's chunks have z-scores for but its summaries lack, or an edited set an
+    evaluation's signals leave out. Only an edited file has one."""
+    if kind == SCORE:
+        summaries = {
+            "summary": report["summary"],
+            "reference.baseline.summary": report["reference"]["baseline"]["summary"],
+        }
+        for row in report["chunks"]:
+            for group, names in row["reference"]["z"].items():
+                for where, summary in summaries.items():
+                    metrics = summary.get(group)
+                    if metrics is None:
+                        return Problem(f"{where}.{group}", "missing")
+                    if not names.keys() <= metrics.keys():
+                        missing = next(name for name in names if name not in metrics)
+                        return Problem(f"{where}.{group}.{missing}", "missing")
+    if kind == EVALUATION:
+        edited = [label for label in report["sets"] if label != "original"]
+        for index, signal in enumerate(report["signals"]):
+            for label in edited:
+                if label not in signal["edited"]:
+                    return Problem(f"signals[{index}].edited.{label}", "missing")
+    return None
+
+
+def _again(kind: str | None) -> str:
+    """How to make a report of ``kind`` again."""
+    return {
+        SCORE: "score it again with `styleprofile score`",
+        EVALUATION: "run `styleprofile evaluate` again",
+    }.get(kind or "", "rebuild it with `styleprofile build`")
+
+
+def _before_lengths(report: Mapping[str, Any]) -> bool:
+    """Whether a version-6 report is from before length calibration, which version 6
+    gained before any release: a reference whose calibration lacks ``by_length`` or
+    ``chunk_words``, or a score report without a ``verdict``. Such a reference would judge
+    short texts against its windows' range. A part of the wrong shape is left to
+    ``check_report``."""
+    kind = report.get("kind")
+    calibration = report.get("calibration")
+    if kind == REFERENCE and isinstance(calibration, Mapping) and calibration:
+        return not {"by_length", "chunk_words"} <= calibration.keys()
+    scored = report.get("reference")
+    return kind == SCORE and isinstance(scored, Mapping) and "verdict" not in scored
+
+
+def check_version(report: Mapping[str, Any], name: str = "the report") -> None:
     """Refuse a report of another version than this styleprofile writes, saying how to
     make it again: its settings and metrics would be misread rather than migrated."""
     kind = report.get("kind")
     expected = EVALUATION_VERSION if kind == EVALUATION else VERSION
     version = report.get("version")
-    again = {
-        SCORE: "score it again with `styleprofile score`",
-        EVALUATION: "run `styleprofile evaluate` again",
-    }.get(kind or "", "rebuild it with `styleprofile build`")
+    if type(version) is not int:
+        # Missing, or not a number ("6", say): no version this or any styleprofile writes.
+        raise StyleProfileError(f"{name} is {UNREADABLE}", code="outdated")
     if version == expected:
-        # Version 6 gained length calibration before any release; a report from before it
-        # would judge short texts against its windows' range.
-        calibration = report.get("calibration") or {}
-        before_lengths = (
-            kind == REFERENCE
-            and bool(calibration)
-            and not {"by_length", "chunk_words"} <= calibration.keys()
-        ) or (kind == SCORE and "verdict" not in (report.get("reference") or {}))
-        if before_lengths:
+        if _before_lengths(report):
             raise StyleProfileError(
-                f"{name} was made by an older styleprofile, before length-aware verdicts; {again}",
+                f"{name} was made by an older styleprofile, before length-aware verdicts; "
+                f"{_again(kind)}",
                 code="outdated",
             )
         return
-    age = "a newer" if isinstance(version, int) and version > expected else "an older"
+    age = "a newer" if version > expected else "an older"
     raise StyleProfileError(
         f"{name} was made by {age} styleprofile (report version {version}; this one reads "
-        f"{expected}); {again}",
+        f"{expected}); {_again(kind)}",
         code="outdated",
     )
 
 
-def load_reference(path: Path) -> dict[str, Any]:
-    """Read a reference profile, refusing a score report (a sample scored against one)."""
-    reference = load_report(path)
-    if report_kind(reference) == EVALUATION:
+def load_reference(path: Path, name: str | None = None) -> ReferenceReport:
+    """Read a reference profile, refusing a score report (a sample scored against one).
+    Messages call the file ``name``, by default ``path``."""
+    name = str(path) if name is None else name
+    reference = load_report(path, name)
+    if reference["kind"] == EVALUATION:
         raise StyleProfileError(
-            f"{path} is an evaluation report, not a reference profile; build a reference "
+            f"{name} is an evaluation report, not a reference profile; build a reference "
             "from the writer's own texts",
             code="score_as_reference",
         )
-    if report_kind(reference) == SCORE:
+    if reference["kind"] == SCORE:
         raise StyleProfileError(
-            f"{path} is a score report (a sample scored against a reference), not a "
+            f"{name} is a score report (a sample scored against a reference), not a "
             "reference profile; build a reference from the writer's own texts",
             code="score_as_reference",
         )
@@ -1035,11 +1154,13 @@ class _Calibrated:
 
     held: list[ZScores]
     pieces: dict[int, tuple[list[ZScores], list[str]]]
+    # The report's ``calibration.by_length``, which a contrast set adds its ranges to.
+    by_length: dict[str, LengthCalibration]
     # The intraclass correlation the pieces' bounds use (``calibration.similarity``).
     icc: float = 0.0
 
 
-def _calibrate(report: dict[str, Any], measured: _Measured) -> _Calibrated | None:
+def _calibrate(report: ReferenceReport, measured: _Measured) -> _Calibrated | None:
     """Held-out reliability and Delta range, when the chunks span at least two documents,
     for the chunks and for shorter pieces cut from them (``calibration.by_length``).
 
@@ -1055,7 +1176,7 @@ def _calibrate(report: dict[str, Any], measured: _Measured) -> _Calibrated | Non
     if calibration is None:
         return None
     report["reliability"] = nest(reliability(held, documents))
-    by_length: dict[str, Any] = {}
+    by_length: dict[str, LengthCalibration] = {}
     pieces: dict[int, tuple[list[ZScores], list[str]]] = {}
     # Every length's pieces in one pass, so the windows' sums are taken once.
     all_held = held_out_pieces(
@@ -1080,14 +1201,15 @@ def _calibrate(report: dict[str, Any], measured: _Measured) -> _Calibrated | Non
             pieces[length] = grouped[length][:2]
     report["calibration"] = {
         "sources": len(set(documents)),
-        "delta": calibration,
+        # Without ``upper``, calibrate_delta gives a window's range: median, p95, max.
+        "delta": cast(DeltaRange, calibration),
         # The windows' own length: the longest anchor of the length calibration.
         "chunk_words": statistics.median(
             metrics["size"]["words"] or 0.0 for metrics in measured.metrics
         ),
         "by_length": by_length,
     }
-    return _Calibrated(held, pieces, icc)
+    return _Calibrated(held, pieces, by_length, icc)
 
 
 @dataclass(frozen=True)
@@ -1108,14 +1230,14 @@ class ContrastFit:
 
 
 def _learn_contrast(
-    report: dict[str, Any],
+    report: ReferenceReport,
     reference: _Measured,
     calibrated: _Calibrated | None,
     contrast: Sequence[Chunk],
     label: str,
     parser: Parser | None,
     min_words: int,
-) -> tuple[dict[str, Any], ContrastFit]:
+) -> tuple[Contrast, ContrastFit]:
     if calibrated is None:
         raise StyleProfileError(
             "a contrast set needs a reference drawn from at least two documents with enough "
@@ -1156,7 +1278,7 @@ def _learn_contrast(
         # Measured chunks all have prose, so words is never None.
         [metrics["size"]["words"] or 0.0 for metrics in measured.metrics],
     )
-    _calibrate_contrast_lengths(report, calibrated, fit, measured.pieces, floor)
+    _calibrate_contrast_lengths(report["summary"], calibrated, fit, measured.pieces, floor)
     calibration = learned["calibration"]
     if not calibration["cross_validated"]:
         report["warnings"].append(
@@ -1184,7 +1306,7 @@ def _learn_contrast(
 
 
 def _calibrate_contrast_lengths(
-    report: dict[str, Any],
+    summary: Summary,
     calibrated: _Calibrated,
     fit: ContrastFit,
     pieces: Sequence[_Piece],
@@ -1193,7 +1315,7 @@ def _calibrate_contrast_lengths(
     """The likeness range at each calibrated length, from reference and contrast pieces."""
     for length, (piece_held, piece_documents) in calibrated.pieces.items():
         chosen = [piece for piece in pieces if piece.length == length]
-        entry = report["calibration"]["by_length"][str(length)]
+        entry = calibrated.by_length[str(length)]
         entry["contrast_pieces"] = len(chosen)
         if len(chosen) < MIN_CONTRAST_PIECES:
             continue
@@ -1203,11 +1325,32 @@ def _calibrate_contrast_lengths(
             fit.contrast_z,
             piece_held,
             piece_documents,
-            [_z_against(piece.metrics, report["summary"], floor) for piece in chosen],
+            [_z_against(piece.metrics, summary, floor) for piece in chosen],
             [fit.contrast_documents[piece.chunk] for piece in chosen],
             fit.learned,
             icc=calibrated.icc,
         )
+
+
+class _Described(TypedDict):
+    """The keys every reference and score report has between ``kind`` and ``chunks``."""
+
+    settings: ReportSettings
+    chunk_count: int
+    document_count: int
+    word_count: int
+    summary: Summary
+    distributions: dict[str, dict[str, float]]
+
+
+@dataclass(frozen=True)
+class _Base:
+    """The part of every report that describes its own chunks, plus the pooled counts."""
+
+    described: _Described
+    rows: list[ChunkRow]
+    warnings: list[str]
+    totals: dict[str, Counter[str]]
 
 
 def _base_report(
@@ -1217,13 +1360,11 @@ def _base_report(
     parser: Parser | None,
     top_k: int,
     min_words: int,
-    settings: dict[str, Any] | None,
-    keep_chunks: bool = True,
-) -> tuple[dict[str, Any], dict[str, Counter[str]]]:
-    """The part of every report that describes its own chunks, plus the pooled counts.
-
-    ``keep_chunks`` adds a row of metrics per chunk: score reports need them to show which
-    chunks stand out, while a reference stores only its summary unless asked to keep them."""
+    settings: Mapping[str, Any] | None,
+) -> _Base:
+    """The part of every report of ``kind`` that describes its own chunks, plus a row of
+    metrics per chunk: score reports need them to show which chunks stand out, while a
+    reference stores only its summary unless asked to keep them."""
     chunk_metrics = measured.metrics
     totals: dict[str, Counter[str]] = {}
     for distributions in measured.distributions:
@@ -1245,10 +1386,10 @@ def _base_report(
         warnings.append(
             f"{short} chunk(s) have fewer than {SHORT_CHUNK_WORDS} words; their rates are noisy"
         )
-    report: dict[str, Any] = {
-        "version": VERSION,
-        "kind": kind,
-        "settings": {
+    # The settings are recorded as given, whatever their keys.
+    recorded = cast(
+        ReportSettings,
+        {
             **(settings or {}),
             "top_k": top_k,
             # What was used, as opposed to the ``syntax`` setting, which is what was asked.
@@ -1262,19 +1403,20 @@ def _base_report(
                 else None
             ),
         },
+    )
+    described: _Described = {
+        "settings": recorded,
         "chunk_count": len(measured.chunks),
         "document_count": len(set(_documents(measured.chunks))),
         "word_count": sum(int(metrics["size"]["words"] or 0) for metrics in chunk_metrics),
         "summary": summarize(chunk_metrics),
         "distributions": {name: _distribution(counts, top_k) for name, counts in totals.items()},
-        "warnings": warnings,
     }
-    if keep_chunks:
-        report["chunks"] = [
-            {"id": chunk.id, "source": chunk.source, "metrics": metrics}
-            for chunk, metrics in zip(measured.chunks, chunk_metrics, strict=True)
-        ]
-    return report, totals
+    rows: list[ChunkRow] = [
+        {"id": chunk.id, "source": chunk.source, "metrics": metrics}
+        for chunk, metrics in zip(measured.chunks, chunk_metrics, strict=True)
+    ]
+    return _Base(described, rows, warnings, totals)
 
 
 def build_reference(
@@ -1283,11 +1425,11 @@ def build_reference(
     parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
-    settings: dict[str, Any] | None = None,
+    settings: Mapping[str, Any] | None = None,
     contrast: Sequence[Chunk] | None = None,
     contrast_label: str = "LLM",
     keep_chunks: bool = False,
-) -> dict[str, Any]:
+) -> ReferenceReport:
     """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
     reliability when the chunks span two or more documents and, given ``contrast`` chunks
     (for example LLM drafts), the weights that score likeness to them.
@@ -1319,10 +1461,10 @@ def build_contrast_reference(
     parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
-    settings: dict[str, Any] | None = None,
+    settings: Mapping[str, Any] | None = None,
     contrast_label: str = "LLM",
     calibrate_lengths: bool = True,
-) -> tuple[dict[str, Any], ContrastFit]:
+) -> tuple[ReferenceReport, ContrastFit]:
     """``build_reference(chunks, contrast=contrast)``, plus what its weights were learned
     from, for scoring more text with the same folds. ``calibrate_lengths=False`` skips the
     calibration for shorter texts, for a caller that only scores window-sized chunks."""
@@ -1342,7 +1484,7 @@ def build_contrast_reference(
 
 
 def z_against_reference(
-    report: dict[str, Any], chunks: Sequence[Chunk], parser: Parser | None, min_words: int
+    report: ReferenceReport, chunks: Sequence[Chunk], parser: Parser | None, min_words: int
 ) -> tuple[list[Chunk], list[ZScores]]:
     """Measure chunks and take their z-scores against a reference report, as the contrast
     drafts are; returns the chunks kept (enough prose), possibly none, and their z-scores."""
@@ -1359,27 +1501,34 @@ def _build_reference(
     parser: Parser | None,
     top_k: int,
     min_words: int,
-    settings: dict[str, Any] | None,
+    settings: Mapping[str, Any] | None,
     contrast: Sequence[Chunk] | None,
     contrast_label: str,
     keep_chunks: bool,
     calibrate_lengths: bool = True,
-) -> tuple[dict[str, Any], ContrastFit | None]:
+) -> tuple[ReferenceReport, ContrastFit | None]:
     measured = _measure(
         chunks,
         parser,
         min_words,
         piece_lengths=CALIBRATION_LENGTHS if calibrate_lengths else (),
     )
-    report, _ = _base_report(
+    base = _base_report(
         measured,
         kind=REFERENCE,
         parser=parser,
         top_k=top_k,
         min_words=min_words,
         settings=settings,
-        keep_chunks=keep_chunks,
     )
+    report: ReferenceReport = {
+        "version": VERSION,
+        "kind": REFERENCE,
+        **base.described,
+        "warnings": base.warnings,
+    }
+    if keep_chunks:
+        report["chunks"] = base.rows
     calibrated = _calibrate(report, measured)
     fit: ContrastFit | None = None
     if contrast is not None:
@@ -1389,13 +1538,13 @@ def _build_reference(
     return report, fit
 
 
-def _baseline(reference: dict[str, Any]) -> dict[str, Any]:
+def _baseline(reference: ReferenceReport) -> Baseline:
     """What rendering a score needs from its reference, so a saved score can be shown without
     the reference file: each metric's mean and spread, the held-out Delta range, and the
     contrast set's name and likeness range."""
     contrast = reference.get("contrast")
     return {
-        "chunk_count": reference.get("chunk_count"),
+        "chunk_count": reference["chunk_count"],
         "summary": {
             group: {
                 name: {"mean": stats.get("mean"), "sd": stats.get("sd")}
@@ -1412,7 +1561,7 @@ def _baseline(reference: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _left_out(rows: Sequence[dict[str, Any]], shown: int = 5) -> str:
+def _left_out(rows: Sequence[ScoredChunk], shown: int = 5) -> str:
     """Which chunks a verdict leaves out as too short to judge, and why, for its warning.
 
     A chunk is named by its input (``notes.md``), or with its window (``draft.md#w3``) when
@@ -1433,29 +1582,33 @@ def _left_out(rows: Sequence[dict[str, Any]], shown: int = 5) -> str:
     return "left out of the verdict and the means as too short to judge: " + ", ".join(names) + more
 
 
-def _without_rms(calibration: dict[str, Any] | None) -> dict[str, Any] | None:
+def _without_rms(calibration: Calibration | None) -> BaselineCalibration | None:
     """The calibration without each length's per-metric rms, which only scoring reads."""
-    if not calibration:
-        return calibration
+    if calibration is None:
+        return None
+    by_length: dict[str, BaselineLength] = {}
+    for length, entry in calibration["by_length"].items():
+        copied = entry.copy()
+        copied.pop("reliability", None)
+        by_length[length] = copied
     return {
-        **calibration,
-        "by_length": {
-            length: {key: value for key, value in entry.items() if key != "reliability"}
-            for length, entry in calibration.get("by_length", {}).items()
-        },
+        "sources": calibration["sources"],
+        "delta": calibration["delta"],
+        "chunk_words": calibration["chunk_words"],
+        "by_length": by_length,
     }
 
 
 def score(
     chunks: Sequence[Chunk],
-    reference: dict[str, Any],
+    reference: ReferenceReport,
     *,
     parser: Parser | None = None,
     top_k: int = 300,
     min_words: int = 1,
-    settings: dict[str, Any] | None = None,
+    settings: Mapping[str, Any] | None = None,
     reference_path: Path | None = None,
-) -> dict[str, Any]:
+) -> ScoreReport:
     """Profile sample chunks and score each against ``reference``: z-scores, Delta, pattern
     divergence and, when the reference learned a contrast, likeness to the contrast set.
 
@@ -1469,22 +1622,17 @@ def score(
     chunk, and the verdict is "too short to judge"."""
     check_version(reference, "the reference")
     measured = _measure(chunks, parser, min_words)
-    report, totals = _base_report(
-        measured,
-        kind=SCORE,
-        parser=parser,
-        top_k=top_k,
-        min_words=min_words,
-        settings=settings,
+    base = _base_report(
+        measured, kind=SCORE, parser=parser, top_k=top_k, min_words=min_words, settings=settings
     )
-    warnings: list[str] = report["warnings"]
-    rows: list[dict[str, Any]] = report["chunks"]
+    warnings, totals = base.warnings, base.totals
     prepared = _prepare(reference)
+    rows: list[ScoredChunk] = []
     for row, metrics, distributions in zip(
-        rows, measured.metrics, measured.distributions, strict=True
+        base.rows, measured.metrics, measured.distributions, strict=True
     ):
         at = prepared.lengths.at(int(metrics["size"]["words"] or 0))
-        row["reference"] = _score(metrics, distributions, reference, prepared, at)
+        rows.append({**row, "reference": _score(metrics, distributions, reference, prepared, at)})
 
     judged = [row for row in rows if row["reference"]["calibration"]["judged"]]
     scored = [row["reference"] for row in judged or rows]
@@ -1514,10 +1662,11 @@ def score(
                 f"this run lacks metrics that carry {100 * missing / total_weight:.0f}% of "
                 "the likeness weight (for example syntax); likeness uses the rest"
             )
-    if reference.get("chunk_count", 0) < 2:
+    if reference["chunk_count"] < 2:
         warnings.append("the reference has one chunk, so it has no spread; split it into windows")
     # 0 and None both mean no windowing.
-    own_window = report["settings"].get("window_words") or None
+    own_settings = base.described["settings"]
+    own_window = own_settings.get("window_words") or None
     reference_window = reference_settings.get("window_words") or None
     if own_window != reference_window:
         warnings.append(
@@ -1525,7 +1674,7 @@ def score(
             f"({own_window or 'off'} vs {reference_window or 'off'}); "
             "z-scores assume equal-sized chunks"
         )
-    own_syntax = report["settings"]["syntax_used"]
+    own_syntax = own_settings["syntax_used"]
     reference_syntax = reference_settings.get("syntax_used")
     if own_syntax and not reference_syntax:
         warnings.append("the reference has no syntax metrics, so syntax is not scored")
@@ -1542,32 +1691,38 @@ def score(
                 f"({reference_syntax.get('model')} {reference_syntax.get('model_version')}); "
                 "syntax metrics may not be comparable"
             )
-    report["reference"] = {
-        # Only the profile's file name: a saved report never reveals where files live.
-        "path": root_name(str(reference_path)) if reference_path else None,
-        "chunk_count": reference.get("chunk_count"),
-        "delta_mean": _mean_of([scores["delta"] for scores in scored]),
-        "likeness_mean": _mean_of([scores.get("likeness") for scores in scored]),
-        "delta_by_group_mean": {
-            group: _mean_of([scores["delta_by_group"].get(group) for scores in scored])
-            for group in groups
+    return {
+        "version": VERSION,
+        "kind": SCORE,
+        **base.described,
+        "warnings": warnings,
+        "chunks": rows,
+        "reference": {
+            # Only the profile's file name: a saved report never reveals where files live.
+            "path": root_name(str(reference_path)) if reference_path else None,
+            "chunk_count": reference["chunk_count"],
+            "delta_mean": _mean_of([scores["delta"] for scores in scored]),
+            "likeness_mean": _mean_of([scores.get("likeness") for scores in scored]),
+            "delta_by_group_mean": {
+                group: _mean_of([scores["delta_by_group"].get(group) for scores in scored])
+                for group in groups
+            },
+            "divergence_mean": {
+                name: _mean_of([scores["divergence"].get(name) for scores in scored])
+                for name in reference.get("distributions", {})
+            },
+            "pooled_divergence": {
+                name: jensen_shannon(
+                    _collapse(_distribution(counts), reference["distributions"][name]),
+                    reference["distributions"][name],
+                )
+                for name, counts in totals.items()
+                if name in reference.get("distributions", {})
+            },
+            "verdict": verdict(rows, (reference.get("contrast") or {}).get("label")),
+            "baseline": _baseline(reference),
         },
-        "divergence_mean": {
-            name: _mean_of([scores["divergence"].get(name) for scores in scored])
-            for name in reference.get("distributions", {})
-        },
-        "pooled_divergence": {
-            name: jensen_shannon(
-                _collapse(_distribution(counts), reference["distributions"][name]),
-                reference["distributions"][name],
-            )
-            for name, counts in totals.items()
-            if name in reference.get("distributions", {})
-        },
-        "verdict": verdict(rows, (reference.get("contrast") or {}).get("label")),
-        "baseline": _baseline(reference),
     }
-    return report
 
 
 def _create_beside(path: Path) -> tuple[int, Path]:
@@ -1606,7 +1761,7 @@ def _create_beside(path: Path) -> tuple[int, Path]:
     raise FileExistsError(f"could not create a temporary file beside {path}")
 
 
-def dumps_report(report: dict[str, Any]) -> str:
+def dumps_report(report: Mapping[str, Any]) -> str:
     """A report as the JSON text ``write_report`` saves, with floats rounded."""
     return json.dumps(_round(report), ensure_ascii=False, indent=2) + "\n"
 
@@ -1621,7 +1776,7 @@ def _round(value: Any) -> Any:
     return value
 
 
-def write_report(report: dict[str, Any], path: Path) -> None:
+def write_report(report: Mapping[str, Any], path: Path) -> None:
     """Save a report atomically: write a new file beside ``path``, then rename it over.
 
     The file keeps the permission bits of the file it replaces, or gets read and write as

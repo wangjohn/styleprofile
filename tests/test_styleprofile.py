@@ -12,6 +12,7 @@ from styleprofile.cli import main
 from styleprofile.display import describe_delta, label, value
 from styleprofile.profile import VERSION, _prepare, build_reference, load_chunks, score, window
 from styleprofile.profile import _score as _score_with
+from styleprofile.schema import Baseline, Contrast
 from styleprofile.surface import (
     Metrics,
     char_trigrams,
@@ -178,11 +179,14 @@ def test_profile_scores_chunks_against_a_reference() -> None:
         settings={"window_words": None},
     )
     author_score, generic_score = (row["reference"] for row in scored["chunks"])
+    author_delta, generic_delta = author_score["delta"], generic_score["delta"]
+    author_bigrams = author_score["divergence"]["masked_bigram"]
+    generic_bigrams = generic_score["divergence"]["masked_bigram"]
+    assert author_delta is not None and generic_delta is not None
+    assert author_bigrams is not None and generic_bigrams is not None
 
-    assert generic_score["delta"] > author_score["delta"]
-    assert (
-        generic_score["divergence"]["masked_bigram"] > author_score["divergence"]["masked_bigram"]
-    )
+    assert generic_delta > author_delta
+    assert generic_bigrams > author_bigrams
     assert generic_score["delta_by_group"]["voice"] > author_score["delta_by_group"]["voice"]
     unseen = {row["metric"] for row in generic_score["unseen_in_reference"]}
     assert "voice.llm_markers_per_1k" in unseen
@@ -190,9 +194,7 @@ def test_profile_scores_chunks_against_a_reference() -> None:
         row["metric"] for row in author_score["unseen_in_reference"]
     }
     assert "size" not in generic_score["z"]
-    assert scored["reference"]["delta_mean"] == pytest.approx(
-        (author_score["delta"] + generic_score["delta"]) / 2
-    )
+    assert scored["reference"]["delta_mean"] == pytest.approx((author_delta + generic_delta) / 2)
     # Both chunks are under 75 words: the means are indicative and there is no verdict.
     assert scored["reference"]["verdict"]["verdict"] == "too short to judge"
     assert not any("fewer than 150 words" in warning for warning in scored["warnings"])
@@ -256,13 +258,14 @@ def test_profile_and_comparison_views_are_readable() -> None:
     assert "--all" not in full
 
     scored = score([Chunk("g", "src", GENERIC)], reference, parser=None)
-    comparison = format_summary(scored, reference, color=True)
+    baseline = scored["reference"]["baseline"]
+    comparison = format_summary(scored, baseline, color=True)
 
     assert "Overall: " in comparison
     assert "Biggest differences" in comparison
     assert "All metrics" not in comparison
     assert "\033[1m" in comparison
-    assert "All metrics" in format_summary(scored, reference, full=True)
+    assert "All metrics" in format_summary(scored, baseline, full=True)
 
 
 def test_distance_colors_only_mark_what_is_far(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,15 +285,16 @@ def test_distance_colors_only_mark_what_is_far(monkeypatch: pytest.MonkeyPatch) 
         parser=None,
     )
     scored = score([Chunk("g", "src", GENERIC)], reference, parser=None)
+    baseline = scored["reference"]["baseline"]
 
     monkeypatch.setenv("COLORTERM", "truecolor")
     deep = "\033[1;38;2;184;70;26m"
-    truecolor = format_summary(scored, reference, color=True)
+    truecolor = format_summary(scored, baseline, color=True)
     assert deep in truecolor
     assert "\033[31m" not in truecolor and "\033[32m" not in truecolor
 
     monkeypatch.delenv("COLORTERM")
-    assert "\033[1;38;5;130m" in format_summary(scored, reference, color=True)
+    assert "\033[1;38;5;130m" in format_summary(scored, baseline, color=True)
 
     report, handmade_reference = _handmade_comparison()
     close = format_summary(report, handmade_reference, color=True)
@@ -303,9 +307,10 @@ def test_distance_colors_only_mark_what_is_far(monkeypatch: pytest.MonkeyPatch) 
     assert "Hedges" not in differences
 
 
-def _handmade_comparison() -> tuple[dict[str, Any], dict[str, Any]]:
-    """A close sample with one metric the reference never varies on."""
-    reference = {
+def _handmade_comparison() -> tuple[Any, Baseline]:
+    """A close sample with one metric the reference never varies on: the parts of a score
+    report that rendering reads, and its reference's baseline."""
+    reference: Baseline = {
         "chunk_count": 5,
         "summary": {
             "voice": {
@@ -313,6 +318,8 @@ def _handmade_comparison() -> tuple[dict[str, Any], dict[str, Any]]:
                 "hedges_per_1k": {"mean": 2.1, "sd": 1.0},
             }
         },
+        "calibration": None,
+        "contrast": None,
     }
     report = {
         "chunk_count": 1,
@@ -441,12 +448,18 @@ def test_never_varying_metrics_count_toward_delta() -> None:
     # The reference never uses them, so the spread is the resolution floor (half of one
     # occurrence per chunk) and the score is graded rather than a fixed constant.
     assert marked_z["llm_markers_per_1k"] > 1
-    assert marked["reference"]["delta_mean"] > plain["reference"]["delta_mean"]
+    marked_delta, plain_delta = marked["reference"]["delta_mean"], plain["reference"]["delta_mean"]
+    assert marked_delta is not None and plain_delta is not None
+    assert marked_delta > plain_delta
 
 
 def test_reference_syntax_mismatch_is_warned() -> None:
     reference = build_reference([Chunk("a", "s", AUTHOR)] * 2, parser=None)
-    reference["settings"]["syntax_used"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    reference["settings"]["syntax_used"] = {
+        "model": "en_core_web_sm",
+        "model_version": "3.8.0",
+        "spacy_version": "3.8.2",
+    }
     report = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
 
     assert any("this run does not" in warning for warning in report["warnings"])
@@ -497,7 +510,7 @@ def test_min_words_and_rounded_references() -> None:
     assert any("fewer than 10 prose words" in warning for warning in report["warnings"])
 
     third = 100 / 3
-    reference = {
+    reference: Any = {
         "summary": {"sentence_shape": {"one_sentence_paragraphs_pct": {
             "n": 5, "mean": round(third, 6), "sd": 0.0}}},
         "distributions": {},
@@ -537,7 +550,8 @@ def test_front_matter_indented_blocks_and_unclosed_fences() -> None:
 
 
 def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
-    reference = {
+    # Only what scoring reads, as the lower-level ``score`` accepts.
+    reference: Any = {
         "version": VERSION,
         "chunk_count": 5,
         "summary": {
@@ -563,8 +577,9 @@ def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
     assert "likeness" not in scored
 
     assert score([Chunk("a", "s", AUTHOR)], reference, parser=None)["reference"]["delta_mean"]
+    stale: Any = {**reference, "version": 1}
     with pytest.raises(StyleProfileError, match="report version 1; this one reads") as error:
-        score([Chunk("a", "s", AUTHOR)], {**reference, "version": 1}, parser=None)
+        score([Chunk("a", "s", AUTHOR)], stale, parser=None)
     assert error.value.code == "outdated"
 
 
@@ -617,7 +632,7 @@ def test_likeness_counts_only_the_contrast_direction_with_squared_weights() -> N
     }
 
 
-def _score(metrics: Metrics, distributions: dict[str, Any], reference: dict[str, Any]) -> Any:
+def _score(metrics: Metrics, distributions: dict[str, Any], reference: Any) -> Any:
     prepared = _prepare(reference)
     return _score_with(metrics, distributions, reference, prepared, prepared.lengths.at(500))
 
@@ -656,7 +671,10 @@ def test_contrast_reference_learns_weights_and_scores_likeness() -> None:
 
     author = score([Chunk("a", "s", AUTHOR)], reference, parser=None)
     generic = score([Chunk("g", "s", GENERIC)], reference, parser=None)
-    assert generic["reference"]["likeness_mean"] > author["reference"]["likeness_mean"]
+    generic_likeness = generic["reference"]["likeness_mean"]
+    author_likeness = author["reference"]["likeness_mean"]
+    assert generic_likeness is not None and author_likeness is not None
+    assert generic_likeness > author_likeness
     assert generic["chunks"][0]["reference"]["likeness_signals"]
 
     with pytest.raises(StyleProfileError, match="at least two documents"):
@@ -807,11 +825,13 @@ def test_contrast_auc_has_a_document_bootstrap_interval() -> None:
     second = build_reference(_author_docs(), parser=None, contrast=_llm_docs())
     calibration = first["contrast"]["calibration"]
 
-    low, high = calibration["auc_ci"]
-    assert low <= calibration["auc"] <= high
+    interval, auc = calibration["auc_ci"], calibration["auc"]
+    assert interval is not None and auc is not None
+    low, high = interval
+    assert low <= auc <= high
     # These drafts separate perfectly, so the interval needs no resampling.
     bootstrap = calibration["bootstrap"]
-    assert (calibration["auc"], bootstrap["method"], bootstrap["resamples"]) == (1.0, "exact", 0)
+    assert (auc, bootstrap["method"], bootstrap["resamples"]) == (1.0, "exact", 0)
     assert second["contrast"]["calibration"]["auc_ci"] == [low, high]
 
     single = build_reference(_author_docs(), parser=None, contrast=_llm_docs()[:1])
@@ -881,7 +901,7 @@ def test_length_baseline_detects_length_differences() -> None:
 def test_contrast_summary_shows_interval_and_length_baseline() -> None:
     from styleprofile.display import _contrast_summary, _Style
 
-    contrast = {
+    contrast: Contrast = {
         "label": "LLM",
         "chunk_count": 40,
         "sources": 8,
@@ -891,12 +911,20 @@ def test_contrast_summary_shows_interval_and_length_baseline() -> None:
             "contrast": {"median": 0.7, "min": 0.3},
             "auc": 0.96,
             "auc_ci": [0.9, 1.0],
+            "bootstrap": {
+                "method": "bootstrap",
+                "resamples": 500,
+                "unit": "document",
+                "reference_documents": 8,
+                "contrast_documents": 8,
+            },
             "length_baseline": {
                 "auc": 0.54,
                 "direction": "contrast longer",
                 "reference_median_words": 525,
                 "contrast_median_words": 526,
             },
+            "cross_validated": True,
         },
     }
     text = "\n".join(_contrast_summary(contrast, _Style(False)))
@@ -1327,7 +1355,11 @@ def test_missing_spacy_falls_back_with_a_note(
     assert report["settings"]["syntax_used"] is None
 
     # A reference with syntax: score follows it, and leaves syntax out when spaCy is missing.
-    report["settings"]["syntax_used"] = {"model": "en_core_web_sm", "model_version": "3.8.0"}
+    report["settings"]["syntax_used"] = {
+        "model": "en_core_web_sm",
+        "model_version": "3.8.0",
+        "spacy_version": "3.8.2",
+    }
     reference.write_text(json.dumps(report), encoding="utf-8")
     sample = str(_sample(tmp_path))
     assert main(["score", sample, str(reference)]) == 0

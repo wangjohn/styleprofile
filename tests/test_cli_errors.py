@@ -109,16 +109,16 @@ def test_reports_without_a_kind_are_refused_with_rebuild_advice(
 
     assert main(arguments) == 1
     err = capsys.readouterr().err
-    assert err.startswith(
-        f"error: {report} is not a style profile this version of styleprofile can read; "
-        "rebuild it\n"
+    # The message carries the remedy, so there is no hint.
+    assert err == (
+        f"error: {report} is not a style profile this version of styleprofile can read; make it "
+        "again with `styleprofile build` (or `score` or `evaluate`, whichever wrote it)\n"
     )
-    assert "hint: run `styleprofile build` again" in err
 
 
 def test_the_library_requires_a_kind(workspace: Path) -> None:
     _without_kind(workspace / "writer.json")
-    with pytest.raises(StyleProfileError, match="rebuild it") as raised:
+    with pytest.raises(StyleProfileError, match="make it again") as raised:
         load_report(workspace / "writer.json")
     assert raised.value.code == "outdated"
     with pytest.raises(StyleProfileError, match="no known kind"):

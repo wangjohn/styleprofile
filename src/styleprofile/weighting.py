@@ -29,10 +29,18 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, groupby, islice
 from operator import itemgetter, mul
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from styleprofile.core import DISTANCES, LIKENESSES, Verdict
 from styleprofile.metrics import UNSCORED_GROUPS, resolution
+from styleprofile.schema import (
+    AucConfidence,
+    Bootstrap,
+    LearnedContrast,
+    LengthBaseline,
+    LengthLikeness,
+    LikenessSignal,
+)
 from styleprofile.surface import Metrics
 
 Key = tuple[str, str]
@@ -260,7 +268,7 @@ class HeldDeltas:
 
 def likeness(
     z_scores: ZScores, effects: Mapping[Key, float], rms: Mapping[Key, float]
-) -> tuple[float, list[dict[str, Any]]]:
+) -> tuple[float, list[LikenessSignal]]:
     """Effect-size-squared weighted mean of each deviation in the contrast direction.
 
     Each z is measured in the reference's held-out units (z / max(rms, 1)), so a metric that
@@ -279,7 +287,7 @@ def likeness(
         if toward:
             contributions.append((effect * effect * toward / denominator, key, z))
     contributions.sort(reverse=True)
-    signals = [
+    signals: list[LikenessSignal] = [
         {"metric": f"{group}.{name}", "z": z, "contribution": share}
         for share, (group, name), z in contributions[:SIGNALS_SHOWN]
     ]
@@ -481,7 +489,7 @@ class Interval(NamedTuple):
 
     bounds: list[float]
     resamples: int
-    method: str
+    method: Literal["exact", "bootstrap"]
 
 
 def settle_tolerance(interval: Sequence[float]) -> float:
@@ -554,14 +562,14 @@ def auc_interval(
 
 def auc_confidence(
     reference: Sequence[Sequence[float]], contrast: Sequence[Sequence[float]]
-) -> dict[str, Any]:
+) -> AucConfidence:
     """``auc_ci``, the AUC's 95% document-bootstrap interval, and ``bootstrap``, how it was
     found: ``method`` is ``"exact"`` when every resample would give the same AUC (perfect
     separation, or one score throughout) so none were drawn, ``"bootstrap"`` when it was
     resampled, and None, with no interval, when either side has fewer than 2 documents
     (resampling one document cannot show document-to-document variation). ``resamples`` is
     how many were drawn, and ``*_documents`` how many documents each side had."""
-    found: dict[str, Any] = {
+    found: Bootstrap = {
         "method": None,
         "resamples": 0,
         "unit": "document",
@@ -577,7 +585,7 @@ def auc_confidence(
 
 def length_baseline(
     reference_words: Sequence[float], contrast_words: Sequence[float]
-) -> dict[str, Any] | None:
+) -> LengthBaseline | None:
     """How well chunk word count alone separates the contrast set, in its stronger direction.
 
     A likeness AUC is only informative if it clearly beats this: otherwise the contrast set
@@ -781,7 +789,7 @@ def likeness_range(
     learned: CrossValidated,
     *,
     icc: float | None = None,
-) -> dict[str, Any]:
+) -> LengthLikeness:
     """The likeness range of shorter pieces: the reference's held-out median and 95th
     percentile, and the contrast pieces' median.
 
@@ -826,7 +834,7 @@ def summarize_contrast(
     contrast_sources: Sequence[str],
     reference_words: Sequence[float],
     contrast_words: Sequence[float],
-) -> dict[str, Any]:
+) -> LearnedContrast:
     """The stored effects and calibration of a cross-validated contrast.
 
     The AUC gets a document-bootstrap 95% interval (``auc_confidence``), and ``*_words``
@@ -884,7 +892,7 @@ def delta_level(delta: float, ceiling: float | None = None) -> int:
     return 0 if delta < 1.0 else 1 if delta < 1.5 else 2 if delta < 2.5 else 3
 
 
-def mean_ceiling(stats: dict[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
+def mean_ceiling(stats: Mapping[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
     """The usual upper bound for an average over ``count`` chunks.
 
     A single chunk is unusual above the held-out 95th percentile; an average over n chunks
@@ -915,7 +923,7 @@ def pooled_ceiling(stats: Sequence[Mapping[str, Any]], floor: float = MIN_CEILIN
     return max(statistics.fmean(medians) + spread / len(stats), floor)
 
 
-def likeness_level(score: float, calibration: dict[str, Any], count: int = 1) -> int:
+def likeness_level(score: float, calibration: Mapping[str, Any], count: int = 1) -> int:
     """0-3 from the reference's own held-out range up to the contrast set's typical score."""
     ceiling = (
         mean_ceiling(calibration["reference"], count, LIKENESS_MIN_CEILING) or LIKENESS_MIN_CEILING

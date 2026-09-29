@@ -40,12 +40,10 @@ from styleprofile.metrics import describe
 from styleprofile.profile import (
     EVALUATION,
     REFERENCE,
-    UNREADABLE,
     VERSION,
     dumps_report,
     expand_path,
     load_report,
-    report_kind,
 )
 
 PROG = "styleprofile"
@@ -57,7 +55,6 @@ HINTS = {
     "unmatched_edits": "give each edited file its original's name and relative path",
     "duplicate_names": "give each draft a distinct file name or JSONL id",
     "forced_jsonl": "leave out --input-format jsonl to read each file by its extension",
-    "outdated": f"run `{PROG} build` again for a reference, or `{PROG} score` for a score report",
 }
 # Advice for notes, by ``Note.code``.
 NOTE_HINTS = {
@@ -459,9 +456,7 @@ def _load_score_reference(reference_arg: str) -> Profile:
                 f"{reference_arg} is not a style profile; the reference profile goes last: "
                 f"{PROG} score DRAFT [DRAFT ...] REFERENCE.json"
             ) from error
-        if error.code == "outdated":
-            message = f"{reference_arg} is {UNREADABLE}"
-            raise StyleProfileError(message, code=error.code) from error
+        # Other errors, an outdated profile's included, already name it as typed.
         raise
 
 
@@ -530,25 +525,13 @@ def _run_score(args: argparse.Namespace) -> int:
 
 
 def _run_show(args: argparse.Namespace) -> int:
-    try:
-        report = load_report(expand_path(args.report))
-    except StyleProfileError as error:
-        # Name the path as typed: Path() drops a trailing slash or a leading ./
-        problems = {
-            "not_found": "not found",
-            "directory": "is a directory, not a profile",
-            "not_a_profile": "is not a style profile",
-            "outdated": f"is {UNREADABLE}",
-        }
-        if error.code in problems:
-            message = f"{args.report} {problems[error.code]}"
-            raise StyleProfileError(message, code=error.code) from error
-        raise
+    # Errors name the path as typed: Path() drops a trailing slash or a leading ./
+    report = load_report(expand_path(args.report), args.report)
     color = _color()
-    if report_kind(report) == EVALUATION:
+    if report["kind"] == EVALUATION:
         print(format_evaluation(report, color=color))
         return 0
-    if report_kind(report) == REFERENCE:
+    if report["kind"] == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
         return 0
     print(format_summary(report, report["reference"]["baseline"], color=color, full=args.all))
