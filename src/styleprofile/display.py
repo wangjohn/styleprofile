@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +23,7 @@ from styleprofile.calibration import (
     shortfall,
     too_short_text,
 )
-from styleprofile.core import Verdict
+from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict
 from styleprofile.metrics import (
     DISTRIBUTION_LABELS,
     KEY_VIEW,
@@ -35,17 +35,19 @@ from styleprofile.metrics import (
     label,
 )
 from styleprofile.metrics import title as group_title
-from styleprofile.profile import summarize
+from styleprofile.profile import average_z, base_id, document_label, summarize
 from styleprofile.schema import (
     AucResult,
     Baseline,
     BaselineLength,
     Contrast,
+    DocumentEntry,
     EvaluationReport,
     LengthBaseline,
     MetricStats,
     ReferenceReport,
     ReportBase,
+    ScoredChunk,
     ScoreReport,
     ScoreVerdict,
     Survival,
@@ -70,6 +72,23 @@ VALUE_WIDTH = 12
 DIFFERENCES_SHOWN = 8
 NOTABLE_Z = 1.0
 CHUNKS_SHOWN = 3
+# The document table: names are cut in the middle to fit (``shorten``) between these
+# widths; the verdict column fits the longest verdict; past CLOSE_ROWS close documents the
+# rest are counted instead of listed, unless every row is asked for (--all).
+NAME_WIDTH = 36
+MIN_NAME_WIDTH = 12
+VERDICT_WIDTH = 18
+CLOSE_ROWS = 10
+# The width views are fitted to when the terminal's is unknown (not a terminal).
+DEFAULT_WIDTH = 80
+LIKENESS_CELLS = {
+    LikenessVerdict.LIKE_REFERENCE: "like reference",
+    LikenessVerdict.FEW_TRAITS: "a few traits",
+    LikenessVerdict.LEANS: "leans",
+    LikenessVerdict.LIKE_DRAFTS: "like drafts",
+    # Judged on Delta, but the reference has no likeness range at its length.
+    LikenessVerdict.TOO_SHORT: "too short",
+}
 BAR_WIDTH = 20
 # A full bar is 3x an area's usual held-out range, or a raw Delta of 3 without calibration.
 BAR_SCALE = 3.0
@@ -326,7 +345,8 @@ def _judged_view(report: ScoreReport) -> ScoreReport:
 def _chunk_z(report: ScoreReport) -> dict[tuple[str, str], list[float]]:
     """Each metric's z per chunk, over how many times more that metric swings at the
     chunk's length than in a reference window (``length_scale``), so a short chunk's arrows
-    count standard deviations of the writer's own text at its length."""
+    count standard deviations of the writer's own text at its length, as ``average_z``
+    reads them."""
     totals: dict[tuple[str, str], list[float]] = {}
     for chunk in report["chunks"]:
         scale = chunk["reference"]["calibration"]["length_scale"]
@@ -338,21 +358,8 @@ def _chunk_z(report: ScoreReport) -> dict[tuple[str, str], list[float]]:
 
 
 def _average_z(report: ScoreReport, reference: Baseline) -> dict[tuple[str, str], float]:
-    """Each metric's z against the reference, averaged over the scored chunks.
-
-    For a metric the reference never varies on, every differing chunk scores the cap in one
-    direction or the other; average the size instead so opposite differences cannot cancel.
-    """
-    averaged: dict[tuple[str, str], float] = {}
-    for (group, name), zs in _chunk_z(report).items():
-        if reference["summary"][group][name]["sd"]:
-            averaged[(group, name)] = sum(zs) / len(zs)
-        else:
-            size = sum(abs(z) for z in zs) / len(zs)
-            here = report["summary"][group][name]["mean"] or 0.0
-            there = reference["summary"][group][name]["mean"] or 0.0
-            averaged[(group, name)] = -size if here < there else size
-    return averaged
+    """Each metric's z against the reference, averaged over all the scored chunks."""
+    return average_z(report["chunks"], reference["summary"])
 
 
 def _comparison_rows(report: ScoreReport, reference: Baseline, style: _Style) -> list[str]:
@@ -520,15 +527,24 @@ def _flagged_chunks(report: ScoreReport, reference: Baseline, style: _Style) -> 
             lines += ["", style.bold(f"Most {name}-like chunks")]
             for chunk, score, level in most:
                 word = style.distance(f"{likeness_words(level, name):22}", level)
-                lines.append(f"  {score:5.2f}  {word}  {chunk['id']}")
+                lines.append(f"  {score:5.2f}  {word}  {_chunk_label(chunk)}")
     ranked = sorted(report["chunks"], key=lambda chunk: -(chunk["reference"]["delta"] or 0))
     flagged = [(chunk, level) for chunk in ranked if (level := chunk_level(chunk))][:CHUNKS_SHOWN]
     if flagged:
         lines += ["", style.bold("Least like the reference")]
         for chunk, level in flagged:
             word = style.distance(f"{DISTANCE_WORDS[level]:22}", level)
-            lines.append(f"  {chunk['reference']['delta'] or 0.0:5.2f}  {word}  {chunk['id']}")
+            lines.append(
+                f"  {chunk['reference']['delta'] or 0.0:5.2f}  {word}  {_chunk_label(chunk)}"
+            )
     return lines
+
+
+def _chunk_label(row: ScoredChunk) -> str:
+    """A chunk as its document is named (``document_label``), plus its window: ``posts/a.md#w2``
+    rather than the bare id ``a.md#w2``, which two documents can share."""
+    base = base_id(row["id"])
+    return document_label(row["source"], base) + row["id"][len(base) :]
 
 
 @dataclass(frozen=True)
@@ -632,22 +648,34 @@ def _area_deltas(areas: list[_Area], style: _Style) -> list[str]:
 
 
 def _comparison_view(
-    report: ScoreReport, reference: Baseline, style: _Style, full: bool
+    report: ScoreReport,
+    reference: Baseline,
+    style: _Style,
+    full: bool,
+    width: int,
+    shown: Mapping[str, str],
 ) -> list[str]:
     scored = report["reference"]
     verdict = scored["verdict"]
     delta = verdict["delta"]["value"]
     if delta is None:
         return ["", style.warn("No metrics could be compared with the reference.")]
+    documents = report["documents"]
+    lines = (
+        _document_table(documents, reference, style, width=width, full=full, shown=shown)
+        if len(documents) > 1
+        else []
+    )
+    headline = f"Across {len(documents)} documents: " if len(documents) > 1 else "Overall: "
     judged = verdict["judged"]
     if judged:
         # Always set for a judged verdict with a Delta.
         level = verdict["delta"]["level"] or 0
         # The shading is described only when it is shown; the words carry the same reading.
         shading = " Darker orange is further away." if style.color else ""
-        lines = [
+        lines += [
             "",
-            style.bold("Overall: ")
+            style.bold(headline)
             + style.distance(style.bold(verdict["verdict"]), level)
             + f"   Delta {delta:.2f}",
             style.dim(
@@ -659,9 +687,9 @@ def _comparison_view(
     else:
         # Always set for a verdict that is not judged.
         reason = verdict["reason"] or TOO_SHORT
-        lines = [
+        lines += [
             "",
-            style.bold("Overall: ") + style.bold(too_short_text(verdict)),
+            style.bold(headline) + style.bold(too_short_text(verdict)),
             style.dim(
                 f"  {reason[0].upper()}{reason[1:]}. Delta {delta:.2f}; the numbers below "
                 "are indicative only."
@@ -676,12 +704,19 @@ def _comparison_view(
             f" {left_out} of {report['chunk_count']} chunks {verb} too short to judge and "
             f"{verb} left out (see the note below)."
         )
+    if len(documents) > 1:
+        lines.append(
+            style.dim(
+                "  Pooled over every document from here on; the table above has each one's own."
+            )
+        )
     if reference["contrast"]:
         lines += ["", *_likeness(view, reference, style, verdict)]
     areas = _areas(verdict)
     lines += ["", *_area_lines(areas, style, judged=judged)]
     lines += ["", *_differences(view, reference, style, judged=judged)]
-    if report["chunk_count"] > 1:
+    # With every document one chunk, the chunk lists would repeat the document table.
+    if report["chunk_count"] > max(len(documents), 1):
         lines += _flagged_chunks(report, reference, style)
     if full:
         divergences = [
@@ -702,6 +737,164 @@ def _comparison_view(
         lines += _area_deltas(areas, style)
         lines += _comparison_rows(view, reference, style)
     return lines
+
+
+def _level(verdict: Verdict) -> int:
+    """0-3 for a Delta verdict, as ``delta_level`` gives; 0 for no verdict (not comparable,
+    too short to judge), which is never colored."""
+    return DISTANCES.index(verdict) if verdict in DISTANCES else 0
+
+
+def severity(
+    verdict: Verdict, likeness: LikenessVerdict | None, delta: float | None
+) -> tuple[int, float, int]:
+    """A sort key that puts the documents furthest from the reference first: by Delta
+    verdict, then Delta, then likeness verdict. Documents with no verdict (not comparable,
+    too short to judge) come last."""
+    level = DISTANCES.index(verdict) if verdict in DISTANCES else -1
+    likeness_level = LIKENESSES.index(likeness) if likeness in LIKENESSES else -1
+    return (-level, -(delta or 0.0) if level >= 0 else 0.0, -likeness_level)
+
+
+def worst_first(documents: Sequence[DocumentEntry]) -> list[DocumentEntry]:
+    """A score report's ``documents``, furthest from the reference first (``severity``)."""
+    return sorted(
+        documents,
+        key=lambda doc: severity(
+            Verdict(doc["verdict"]),
+            LikenessVerdict(doc["likeness_verdict"]) if doc["likeness_verdict"] else None,
+            doc["delta"],
+        ),
+    )
+
+
+def shorten(text: str, width: int) -> str:
+    """``text`` in at most ``width`` characters, cut in the middle so that both its first
+    folder and the end of its file name survive: ``spring/…-a-blog-post.md``. Names that
+    differ only in their folder, or only at the end, stay apart."""
+    if len(text) <= width:
+        return text
+    if width < 3:
+        return text[:width]
+    first, slash, _ = text.partition("/")
+    head = first + slash if slash and len(first) + 1 <= (width - 1) // 2 else ""
+    if not head:
+        head = text[: (width - 1) // 3]
+    tail = width - len(head) - 1
+    return f"{head}…{text[-tail:]}"
+
+
+def _likeness_cell(likeness: LikenessVerdict) -> str:
+    """A likeness verdict in the table's few columns."""
+    return LIKENESS_CELLS.get(likeness, str(likeness))
+
+
+def _counts(documents: Sequence[DocumentEntry]) -> str:
+    """How many documents got each verdict, furthest first: ``3 very different, 8 close``."""
+    counts: dict[str, int] = {}
+    for doc in worst_first(documents):
+        counts[doc["verdict"]] = counts.get(doc["verdict"], 0) + 1
+    return ", ".join(f"{count} {verdict}" for verdict, count in counts.items())
+
+
+def _fit(prefix: str, items: list[str], width: int) -> str:
+    """``prefix`` and as many of ``items`` as fit in ``width`` visible columns (at least
+    one), comma-separated."""
+    line = prefix + items[0]
+    for item in items[1:]:
+        if len(_strip(line + ", " + item)) > width:
+            break
+        line += ", " + item
+    return line
+
+
+def not_judged(chunks: int, chunks_judged: int) -> str:
+    """``; 8 of 10 chunks not judged: too short`` for a verdict that rests on only some of
+    its ``chunks``, else ``""`` (also when none is judged, which says so itself)."""
+    left_out = chunks - chunks_judged
+    if not chunks_judged or not left_out:
+        return ""
+    return f"; {left_out} of {chunks} chunks not judged: too short"
+
+
+def _document_table(
+    documents: Sequence[DocumentEntry],
+    reference: Baseline,
+    style: _Style,
+    *,
+    width: int = DEFAULT_WIDTH,
+    full: bool = False,
+    shown: Mapping[str, str] | None = None,
+) -> list[str]:
+    """One row per scored document, furthest from the reference first, fitted to ``width``
+    columns, with the metrics that set apart each one that is not close. Each is named by
+    ``shown`` when it has it, else by its saved name. Past ``CLOSE_ROWS`` close documents,
+    the rest are counted instead, unless ``full``."""
+    names = {doc["name"]: (shown or {}).get(doc["name"], doc["name"]) for doc in documents}
+    contrast = reference["contrast"]
+    name_label = contrast["label"] if contrast else None
+    likeness_header = f"{name_label}-likeness" if name_label else ""
+    likeness_width = max(len(likeness_header), *map(len, LIKENESS_CELLS.values()))
+    # indent, words, verdict, Delta and likeness, with two spaces between columns
+    fixed = 2 + 2 + 6 + 2 + VERDICT_WIDTH + 2 + 5 + (2 + likeness_width if name_label else 0)
+    longest = max(len("document"), *(len(name) for name in names.values()))
+    name_width = max(min(longest, NAME_WIDTH, width - fixed), MIN_NAME_WIDTH)
+    header = f"  {'document':{name_width}}  {'words':>6}  {'verdict':{VERDICT_WIDTH}}  {'Delta':>5}"
+    if name_label:
+        header += f"  {likeness_header}"
+    lines = [
+        "",
+        style.bold("By document") + style.dim("   furthest from the reference first"),
+        f"  {len(documents)} documents: {_counts(documents)}",
+        style.dim(header),
+    ]
+    close_shown = 0
+    for doc in worst_first(documents):
+        verdict = Verdict(doc["verdict"])
+        level = _level(verdict)
+        if verdict == Verdict.CLOSE and not full:
+            close_shown += 1
+            if close_shown > CLOSE_ROWS:
+                continue
+        name = shorten(names[doc["name"]], name_width)
+        if not doc["judged"]:
+            # Its figures are indicative only, so the row gives none.
+            lines.append(f"  {name:{name_width}}  {doc['words']:>6,}  {too_short_text(doc)}")
+            continue
+        delta = f"{doc['delta']:.2f}" if doc["delta"] is not None else "-"
+        row = (
+            f"  {name:{name_width}}  {doc['words']:>6,}  "
+            + style.distance(f"{verdict:{VERDICT_WIDTH}}", level)
+            + f"  {delta:>5}"
+        )
+        if name_label and doc["likeness_verdict"]:
+            likeness = LikenessVerdict(doc["likeness_verdict"])
+            shade = LIKENESSES.index(likeness) if likeness in LIKENESSES else 0
+            row += "  " + style.distance(_likeness_cell(likeness), shade)
+        lines.append(row.rstrip())
+        if note := not_judged(doc["chunks"], doc["chunks_judged"]):
+            # Its verdict rests on its judged chunks alone.
+            lines.append(style.dim(f"      {note[2:]}"))
+        notable = [
+            (item["metric"], item["z"])
+            for item in doc["differences"]
+            if abs(item["z"]) >= NOTABLE_Z
+        ]
+        differences = [
+            f"{metric_label(metric)} {style.distance(_arrow(z), z_level(z))}"
+            for metric, z in notable
+        ]
+        if level and differences:
+            lines.append(_fit(style.dim("      most different in: "), differences, width))
+    hidden = close_shown - CLOSE_ROWS
+    if hidden > 0:
+        lines.append(style.dim(f"  … and {hidden} more close (--all lists them)"))
+    return lines
+
+
+def metric_label(metric: str) -> str:
+    """A ``group.name`` metric key in plain English, as reports print it."""
+    return label(metric.split(".", 1)[1])[0]
 
 
 def format_reference_summary(
@@ -731,21 +924,28 @@ def format_summary(
     *,
     color: bool = False,
     full: bool = False,
+    width: int = DEFAULT_WIDTH,
+    shown: Mapping[str, str] | None = None,
 ) -> str:
     """Terminal view of a report; ``full`` shows every metric instead of the key ones.
 
     A score report is compared with ``reference``, its ``reference.baseline``; without it,
-    or for a reference profile, this shows the report's own metrics."""
+    or for a reference profile, this shows the report's own metrics. The document table of
+    a multi-document score fits ``width`` columns, and names each document by ``shown``
+    (its saved name to how the command line names it), or else by its saved name."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
     style = _Style(color, truecolor=color and truecolor)
     size = _size(report)
+    documents = len(report["documents"]) if "documents" in report else 0
+    if documents > 1:
+        size = f"{documents} documents, {size}"
     if reference is not None and "reference" in report:
         ref_name = Path(report["reference"]["path"] or "reference").name
         lines = [
             style.bold("STYLE COMPARISON")
             + style.dim(f"   {size}   vs {ref_name} ({reference['chunk_count']} chunks)")
         ]
-        lines += _comparison_view(report, reference, style, full)
+        lines += _comparison_view(report, reference, style, full, width, shown or {})
     else:
         lines = [style.bold("STYLE PROFILE") + style.dim(f"   {size}")]
         lines += _profile_view(report, style, full)

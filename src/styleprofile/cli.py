@@ -28,14 +28,27 @@ from styleprofile.api import (
     DEFAULT_TOP_K,
     DEFAULT_WINDOW_WORDS,
     INPUT_FORMATS,
+    DocumentResult,
     Profile,
     ScoreResult,
     Settings,
     SettingsOverrides,
 )
 from styleprofile.calibration import too_short_text
-from styleprofile.core import Note, NoteCode, StyleProfileError
-from styleprofile.display import format_evaluation, format_summary
+from styleprofile.core import (
+    LikenessVerdict,
+    Note,
+    NoteCode,
+    StyleProfileError,
+    Verdict,
+)
+from styleprofile.display import (
+    DEFAULT_WIDTH,
+    format_evaluation,
+    format_summary,
+    not_judged,
+    severity,
+)
 from styleprofile.metrics import describe
 from styleprofile.profile import (
     EVALUATION,
@@ -45,6 +58,7 @@ from styleprofile.profile import (
     expand_path,
     load_report,
 )
+from styleprofile.schema import FailedDocument, FailLevels
 
 PROG = "styleprofile"
 # Advice for library errors, which name the problem but never a flag.
@@ -65,6 +79,22 @@ NOTE_HINTS = {
     ),
     NoteCode.READ_AS_JSONL: "pass --input-format markdown to read it as prose",
 }
+# `score` exits with this when a document reaches a --fail-above or --fail-likeness level.
+EXIT_FAILED = 3
+FAIL_ABOVE = {
+    "somewhat": Verdict.SOMEWHAT_DIFFERENT,
+    "clearly": Verdict.CLEARLY_DIFFERENT,
+    "very": Verdict.VERY_DIFFERENT,
+}
+FAIL_LIKENESS = {
+    "few": LikenessVerdict.FEW_TRAITS,
+    "leans": LikenessVerdict.LEANS,
+    "like": LikenessVerdict.LIKE_DRAFTS,
+}
+SCORE_EXIT_STATUS = f"""\
+exit status: 0 scored, 1 error, 2 usage error, {EXIT_FAILED} a document reached the
+--fail-above or --fail-likeness level (named on stderr, in input order); a document with
+no verdict (not comparable, or too short to judge) never does"""
 # Library errors and notes name a setting (``setting``) as a whole word; the CLI prints the
 # flag that sets it instead.
 FLAGS = {
@@ -85,6 +115,12 @@ def _color(stream: TextIO | None = None) -> bool:
     if os.environ.get("FORCE_COLOR", "0") not in ("", "0"):
         return True
     return (stream or sys.stdout).isatty()
+
+
+def _width() -> int:
+    """The terminal's width for views fitted to it, or 80 when stdout is not a terminal, so
+    piped and logged output does not depend on the window it ran in."""
+    return shutil.get_terminal_size().columns if sys.stdout.isatty() else DEFAULT_WIDTH
 
 
 def _note(message: str) -> None:
@@ -223,8 +259,10 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         **_help_parser(
             "Score drafts against a reference profile. Window size, minimum words, text field "
             "and syntax come from the reference unless overridden.",
-            f"{PROG} score draft.md writer.json",
-            usage=f"{PROG} score [options] SAMPLE [SAMPLE ...] REFERENCE.json",
+            f"{PROG} score draft.md writer.json\n  "
+            f"{PROG} score -q --fail-above clearly -r writer.json a.md b.md   # a hook or CI",
+            usage=f"{PROG} score [options] [-r REFERENCE.json] SAMPLE [SAMPLE ...] "
+            "[REFERENCE.json]",
         ),
     )
     score_parser.add_argument(
@@ -232,7 +270,13 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         nargs="+",
         metavar="SAMPLE ... REFERENCE.json",
         help="the texts to score (files, directories, or - for stdin), then the reference "
-        "profile last",
+        "profile unless -r gives it",
+    )
+    score_parser.add_argument(
+        "-r",
+        "--reference",
+        metavar="REFERENCE.json",
+        help="the reference profile, if not last (for pre-commit)",
     )
     score_parser.add_argument(
         "-o", "--output", metavar="REPORT.json", help="also save the full report as JSON"
@@ -245,13 +289,24 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         "--quiet",
         "-q",
         action="store_true",
-        help="print one verdict line and no notes",
+        help="print one verdict line per document and no notes",
     )
     score_parser.add_argument(
-        "--all", action="store_true", help="show every metric, not just key ones"
+        "--fail-above",
+        choices=list(FAIL_ABOVE),
+        help=f"exit {EXIT_FAILED} if a document is at least this different",
+    )
+    score_parser.add_argument(
+        "--fail-likeness",
+        choices=list(FAIL_LIKENESS),
+        help=f"exit {EXIT_FAILED} if a document's likeness reaches this level",
+    )
+    score_parser.add_argument(
+        "--all", action="store_true", help="show every metric and document, not just key ones"
     )
     _add_input_flags(score_parser, inherited=True)
     score_parser.set_defaults(top_k=None)
+    score_parser.epilog = f"{score_parser.epilog}\n\n{SCORE_EXIT_STATUS}"
 
     show = commands.add_parser(
         "show",
@@ -264,7 +319,9 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     show.add_argument(
         "report", metavar="REPORT.json", help="a report written by build, score or evaluate"
     )
-    show.add_argument("--all", action="store_true", help="show every metric, not just key ones")
+    show.add_argument(
+        "--all", action="store_true", help="show every metric and document, not just key ones"
+    )
 
     metrics = commands.add_parser(
         "metrics",
@@ -431,55 +488,159 @@ def _run_build(args: argparse.Namespace) -> int:
 
 def _split_score_paths(args: argparse.Namespace) -> tuple[list[str], str]:
     usage = f"{PROG} score DRAFT [DRAFT ...] REFERENCE.json"
-    if len(args.paths) < 2:
-        raise StyleProfileError(f"score needs a sample and then a reference profile: {usage}")
-    *samples, reference = args.paths
+    if args.reference is not None:
+        profiles = [path for path in args.paths if path.lower().endswith(".json")]
+        if profiles:
+            raise StyleProfileError(
+                f"{profiles[-1]} looks like a second reference profile; give the reference "
+                "once, either with -r or last"
+            )
+        samples, reference = list(args.paths), args.reference
+        usage = f"{PROG} score -r REFERENCE.json DRAFT [DRAFT ...]"
+    elif len(args.paths) < 2:
+        raise StyleProfileError(
+            f"score needs a sample and then a reference profile: {usage}, "
+            f"or {PROG} score -r REFERENCE.json DRAFT"
+        )
+    else:
+        *samples, reference = args.paths
+    flagged = args.reference is not None
     if reference == "-":
-        raise StyleProfileError(
-            f"the reference profile (the last argument) must be a file: {usage}"
-        )
+        where = "given with -r" if flagged else "the last argument"
+        raise StyleProfileError(f"the reference profile ({where}) must be a file: {usage}")
     if _path(reference).is_dir():
-        raise StyleProfileError(
-            f"{reference} is a directory, not a profile; the reference profile goes last: {usage}"
-        )
+        where = "" if flagged else "; the reference profile goes last"
+        raise StyleProfileError(f"{reference} is a directory, not a profile{where}: {usage}")
     if not _path(reference).is_file():
-        raise StyleProfileError(f"reference profile {reference} not found; it goes last: {usage}")
+        where = "" if flagged else "; it goes last"
+        raise StyleProfileError(f"reference profile {reference} not found{where}: {usage}")
     return samples, reference
 
 
-def _load_score_reference(reference_arg: str) -> Profile:
+def _load_score_reference(reference_arg: str, flagged: bool = False) -> Profile:
+    """The reference profile; ``flagged`` when it was given with -r rather than last."""
     try:
         return Profile.load(reference_arg)
     except StyleProfileError as error:
         if error.code == "not_a_profile":
-            raise StyleProfileError(
-                f"{reference_arg} is not a style profile; the reference profile goes last: "
-                f"{PROG} score DRAFT [DRAFT ...] REFERENCE.json"
-            ) from error
+            where = (
+                "; -r takes the profile made by `styleprofile build`"
+                if flagged
+                else f"; the reference profile goes last: {PROG} score DRAFT [DRAFT ...] "
+                "REFERENCE.json"
+            )
+            raise StyleProfileError(f"{reference_arg} is not a style profile{where}") from error
         # Other errors, an outdated profile's included, already name it as typed.
         raise
 
 
-def _headline(result: ScoreResult, samples: Sequence[str]) -> str:
-    """One line with the same verdict words as the full comparison view."""
-    if len(samples) == 1:
-        name = "stdin" if samples[0] == "-" else samples[0]
+def _headline(
+    name: str,
+    delta: float | None,
+    verdict: Verdict,
+    likeness: float | None,
+    likeness_verdict: LikenessVerdict | None,
+    label: str | None,
+    *,
+    too_short: str | None = None,
+    note: str = "",
+) -> str:
+    """One line with the same verdict words as the full comparison view; ``too_short``
+    replaces the verdict and figures of a text too short to judge."""
+    if delta is None:
+        return f"{name}: no metrics could be compared with the reference"
+    if too_short:
+        return f"{name}: {too_short}"
+    parts = [f"{name}: {verdict} (Delta {delta:.2f}{note})"]
+    if likeness is not None and likeness_verdict is not None and label:
+        parts.append(f"{label}-likeness {likeness_verdict.words(label)} ({likeness:.2f})")
+    return "; ".join(parts)
+
+
+def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
+    """``-q``: one line per document, furthest from the reference first, each named where
+    it can be opened (``DocumentResult.shown``)."""
+    label = result.contrast_label
+    documents = result.documents
+    if len(documents) > 1:
+        ranked = sorted(
+            documents, key=lambda doc: severity(doc.verdict, doc.likeness_verdict, doc.delta)
+        )
+        return [
+            _headline(
+                doc.shown,
+                doc.delta,
+                doc.verdict,
+                doc.likeness,
+                doc.likeness_verdict,
+                label,
+                too_short=None
+                if doc.judged
+                else too_short_text({"chunks": doc.chunks, "words": doc.words}),
+                note=not_judged(doc.chunks, doc.chunks_judged),
+            )
+            for doc in ranked
+        ]
+    if documents:
+        name = documents[0].shown
+    elif len(samples) == 1:
+        name = api.STDIN_SHOWN if samples[0] == "-" else samples[0]
     else:
         name = f"{len(samples)} inputs"
     if result.delta is None:
-        return f"{name}: no metrics could be compared with the reference"
+        return [f"{name}: no metrics could be compared with the reference"]
     if not result.judged:
-        return f"{name}: {too_short_text(result.report['reference']['verdict'])}"
+        return [f"{name}: {too_short_text(result.report['reference']['verdict'])}"]
     verdict = result.report["reference"]["verdict"]
-    left_out = verdict["chunks"] - verdict["chunks_judged"]
     # Chunks too short to judge count for nothing, which a batch line must not hide.
-    note = f"; {left_out} of {verdict['chunks']} chunks not judged: too short" if left_out else ""
-    parts = [f"{name}: {result.verdict} (Delta {result.delta:.2f}{note})"]
-    label = result.contrast_label
-    if result.likeness is not None and result.likeness_verdict is not None and label:
-        likeness = f"{result.likeness_verdict.words(label)} ({result.likeness:.2f})"
-        parts.append(f"{label}-likeness {likeness}")
-    return "; ".join(parts)
+    note = not_judged(verdict["chunks"], verdict["chunks_judged"])
+    return [
+        _headline(
+            name,
+            result.delta,
+            result.verdict,
+            result.likeness,
+            result.likeness_verdict,
+            label,
+            note=note,
+        )
+    ]
+
+
+def _failed(
+    args: argparse.Namespace, result: ScoreResult
+) -> list[tuple[DocumentResult, FailedDocument]]:
+    """The documents that reach the --fail-above or --fail-likeness level, in input order,
+    each with what the report records: the verdicts that did (None for a check it passed).
+    Each document is checked once (``api.fails``), so this is linear in their number."""
+    above = FAIL_ABOVE.get(args.fail_above or "")
+    likeness = FAIL_LIKENESS.get(args.fail_likeness or "")
+    label = result.contrast_label or ""
+    entries: list[tuple[DocumentResult, FailedDocument]] = []
+    for doc in result.documents:
+        delta_failed, likeness_failed = api.fails(doc, above, likeness)
+        if not (delta_failed or likeness_failed):
+            continue
+        entry: FailedDocument = {
+            "name": doc.name,
+            "path": doc.path or doc.name,
+            "delta": str(doc.verdict) if delta_failed else None,
+            "likeness": (
+                doc.likeness_verdict.words(label)
+                if likeness_failed and doc.likeness_verdict
+                else None
+            ),
+        }
+        entries.append((doc, entry))
+    return entries
+
+
+def _failed_line(doc: DocumentResult, entry: FailedDocument) -> str:
+    """``failed: drafts/a.md: delta very different; likeness leans LLM``: one per document,
+    named as ``-q`` names it."""
+    parts = [f"delta {entry['delta']}"] if entry["delta"] else []
+    parts += [f"likeness {entry['likeness']}"] if entry["likeness"] else []
+    return f"failed: {doc.shown}: " + "; ".join(parts)
 
 
 def _run_score(args: argparse.Namespace) -> int:
@@ -489,7 +650,12 @@ def _run_score(args: argparse.Namespace) -> int:
     _inputs_exist(samples)
     if args.output:
         _refuse_overwrite(args.output, samples)
-    profile = _load_score_reference(reference_arg)
+    profile = _load_score_reference(reference_arg, flagged=args.reference is not None)
+    if args.fail_likeness and not profile.report.get("contrast"):
+        raise StyleProfileError(
+            f"--fail-likeness needs a reference built with --contrast, and {reference_arg} "
+            "has none; rebuild it with --contrast, or use --fail-above"
+        )
     # Flags left out are inherited from the profile.
     overrides: SettingsOverrides = {}
     if args.window_words is not None:
@@ -505,6 +671,13 @@ def _run_score(args: argparse.Namespace) -> int:
     result = profile.score(samples, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
+    failed = _failed(args, result)
+    if args.fail_above or args.fail_likeness:
+        # Recorded for CI, which reads --json or -o: the levels asked, and who reached them.
+        # argparse allows only FAIL_ABOVE's and FAIL_LIKENESS's keys.
+        levels: FailLevels = {"above": args.fail_above, "likeness": args.fail_likeness}
+        result.report["fail"] = levels
+        result.report["failed"] = [entry for _, entry in failed]
     if args.output:
         _refuse_overwrite(args.output, samples, result.sources)
         result.save(args.output)
@@ -513,14 +686,19 @@ def _run_score(args: argparse.Namespace) -> int:
         if args.output:
             _note(f"wrote {args.output}")
     elif args.quiet:
-        print(_headline(result, samples), flush=True)
+        print("\n".join(_quiet_lines(result, samples)), flush=True)
         if result.warnings:
             _note(f"{_plural(len(result.warnings), 'warning')}; run without -q to see them")
     else:
         setting = result.report["reference"]["verdict"].get("setting")
-        print(_flagged(result.to_text(color=_color(), full=args.all), setting))
+        print(_flagged(result.to_text(color=_color(), full=args.all, width=_width()), setting))
         if args.output:
             print(f"\nwrote {args.output}")
+    if failed:
+        sys.stdout.flush()  # keep these after the report when both go to one pipe
+        for doc, entry in failed:
+            print(_failed_line(doc, entry), file=sys.stderr)
+        return EXIT_FAILED
     return 0
 
 
@@ -534,7 +712,8 @@ def _run_show(args: argparse.Namespace) -> int:
     if report["kind"] == REFERENCE:
         print(format_summary(report, color=color, full=args.all))
         return 0
-    print(format_summary(report, report["reference"]["baseline"], color=color, full=args.all))
+    baseline = report["reference"]["baseline"]
+    print(format_summary(report, baseline, color=color, full=args.all, width=_width()))
     return 0
 
 

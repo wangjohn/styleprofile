@@ -1,10 +1,17 @@
 $ styleprofile score examples/writer/sharpening.md examples/writer/old-maps.md '<tmp>/writer.json'
 [exit 0]
 --- stdout
-STYLE COMPARISON   2 chunks, 1,277 words   vs writer.json (7 chunks)
+STYLE COMPARISON   2 documents, 2 chunks, 1,277 words   vs writer.json (7 chunks)
 
-Overall: close   Delta 0.59
+By document   furthest from the reference first
+  2 documents: 2 close
+  document                      words  verdict             Delta  LLM-likeness
+  examples/writer/old-maps.md     640  close                0.62  like reference
+  examples/…ter/sharpening.md     637  close                0.57  like reference
+
+Across 2 documents: close   Delta 0.59
   Lower is closer. The reference's own held-out writing at these lengths (637-640 words per chunk) scores 0.78 typically (a mean over 2 chunks, up to 0.93).
+  Pooled over every document from here on; the table above has each one's own.
 
 LLM-likeness: like the reference   0.16
   The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.66); the LLM drafts 13.88.

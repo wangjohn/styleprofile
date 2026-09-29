@@ -487,12 +487,73 @@ class ReferenceScore(TypedDict):
     baseline: Baseline
 
 
+class DocumentDifference(TypedDict):
+    """A metric (``group.name``) and its mean z over a document's judged chunks, uncapped."""
+
+    metric: str
+    z: float
+
+
+class DocumentSignal(DocumentDifference):
+    """A metric that adds to a document's likeness, and its mean share of it."""
+
+    contribution: float
+
+
+class DocumentEntry(TypedDict):
+    """One scored document (a file, a JSONL record or a ``Text``), judged on its own chunks
+    by ``calibration.verdict``, as the headline is over all of them (plan PR 7)."""
+
+    # How reports list it (``posts/a.md``, ``comments.jsonl:17``), and its saved source.
+    name: str
+    path: str
+    chunks: int
+    words: int
+    # As ``ScoreVerdict``: whether any chunk is long enough to judge, how many are, and why
+    # there is no verdict (None when there is one).
+    judged: bool
+    chunks_judged: int
+    reason: str | None
+    # Means over the judged chunks (all of them when none is); None when not comparable.
+    delta: float | None
+    # The verdict words: a distance, "too short to judge" or "not comparable".
+    verdict: str
+    # None without a contrast set.
+    likeness: float | None
+    likeness_verdict: str | None
+    differences: list[DocumentDifference]
+    # Only against a reference with a contrast set.
+    signals: NotRequired[list[DocumentSignal]]
+
+
+class FailLevels(TypedDict):
+    """The levels ``score --fail-above`` and ``--fail-likeness`` asked for; None if not."""
+
+    above: Literal["somewhat", "clearly", "very"] | None
+    likeness: Literal["few", "leans", "like"] | None
+
+
+class FailedDocument(TypedDict):
+    """A document that reached a fail level, with the verdict that did (None for a check it
+    passed)."""
+
+    name: str
+    path: str
+    delta: str | None
+    likeness: str | None
+
+
 class ScoreReport(ReportBase):
     """Drafts scored against a reference, as ``styleprofile score`` saves them."""
 
     kind: Literal["score"]
     chunks: list[ScoredChunk]
+    # Each document's own verdict, in input order.
+    documents: list[DocumentEntry]
     reference: ReferenceScore
+    # Only when ``score`` was given --fail-above or --fail-likeness.
+    fail: NotRequired[FailLevels]
+    failed: NotRequired[list[FailedDocument]]
 
 
 # Evaluation report

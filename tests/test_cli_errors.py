@@ -87,11 +87,14 @@ def test_the_flat_form_gets_one_working_command(
     assert main(command) == 0
 
 
-def test_score_has_no_reference_flag(capsys: pytest.CaptureFixture[str], workspace: Path) -> None:
-    with pytest.raises(SystemExit) as exited:
-        main(["score", "draft.md", "--reference", "writer.json"])
-    assert exited.value.code == 2
-    assert "unrecognized arguments: --reference" in capsys.readouterr().err
+def test_score_takes_the_reference_once(
+    capsys: pytest.CaptureFixture[str], workspace: Path
+) -> None:
+    # -r gives the reference for tools that append file names; a second one is refused.
+    assert main(["score", "-r", "writer.json", "draft.md", "writer.json"]) == 1
+    assert "give the reference once, either with -r or last" in capsys.readouterr().err
+    assert main(["score", "-r", "draft.md", "draft.md"]) == 1
+    assert "-r takes the profile made by `styleprofile build`" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

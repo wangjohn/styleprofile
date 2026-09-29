@@ -36,7 +36,14 @@ from styleprofile.calibration import (
     plan_pieces,
     verdict,
 )
-from styleprofile.core import Note, NoteCode, StyleProfileError
+from styleprofile.core import (
+    LIKENESSES,
+    LikenessVerdict,
+    Note,
+    NoteCode,
+    StyleProfileError,
+    Verdict,
+)
 from styleprofile.formats import (
     AUTO,
     HTML,
@@ -56,6 +63,7 @@ from styleprofile.schema import (
     ChunkScore,
     Contrast,
     DeltaRange,
+    DocumentEntry,
     EvaluationReport,
     LengthCalibration,
     LikenessSignal,
@@ -173,6 +181,8 @@ OTHER = "<other>"
 # The saved name of an input whose own name says nothing (the home directory, "/").
 UNNAMED_ROOT = "input"
 DEVIATIONS_SHOWN = 8
+# Per document, a score report keeps this many of the largest differences and signals.
+DOCUMENT_TRAITS = 3
 SHORT_CHUNK_WORDS = 150
 
 
@@ -217,11 +227,16 @@ def _jsonl_chunks(
     source: str,
     path: str | None,
     text_field: str | Sequence[str] | None,
+    repeated: list[tuple[str, int]] | None = None,
 ) -> list[Chunk]:
     """Read JSONL ``text``: ``name`` labels errors and default ids, ``source`` is saved for
-    each record, and ``path`` is the file it came from (None for stdin)."""
+    each record, and ``path`` is the file it came from (None for stdin).
+
+    Each record is its own document. Records that share an id are told apart by line
+    (``same@3``), and each such id and how many records have it is added to ``repeated``;
+    an id that ends like a window suffix is escaped (``literal_id``)."""
     fields = _text_fields(text_field)
-    chunks: list[Chunk] = []
+    records: list[tuple[int, str, str]] = []
     for line_number, line in enumerate(text.split("\n"), start=1):
         if not line.strip():
             continue
@@ -240,9 +255,36 @@ def _jsonl_chunks(
         record_id = record.get("id")
         # An id of 0 is kept; a missing, null or empty id falls back to the line.
         label = Path(name).name
-        chunk_id = f"{label}:{line_number}" if record_id in (None, "") else str(record_id)
-        chunks.append(Chunk(chunk_id, source, record[field], path))
-    return chunks
+        chunk_id = (
+            f"{label}:{line_number}" if record_id in (None, "") else literal_id(str(record_id))
+        )
+        records.append((line_number, chunk_id, record[field]))
+    counts = Counter(chunk_id for _, chunk_id, _ in records)
+    shared = {chunk_id: count for chunk_id, count in counts.items() if count > 1}
+    if repeated is not None:
+        repeated += shared.items()
+    return [
+        Chunk(f"{chunk_id}@{line}" if chunk_id in shared else chunk_id, source, body, path)
+        for line, chunk_id, body in records
+    ]
+
+
+def literal_id(value: str) -> str:
+    """An id from outside (a JSONL id, a ``Text`` name) that window suffixes cannot be read
+    into: a trailing ``#w2`` becomes ``%23w2``, so ``base_id`` strips only the suffixes
+    ``window`` adds, and a record ``x#w2`` stays apart from a record ``x``."""
+    return _WINDOW_SUFFIX.sub(lambda match: match.group(0).replace("#", "%23"), value)
+
+
+def _repeated_note(label: str, repeated: Sequence[tuple[str, int]]) -> Note:
+    """The note for JSONL records in ``label`` that share ids (see ``_jsonl_chunks``)."""
+    shared = ", ".join(f"{count} share {record_id!r}" for record_id, count in repeated[:3])
+    more = f" and {len(repeated) - 3} more ids" if len(repeated) > 3 else ""
+    return Note(
+        f"records in {label} share ids ({shared}{more}); each record is still its own "
+        "document, named by id and line (id@LINE)",
+        NoteCode.REPEATED_ID,
+    )
 
 
 def expand_path(value: str) -> Path:
@@ -351,10 +393,11 @@ def _forced_jsonl(
     source: str,
     path: str | None,
     text_field: str | Sequence[str] | None,
+    repeated: list[tuple[str, int]] | None = None,
 ) -> list[Chunk]:
     """Read JSONL that was asked for rather than detected, saying so when it fails."""
     try:
-        return _jsonl_chunks(text, name, source, path, text_field)
+        return _jsonl_chunks(text, name, source, path, text_field, repeated)
     except StyleProfileError as error:
         if error.code:
             raise
@@ -371,6 +414,8 @@ class _Detected:
 
     sniffed: list[str]
     empty: list[str]
+    # JSONL files whose records share ids: (label, [(id, count), ...]).
+    repeated: list[tuple[str, list[tuple[str, int]]]] = field(default_factory=list)
 
 
 def _file_chunks(
@@ -385,9 +430,14 @@ def _file_chunks(
     text = _read_text(path)
     fmt = _format_of(path, input_format)
     if fmt == JSONL:
+        repeated: list[tuple[str, int]] = []
         if input_format == JSONL and path.suffix.lower() != ".jsonl":
-            return _forced_jsonl(text, str(path), source, str(path), text_field)
-        return _jsonl_chunks(text, str(path), source, str(path), text_field)
+            chunks = _forced_jsonl(text, str(path), source, str(path), text_field, repeated)
+        else:
+            chunks = _jsonl_chunks(text, str(path), source, str(path), text_field, repeated)
+        if repeated:
+            detected.repeated.append((label, repeated))
+        return chunks
     if fmt == AUTO and looks_like_html(text):
         detected.sniffed.append(label)
         fmt = HTML
@@ -402,8 +452,11 @@ def _stdin_chunks(
     input_format: str, text_field: str | Sequence[str] | None, notes: list[Note]
 ) -> list[Chunk]:
     text = _decode(sys.stdin.buffer.read(), "stdin")
+    repeated: list[tuple[str, int]] = []
     if input_format == JSONL:
-        return _forced_jsonl(text, "stdin", "stdin", None, text_field)
+        chunks = _forced_jsonl(text, "stdin", "stdin", None, text_field, repeated)
+        notes += [_repeated_note("stdin", repeated)] if repeated else []
+        return chunks
     fmt = input_format
     if fmt == AUTO and looks_like_jsonl(text):
         notes.append(
@@ -412,7 +465,9 @@ def _stdin_chunks(
                 NoteCode.READ_AS_JSONL,
             )
         )
-        return _jsonl_chunks(text, "stdin", "stdin", None, text_field)
+        chunks = _jsonl_chunks(text, "stdin", "stdin", None, text_field, repeated)
+        notes += [_repeated_note("stdin", repeated)] if repeated else []
+        return chunks
     if fmt == AUTO and looks_like_html(text):
         fmt = HTML
         notes.append(Note("stdin looks like HTML, so it is read as HTML", NoteCode.READ_AS_HTML))
@@ -587,6 +642,7 @@ def load_chunks(
                     NoteCode.READ_AS_HTML_IN_FOLDER if path.is_dir() else NoteCode.READ_AS_HTML,
                 )
             )
+        notes += [_repeated_note(label, repeated) for label, repeated in detected.repeated]
         if detected.empty:
             has = "has" if len(detected.empty) == 1 else "have"
             notes.append(
@@ -1697,6 +1753,7 @@ def score(
         **base.described,
         "warnings": warnings,
         "chunks": rows,
+        "documents": documents(rows, reference),
         "reference": {
             # Only the profile's file name: a saved report never reveals where files live.
             "path": root_name(str(reference_path)) if reference_path else None,
@@ -1723,6 +1780,151 @@ def score(
             "baseline": _baseline(reference),
         },
     }
+
+
+def average_z(
+    rows: Sequence[ScoredChunk], summary: Mapping[str, Mapping[str, Mapping[str, Any]]]
+) -> dict[tuple[str, str], float]:
+    """Each metric's z against the reference, averaged over scored chunk rows. Each chunk's
+    z is first divided by how many times more that metric swings at the chunk's length than
+    in a reference window (its calibration's ``length_scale``), so a short chunk's z counts
+    standard deviations of the writer's own text at its length.
+
+    For a metric the reference never varies on (no ``sd`` in its ``summary``), every
+    differing chunk scores the cap in one direction or the other; average the size instead,
+    signed by which side of the reference's mean the chunks' mean value falls, so opposite
+    differences cannot cancel.
+    """
+    zs: dict[tuple[str, str], list[float]] = {}
+    for row in rows:
+        scale = row["reference"]["calibration"]["length_scale"]
+        for group, values in row["reference"]["z"].items():
+            for name, z in values.items():
+                factor = scale.get(group, {}).get(name, 1.0)
+                zs.setdefault((group, name), []).append(z / factor)
+    averaged: dict[tuple[str, str], float] = {}
+    for (group, name), values in zs.items():
+        stats: Mapping[str, Any] = summary.get(group, {}).get(name, {})
+        if stats.get("sd"):
+            averaged[(group, name)] = sum(values) / len(values)
+            continue
+        size = sum(abs(z) for z in values) / len(values)
+        here = _mean_of([(row["metrics"].get(group) or {}).get(name) for row in rows]) or 0.0
+        there = stats.get("mean") or 0.0
+        averaged[(group, name)] = -size if here < there else size
+    return averaged
+
+
+# ``literal_id``'s escaped window suffixes at the end of an id, before a repeated id's line.
+_ESCAPED_SUFFIX = re.compile(r"(?:%23w\d+)+(?=(?:@\d+)?$)")
+
+# A number that keeps a saved source unique (``posts (2)/a.md``, ``notes (2).md``).
+_SOURCE_NUMBER = re.compile(r" \(\d+\)(?=(?:\.[^/.]*)?(?:/|$))")
+
+
+def shown_id(value: str) -> str:
+    """An id as it was given: ``literal_id``'s escape undone (``x%23w2`` is ``x#w2``), for
+    reports to name documents by. The escape stays in chunk ids."""
+    return _ESCAPED_SUFFIX.sub(lambda match: match.group(0).replace("%23", "#"), value)
+
+
+def document_label(source: str, base: str) -> str:
+    """How reports name a document, from its saved source and its id without window
+    suffixes (``base_id``): a file or stdin by its source (``posts/2024/a.md``,
+    ``notes (2).md``), a JSONL record by its file and id (``comments.jsonl:17``), and a
+    ``Text`` by its name, each id as given (``shown_id``). Never an absolute path, since
+    sources never are."""
+    base = shown_id(base)
+    if source.startswith("<"):  # Text inputs: <text>, <contrast>
+        return base
+    unnumbered = _SOURCE_NUMBER.sub("", source, count=1)
+    if unnumbered == base or unnumbered.endswith("/" + base):
+        return source
+    file_name = PurePosixPath(source).name
+    if base.startswith(file_name + ":"):  # a record without an id, named by its line
+        return source[: len(source) - len(file_name)] + base
+    return f"{source}:{base}"
+
+
+def _document_names(keys: Sequence[tuple[str, str]]) -> list[str]:
+    """``document_label`` for each document (source, base id), in order; a label an earlier
+    document already has (only possible for hand-made chunks) gets a number, ``x (2)``."""
+    names: list[str] = []
+    taken: set[str] = set()
+    for source, base in keys:
+        label = name = document_label(source, base)
+        number = 1
+        while name in taken:
+            number += 1
+            name = f"{label} ({number})"
+        taken.add(name)
+        names.append(name)
+    return names
+
+
+def _key(metric: str) -> tuple[str, str]:
+    group, _, name = metric.partition(".")
+    return group, name
+
+
+def documents(rows: Sequence[ScoredChunk], reference: ReferenceReport) -> list[DocumentEntry]:
+    """Scored chunk rows grouped by document (``document_of``), in input order, each judged
+    by ``calibration.verdict`` on its own chunks, the function that makes the pooled
+    headline, so each document is read at its own chunks' lengths: mean Delta and
+    likeness, their verdicts (or "too short to judge", with ``reason``), and the metrics
+    that differ most.
+
+    Each is named by ``document_label`` and keeps its saved ``path``, its source.
+    """
+    grouped: dict[tuple[str, str], list[ScoredChunk]] = {}
+    for row in rows:
+        grouped.setdefault((row["source"], base_id(row["id"])), []).append(row)
+    label = (reference.get("contrast") or {}).get("label")
+    entries: list[DocumentEntry] = []
+    for name, members in zip(_document_names(list(grouped)), grouped.values(), strict=True):
+        judged = verdict(members, label)
+        # The figures cover the chunks long enough to judge, as the verdict does.
+        used = [row for row in members if row["reference"]["calibration"]["judged"]] or members
+        mean_delta = judged["delta"]["value"]
+        likeness = judged["likeness"]
+        averaged = average_z(used, reference["summary"])
+        largest = sorted(averaged.items(), key=lambda item: -abs(item[1]))[:DOCUMENT_TRAITS]
+        likeness_verdict: str | None = None
+        if likeness and mean_delta is not None:
+            level = likeness["level"]
+            likeness_verdict = str(
+                LikenessVerdict.TOO_SHORT if level is None else LIKENESSES[level]
+            )
+        entry: DocumentEntry = {
+            "name": name,
+            "path": members[0]["source"],
+            "chunks": len(members),
+            "words": judged["words"],
+            "judged": judged["judged"],
+            "chunks_judged": judged["chunks_judged"],
+            "reason": judged["reason"],
+            "delta": mean_delta,
+            "verdict": str(Verdict.NOT_COMPARABLE if mean_delta is None else judged["verdict"]),
+            "likeness": likeness["value"] if likeness else None,
+            "likeness_verdict": likeness_verdict,
+            "differences": [
+                {"metric": f"{group}.{metric}", "z": z} for (group, metric), z in largest
+            ],
+        }
+        if likeness:
+            # Each metric's mean share of the likeness over the document's chunks.
+            shares: dict[str, float] = {}
+            for row in used:
+                for signal in row["reference"].get("likeness_signals", []):
+                    share = signal["contribution"] / len(used)
+                    shares[signal["metric"]] = shares.get(signal["metric"], 0.0) + share
+            ranked = sorted(shares.items(), key=lambda item: -item[1])[:DOCUMENT_TRAITS]
+            entry["signals"] = [
+                {"metric": metric, "z": averaged.get(_key(metric), 0.0), "contribution": share}
+                for metric, share in ranked
+            ]
+        entries.append(entry)
+    return entries
 
 
 def _create_beside(path: Path) -> tuple[int, Path]:

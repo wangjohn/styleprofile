@@ -65,7 +65,13 @@ they never reveal where your files live.
 More commands:
 
 - `styleprofile score draft.md writer.json -o draft.json` also saves the full JSON report;
-  `--json` prints it on stdout instead of the summary, and `--quiet` prints one verdict line.
+  `--json` prints it on stdout instead of the summary, and `--quiet` prints one verdict line
+  per document.
+- `styleprofile score drafts/ writer.json` scores several documents at once. The output opens
+  with a table giving each document its own verdict, furthest from the writer first (past
+  ten close documents, the rest are counted; `--all` lists them); the figures after it are
+  pooled over all of them ("Across 5 documents"). The JSON report lists each one under
+  `documents`.
 - `styleprofile show writer.json` (or a saved score report) shows it again without
   recomputing anything.
 - `styleprofile metrics` lists every metric, what it means and its unit.
@@ -118,6 +124,57 @@ Areas are listed most different first; `--all` adds the raw Delta for each area.
 differences" lists the metrics that moved most, with one ▲ or ▼ per standard deviation. See
 [docs/method.md](docs/method.md) for the metrics, the weighting math, the reliability checks
 and the resolution floors.
+
+### In a pre-commit hook or CI
+
+`--fail-above {somewhat,clearly,very}` makes `score` exit with status 3 when any document is
+at least that different from the writer, and `--fail-likeness {few,leans,like}` when any
+document's LLM-likeness reaches a few traits, leans LLM, or like the LLM drafts (it needs a
+reference built with `--contrast`). Each document is judged on its own, so one drifting
+draft fails the run even when the rest are close:
+
+```bash
+styleprofile score -q --fail-above clearly --fail-likeness leans drafts/ writer.json
+```
+
+`-r writer.json` gives the reference before the drafts instead of last, for tools that append
+file names, such as [pre-commit](https://pre-commit.com). This `.pre-commit-config.yaml`
+checks every staged Markdown file:
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: styleprofile
+        name: styleprofile
+        entry: styleprofile score -q --fail-above clearly -r writer.json
+        language: system
+        types: [markdown]
+        require_serial: true  # one run for all the files: spaCy loads once
+```
+
+A failing commit prints each file's verdict, then a `failed:` line on stderr for each file
+that reached a level, in the order given:
+
+```
+posts/old-maps.md: very different (Delta 4.61); LLM-likeness leans LLM (13.83)
+posts/sharpening.md: close (Delta 0.57); LLM-likeness like the reference (0.08)
+failed: posts/old-maps.md: delta very different
+```
+
+| Exit status | Meaning |
+|---|---|
+| 0 | scored; no document reached a `--fail-above` or `--fail-likeness` level |
+| 1 | an error, such as a missing file or an unreadable profile |
+| 2 | invalid command-line usage |
+| 3 | a document reached the `--fail-above` or `--fail-likeness` level |
+
+Each document is named as you typed it, and a JSONL record by its file and id
+(`exports/comments.jsonl:17`); standard input is `<stdin>`. A document with no verdict,
+because it is too short to judge (its line says `too short to judge (36 words)`) or has no
+metric in common with the reference, never fails a run. With a fail flag, the JSON report (`--json` or `-o`)
+records the levels asked for under `fail`, and under `failed` each document that reached
+one, with the Delta and likeness verdicts that did; that is the form for scripts to read.
 
 ## Getting useful results
 

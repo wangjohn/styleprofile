@@ -36,6 +36,7 @@ TMP = "<tmp>"  # stands in for the per-run temporary directory
 
 WRITER, CONTRAST, DRAFT = "examples/writer", "examples/llm-drafts", "examples/draft.md"
 REFERENCE, REPORT, EVALUATION = f"{TMP}/writer.json", f"{TMP}/draft.json", f"{TMP}/evaluation.json"
+MIXED = f"{TMP}/mixed.json"
 
 # (name, arguments) in the order they run; later commands read what earlier ones wrote.
 # `build` gains --no-syntax in surface mode, and `score` and `show` inherit it from the profile.
@@ -48,6 +49,24 @@ COMMANDS: list[tuple[str, list[str]]] = [
         "score-two-files",
         ["score", f"{WRITER}/sharpening.md", f"{WRITER}/old-maps.md", REFERENCE],
     ),
+    # The writer's own essay and an LLM draft: one close, one very different.
+    (
+        "score-writer-and-draft",
+        ["score", f"{WRITER}/sharpening.md", f"{CONTRAST}/old-maps.md", REFERENCE, "-o", MIXED],
+    ),
+    (
+        "score-writer-and-draft-quiet",
+        [
+            "score",
+            "-q",
+            "--fail-above",
+            "clearly",
+            f"{WRITER}/sharpening.md",
+            f"{CONTRAST}/old-maps.md",
+            REFERENCE,
+        ],
+    ),
+    ("show-score-writer-and-draft", ["show", MIXED]),
     ("show-reference", ["show", REFERENCE]),
     ("show-reference-all", ["show", "--all", REFERENCE]),
     ("show-score", ["show", REPORT]),

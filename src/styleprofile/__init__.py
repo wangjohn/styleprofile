@@ -13,6 +13,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
 from styleprofile.api import (
+    DocumentResult,
     Evaluation,
     Profile,
     ScoreResult,
@@ -40,6 +41,7 @@ except PackageNotFoundError:  # running from a source tree that was never instal
 
 __all__ = [
     "Chunk",
+    "DocumentResult",
     "Evaluation",
     "LikenessVerdict",
     "Note",

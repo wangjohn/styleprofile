@@ -34,6 +34,8 @@ class NoteCode(StrEnum):
     """spaCy is not installed, so syntax metrics are left out."""
     REPEATED_INPUT = "repeated_input"
     """A file was given more than once and is read once."""
+    REPEATED_ID = "repeated_id"
+    """Records in one JSONL file share an id; each is still its own document."""
     EDITED_OVERLAP = "edited_overlap"
     """An edited set shares files with the writer's texts or the original drafts."""
     SETTING_OVERRIDDEN = "setting_overridden"

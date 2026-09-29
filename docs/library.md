@@ -26,11 +26,12 @@ Delta 0..., like the reference
 (`.words(label)` names the contrast set). Both are string enums with the same words as the
 CLI (see [Reading the output](../README.md#reading-the-output)). A score with no metric in
 common with the profile is `Verdict.NOT_COMPARABLE`. Delta and the verdicts are pooled over
-every input you score at once, each chunk read against the writer's range at its own length;
-per-document results arrive with plan PR 7. `result.to_text()` is what `styleprofile score`
-prints, and `result.report` is the full JSON report: the live dict, not a copy. Its keys are
-typed by the TypedDicts in `styleprofile.schema` (`ReferenceReport`, `ScoreReport`,
-`EvaluationReport`), so a type checker catches a misspelled key.
+every input you score at once, each chunk read against the writer's range at its own length
+(see [Several documents at once](#several-documents-at-once) for each document's own).
+`result.to_text()` is what `styleprofile score` prints, and `result.report` is the full JSON
+report: the live dict, not a copy. Its keys are typed by the TypedDicts in
+`styleprofile.schema` (`ReferenceReport`, `ScoreReport`, `EvaluationReport`), so a type
+checker catches a misspelled key.
 
 A text too short to judge gets no verdict: `judged` is False, both verdicts are `TOO_SHORT`,
 and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdicts)).
@@ -43,6 +44,53 @@ and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdic
 "under 75 words, the writer's own text varies too much by chance to judge"
 
 ```
+
+## Several documents at once
+
+`result.delta`, `result.verdict` and the likeness figures are pooled over every chunk of
+every document scored, so one very different draft can make the pooled verdict "very
+different" while the rest are close. `result.documents` judges each document on its own
+chunks, the same way, as a tuple of `DocumentResult` in input order:
+
+```python
+>>> mixed = profile.score([Path("examples/writer/sharpening.md"), Path("examples/llm-drafts/old-maps.md")])
+>>> mixed.verdict
+<Verdict.VERY_DIFFERENT: 'very different'>
+>>> for document in mixed.documents:
+...     print(document.name, document.words, document.verdict, document.judged)
+sharpening.md 637 close True
+old-maps.md 620 very different True
+>>> [document.name for document in mixed.failing(sp.Verdict.CLEARLY_DIFFERENT)]
+['old-maps.md']
+
+```
+
+Each `DocumentResult` has:
+
+- `name`, as reports list it: a file by its saved path (`posts/2024/a.md`), a JSONL record
+  by its file and id (`comments.jsonl:17`), a `Text` by its name. Records that share an id
+  in one file stay separate documents, named by line (`same@3`), with a note. Ids are
+  shown as given, `x#w2` included.
+- `path`, the saved path of the file it came from, and `location`, the file as you gave it
+  (`drafts/2024/a.md`; `<stdin>` for standard input). `location` is None for a `Text`, and
+  for a report loaded from disk, since reports never save the paths you typed. `shown` is
+  what the command line prints: `location`, plus a JSONL record's id
+  (`exports/comments.jsonl:17`), or else `name`.
+- `words`, `chunks`, `delta`, `verdict`, `likeness` and `likeness_verdict`, judged at the
+  document's own chunks' lengths by the same function as the pooled verdict;
+- `judged`, `chunks_judged` and `reason`: a document too short to judge has `judged`
+  False, both verdicts `TOO_SHORT`, and `reason` says why, as for a whole score; one
+  judged on only some of its chunks has `chunks_judged` below `chunks`;
+- up to three `differences`, as (metric, mean z), and `signals`, as (metric, mean z, share
+  of the likeness). The z values are uncapped, so a metric the reference never varies on
+  can show a large one; the shares are approximate, from each chunk's five strongest
+  signals.
+
+The JSON report has the same under `documents` (typed by `schema.DocumentEntry`), apart
+from `location` and `shown`.
+`result.failing(above, likeness)` gives the documents that reach a Delta or likeness
+verdict, as `styleprofile score --fail-above` and `--fail-likeness` check; a document with
+no verdict (too short to judge, or not comparable) never does.
 
 ## Inputs
 
