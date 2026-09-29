@@ -736,7 +736,7 @@ def test_weighting_without_calibration_and_level_thresholds() -> None:
 
     assert delta_level(1.0, ceiling=1.2) == 0
     assert delta_level(2.0, ceiling=1.2) == 2
-    weak = {"reference": {"p95": 0.9}, "contrast": {"median": 0.7}}
+    weak = {"reference": {"mean": 0.5, "p95": 0.9}, "contrast": {"median": 0.7}}
     assert likeness_level(5.0, weak) == 1
 
     assert auc([3.0, 4.0], [1.0, 2.0]) == 1.0
@@ -748,26 +748,28 @@ def test_near_zero_held_out_range_does_not_inflate_verdicts() -> None:
     from styleprofile.display import delta_level, likeness_level, mean_ceiling
 
     # A writer who never uses Markdown: the formatting area barely varies on held-out text.
-    formatting = {"median": 0.006, "p95": 0.024}
+    formatting = {"median": 0.006, "mean": 0.006, "p95": 0.024}
     assert delta_level(0.07, mean_ceiling(formatting, 1)) == 0
     assert delta_level(0.4, mean_ceiling(formatting, 16)) == 0
     assert delta_level(0.9, mean_ceiling(formatting, 1)) == 2
     assert delta_level(3.0, mean_ceiling(formatting, 1)) == 3
-    assert mean_ceiling({"median": 0.0, "p95": 0.0}, 1) == 0.5
+    assert mean_ceiling({"median": 0.0, "mean": 0.0, "p95": 0.0}, 1) == 0.5
     # A calibrated range above the floor is unchanged.
-    assert mean_ceiling({"median": 0.78, "p95": 0.99}, 1) == 0.99
+    assert mean_ceiling({"median": 0.78, "mean": 0.78, "p95": 0.99}, 1) == 0.99
 
     drafts = {"contrast": {"median": 12.0}}
-    quiet = {"reference": {"median": 0.001, "p95": 0.01}, **drafts}
+    quiet = {"reference": {"median": 0.001, "mean": 0.001, "p95": 0.01}, **drafts}
     assert likeness_level(0.07, quiet) == 0
     assert likeness_level(0.07, quiet, count=9) == 0
     assert likeness_level(0.3, quiet) == 1
     assert likeness_level(4.0, quiet) == 1
     assert likeness_level(10.0, quiet) == 2
-    assert likeness_level(0.3, {"reference": {"median": 0.0, "p95": 0.0}, **drafts}) == 1
+    assert (
+        likeness_level(0.3, {"reference": {"median": 0.0, "mean": 0.0, "p95": 0.0}, **drafts}) == 1
+    )
     # Likeness counts only the part of each z toward the contrast set, so its floor is half
     # the Delta one: a long sample averaging above the writer's own range still shows traits.
-    usual = {"reference": {"median": 0.2, "p95": 0.86}, **drafts}
+    usual = {"reference": {"median": 0.2, "mean": 0.2, "p95": 0.86}, **drafts}
     assert likeness_level(0.4, usual, count=64) == 1
     assert likeness_level(0.4, usual, count=1) == 0
 

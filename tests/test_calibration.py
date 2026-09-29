@@ -51,6 +51,7 @@ from styleprofile.profile import (
     build_reference,
     load_chunks,
     load_reference,
+    load_report,
     score,
     window,
     write_report,
@@ -381,7 +382,10 @@ def test_pooled_ceiling_is_mean_ceiling_for_equal_ranges() -> None:
 
 def test_one_chunk_is_read_against_its_own_bound() -> None:
     """Pooling changes nothing for a single chunk: its bound is its own 95% bound."""
-    for stats in ({"median": 0.7, "mean": 0.8, "p95": 1.3}, {"median": 0.7, "p95": 1.3}):
+    for stats in (
+        {"median": 0.7, "mean": 0.8, "p95": 1.3},
+        {"median": 0.7, "mean": 1.0, "p95": 1.3},
+    ):
         assert pooled_ceiling([stats]) == pytest.approx(1.3)
     assert pooled_ceiling([{"median": 0.1, "mean": 0.12, "p95": 0.2}]) == 0.5  # the floor
 
@@ -394,8 +398,6 @@ def test_a_long_run_is_read_against_the_mean_not_the_median() -> None:
     ceiling = pooled_ceiling([stats] * 10_000)
     assert ceiling is not None
     assert ceiling == pytest.approx(0.9 + 0.6 * RUN_SIMILARITY**0.5, abs=1e-3)
-    # A range stored without a mean (built before it was stored) is read at its median.
-    assert centre({"median": 0.8, "p95": 1.5}) == 0.8
     # The centre never lies above the 95% bound.
     assert centre({"median": 0.8, "mean": 1.7, "p95": 1.5}) == 1.5
 
@@ -429,6 +431,28 @@ def test_a_profile_from_before_length_calibration_is_refused(tmp_path: Path) -> 
         assert error.value.code == "outdated"
         with pytest.raises(StyleProfileError, match="rebuild it"):
             _score([BEES], reference)
+
+
+def test_a_profile_from_before_stored_means_is_refused(tmp_path: Path) -> None:
+    """A reference whose ranges lack the held-out mean would read a pooled mean against
+    its median, the bug the mean fixes, so it is refused as outdated, and so is a score
+    report made against one."""
+    reference: Any = _reference()  # edited to lack a key, so no longer a ReferenceReport
+    del reference["calibration"]["delta"]["mean"]
+    path = tmp_path / "no-mean.json"
+    write_report(reference, path)
+    with pytest.raises(StyleProfileError, match="read the held-out mean; rebuild it") as error:
+        load_reference(path)
+    assert error.value.code == "outdated"
+    with pytest.raises(StyleProfileError, match="rebuild it"):
+        _score([BEES], reference)
+    report: Any = _score([BEES], _reference())
+    del report["reference"]["baseline"]["calibration"]["delta"]["mean"]
+    saved = tmp_path / "score.json"
+    write_report(report, saved)
+    with pytest.raises(StyleProfileError, match="score it again") as error:
+        load_report(saved)
+    assert error.value.code == "outdated"
 
 
 # Too short to judge.

@@ -1043,6 +1043,21 @@ def _before_lengths(report: Mapping[str, Any]) -> bool:
     return kind == SCORE and isinstance(scored, Mapping) and "verdict" not in scored
 
 
+def _before_means(report: Mapping[str, Any]) -> bool:
+    """Whether a version-6 report is from before ranges stored their held-out mean, which
+    version 6 also gained before any release: a reference (or a score report's copy of it)
+    whose Delta range lacks ``mean``. Its pooled verdicts would close in on the median and
+    call the writer's own text different once enough of it is pooled. A part of the wrong
+    shape is left to ``check_report``."""
+    calibration: Any = report.get("calibration")
+    if report.get("kind") == SCORE:
+        scored = report.get("reference")
+        baseline = scored.get("baseline") if isinstance(scored, Mapping) else None
+        calibration = baseline.get("calibration") if isinstance(baseline, Mapping) else None
+    delta = calibration.get("delta") if isinstance(calibration, Mapping) else None
+    return isinstance(delta, Mapping) and "mean" not in delta
+
+
 def check_version(report: Mapping[str, Any], name: str = "the report") -> None:
     """Refuse a report of another version than this styleprofile writes, saying how to
     make it again: its settings and metrics would be misread rather than migrated."""
@@ -1057,6 +1072,12 @@ def check_version(report: Mapping[str, Any], name: str = "the report") -> None:
             raise StyleProfileError(
                 f"{name} was made by an older styleprofile, before length-aware verdicts; "
                 f"{_again(kind)}",
+                code="outdated",
+            )
+        if _before_means(report):
+            raise StyleProfileError(
+                f"{name} was made by an older styleprofile, before verdicts over several "
+                f"chunks read the held-out mean; {_again(kind)}",
                 code="outdated",
             )
         return

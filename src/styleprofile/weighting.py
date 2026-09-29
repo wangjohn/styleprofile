@@ -925,9 +925,9 @@ def delta_level(delta: float, ceiling: float | None = None) -> int:
 
 def centre(stats: Mapping[str, Any]) -> float:
     """Where a mean over many chunks settles, as a range stores it: its upper bound on the
-    held-out mean (``upper_mean``), else its median (a range stored without one), and never
-    above its 95% bound."""
-    return min(stats.get("mean", stats.get("median", stats["p95"])), stats["p95"])
+    held-out mean (``upper_mean``), never above its 95% bound. (A reference from before
+    ranges stored it is refused as outdated, ``profile.check_version``.)"""
+    return min(stats["mean"], stats["p95"])
 
 
 def mean_ceiling(stats: Mapping[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
