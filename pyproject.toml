@@ -46,6 +46,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pyright]
 include = ["src", "tests", "bench"]
+# The benchmark's ignored checkouts of a base revision (bench/run.py --against) and its
+# generated corpora; the rest are pyright's defaults, which an exclude list replaces. Ruff
+# skips them already, as it skips every ignored path.
+exclude = ["bench/work", "bench/corpora", "**/node_modules", "**/__pycache__", "**/.*"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 
