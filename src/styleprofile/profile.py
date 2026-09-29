@@ -19,7 +19,7 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, TypedDict, cast
 
@@ -841,8 +841,21 @@ def _duplicate_unit(chunk: Chunk) -> str:
     return chunk_document(chunk)
 
 
+@dataclass(frozen=True)
+class Repeat:
+    """A document ``drop_duplicates`` dropped: its first chunk, ``dropped``; the first chunk
+    of the copy it kept, ``kept``, or None when that copy was read before (another input
+    set, whose document ``label`` names)."""
+
+    dropped: Chunk
+    kept: Chunk | None
+    label: str
+
+
 def drop_duplicates(
-    chunks: Sequence[Chunk], seen: dict[str, str] | None = None
+    chunks: Sequence[Chunk],
+    seen: dict[str, str] | None = None,
+    repeats: list[Repeat] | None = None,
 ) -> tuple[list[Chunk], Note | None]:
     """Keep the first of documents whose text is word-for-word the same.
 
@@ -859,9 +872,11 @@ def drop_duplicates(
     and is updated, so a contrast draft that repeats a reference document is dropped too.
     Twins would sit on both sides of held-out calibration and make it look too tight.
     Documents under ``DUPLICATE_MIN_WORDS`` words are always kept. The note names documents
-    by their saved sources, never by path.
+    by their saved sources, never by path. ``repeats``, when given, gathers each dropped
+    document with the copy kept, so an edit of a dropped draft can pair with that copy.
     """
     seen = {} if seen is None else seen
+    firsts: dict[str, Chunk] = {}  # the first chunk of each document kept here, by text
     documents: dict[str, list[Chunk]] = {}
     for chunk in chunks:
         documents.setdefault(_duplicate_unit(chunk), []).append(chunk)
@@ -876,8 +891,11 @@ def drop_duplicates(
         if key in seen:
             dropped.append((label, seen[key]))
             dropped_documents.add(document)
+            if repeats is not None:
+                repeats.append(Repeat(members[0], firsts.get(key), seen[key]))
         else:
             seen[key] = label
+            firsts[key] = members[0]
     kept = [chunk for chunk in chunks if _duplicate_unit(chunk) not in dropped_documents]
     if not dropped:
         return kept, None
@@ -1120,6 +1138,26 @@ def pair_key(chunk: Chunk) -> str:
     JSONL record, its id, with its file's path inside a folder input (``2024/a.jsonl:17``);
     for a group's window, the group (``thread=t1``), whichever files its records are in."""
     return base_id(chunk.id)
+
+
+def paired_as(chunk: Chunk, like: Chunk) -> Chunk | None:
+    """``chunk``, an edited copy of a text, renamed to pair with ``like`` instead (by
+    ``pair_key``, and ``cover_key`` for a grouped record): the text its original repeats word
+    for word. It stays in its own file, and keeps its window suffix and, grouped, its line.
+    None when one is a grouped record and the other is not, which never pair."""
+    if _grouped(chunk) != _grouped(like):
+        return None
+    suffix = chunk.id[len(pair_key(chunk)) :]
+    new_id = pair_key(like) + suffix
+    document = chunk.document
+    if _grouped(chunk) and document is not None and like.document is not None:
+        # ``<_GROUPED><scope><_GROUPED><field><_GROUPED><value>``: take ``like``'s value.
+        scope = document.split(_GROUPED, 3)[:3]
+        document = _GROUPED.join([*scope, like.document.split(_GROUPED, 3)[3]])
+    elif document is not None and _RECORD in document:
+        document = f"{document.partition(_RECORD)[0]}{_RECORD}{base_id(new_id)}"
+    record = like.record if _grouped(chunk) else chunk.record
+    return replace(chunk, id=new_id, document=document, record=record)
 
 
 def _pool_key(chunk: Chunk) -> str:

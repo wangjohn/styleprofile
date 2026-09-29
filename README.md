@@ -294,6 +294,13 @@ of a group's records. An edited set that covers only some of a pooled window's d
 compared with that window rebuilt from just those drafts, so its rewrite share, length and
 signal survival are like with like.
 
+A draft dropped for repeating another draft word for word keeps its edits: an edit of it
+pairs with the copy kept, since their text was the same, and a note names the pairing. Only
+one edit of a text is scored. When the kept copy is edited too, its own edit is used,
+otherwise the first in the set, and the others are left out with a note. An edit of a draft
+dropped for repeating one of the writer's texts has no draft to pair with, so it is left
+out with a note.
+
 ```bash
 styleprofile evaluate posts/ --contrast llm-drafts/ \
   --edited light=edits/light humanize=edits/humanize --retrain -o stress.json
