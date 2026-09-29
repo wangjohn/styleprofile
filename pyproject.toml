@@ -48,3 +48,12 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 include = ["src", "tests", "bench"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
+
+# Tests read reports they just made, so an optional key (``contrast``) or a None they know is
+# not there is a test failure at worst; the source is checked in full.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportTypedDictNotRequiredAccess = false
+reportOptionalSubscript = false
+reportOptionalOperand = false
+reportOptionalIterable = false

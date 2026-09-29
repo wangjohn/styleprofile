@@ -32,7 +32,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any, Literal, TypedDict, Unpack
+from typing import Any, Generic, Literal, TypedDict, TypeVar, Unpack, cast
 
 from styleprofile.calibration import too_short_text
 from styleprofile.core import (
@@ -58,7 +58,7 @@ from styleprofile.profile import (
     Chunk,
     SourceNames,
     build_reference,
-    check_version,
+    check_report,
     drop_duplicates,
     dumps_report,
     expand_path,
@@ -68,6 +68,14 @@ from styleprofile.profile import (
     score,
     window,
     write_report,
+)
+from styleprofile.schema import (
+    Baseline,
+    EvaluationReport,
+    InputSettings,
+    ReferenceReport,
+    ScoreReport,
+    ScoreVerdict,
 )
 from styleprofile.syntax import Parser, SyntaxUnavailableError, load_parser
 
@@ -146,9 +154,9 @@ class Settings:
                 f"input_format {self.input_format!r} is not supported; use {choices}",
             )
 
-    def to_report(self) -> dict[str, Any]:
+    def to_report(self) -> InputSettings:
         """The settings as a report records them: every field, verbatim."""
-        return dataclasses.asdict(self)
+        return cast(InputSettings, dataclasses.asdict(self))
 
     @classmethod
     def from_report(cls, recorded: Mapping[str, Any]) -> Settings:
@@ -190,12 +198,15 @@ def _count(settings: Settings, name: str, minimum: int, rule: str) -> None:
 DEFAULTS = Settings()
 
 
-class _Result:
+_R = TypeVar("_R", ReferenceReport, ScoreReport, EvaluationReport)
+
+
+class _Result(Generic[_R]):
     """What every result wraps: its report dict, plus what the run noted and read, which are
     not saved."""
 
     def __init__(
-        self, report: dict[str, Any], *, notes: Sequence[Note] = (), sources: Sequence[str] = ()
+        self, report: _R, *, notes: Sequence[Note] = (), sources: Sequence[str] = ()
     ) -> None:
         self._report = report
         self._notes = tuple(notes)
@@ -206,7 +217,7 @@ class _Result:
         write_report(self._report, _resolved(path))
 
     @property
-    def report(self) -> dict[str, Any]:
+    def report(self) -> _R:
         """The full report, as saved. This is the live dict, not a copy: changing it changes
         what the other properties return."""
         return self._report
@@ -230,12 +241,12 @@ class _Result:
         return tuple(self._report["warnings"])
 
 
-class Profile(_Result):
+class Profile(_Result[ReferenceReport]):
     """A reference profile: what ``build`` makes and ``styleprofile build`` saves."""
 
     def __init__(
         self,
-        report: dict[str, Any],
+        report: ReferenceReport,
         *,
         path: str | os.PathLike[str] | None = None,
         notes: Sequence[Note] = (),
@@ -247,14 +258,15 @@ class Profile(_Result):
                 "reference from the writer's own texts",
                 code="score_as_reference",
             )
-        check_version(report, "the profile")
+        check_report(report, "the profile")
         super().__init__(report, notes=notes, sources=sources)
         self._path = _resolved(path) if path is not None else None
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> Profile:
-        """Read a reference profile saved by ``save`` or ``styleprofile build``."""
-        return cls(load_reference(expand_path(os.fspath(path))), path=path)
+        """Read a reference profile saved by ``save`` or ``styleprofile build``. Errors name
+        the file as ``path`` gives it."""
+        return cls(load_reference(expand_path(os.fspath(path)), os.fspath(path)), path=path)
 
     def save(self, path: str | os.PathLike[str]) -> None:
         """Write the profile as JSON. This also sets ``path`` in place, so scores made
@@ -270,12 +282,12 @@ class Profile(_Result):
     @property
     def settings(self) -> Settings:
         """The settings it was built with, as recorded."""
-        return Settings.from_report(self._report.get("settings") or {})
+        return Settings.from_report(self._report["settings"])
 
     @property
     def has_syntax(self) -> bool:
         """Whether the profile has syntax metrics (spaCy was used to build it)."""
-        return (self._report.get("settings") or {}).get("syntax_used") is not None
+        return self._report["settings"]["syntax_used"] is not None
 
     def to_text(self, *, full: bool = False, color: bool = False) -> str:
         """The summary ``styleprofile build`` prints; ``full`` adds every metric."""
@@ -363,7 +375,7 @@ class Profile(_Result):
                 settings={"inputs": _described(items, names), **chosen.to_report()},
             )
             step(Phase.DONE)
-            return ScoreResult(report, self._report, notes=notes, sources=_sources(chunks))
+            return ScoreResult(report, notes=notes, sources=_sources(chunks))
 
     def __repr__(self) -> str:
         where = f" from {self._path}" if self._path else ""
@@ -373,7 +385,7 @@ class Profile(_Result):
         )
 
 
-class ScoreResult(_Result):
+class ScoreResult(_Result[ScoreReport]):
     """Drafts scored against a profile: what ``styleprofile score`` prints and saves.
 
     ``delta``, ``verdict`` and the likeness figures are pooled over the chunks of every
@@ -386,15 +398,14 @@ class ScoreResult(_Result):
 
     def __init__(
         self,
-        report: dict[str, Any],
-        reference: dict[str, Any] | None = None,
+        report: ScoreReport,
         *,
         notes: Sequence[Note] = (),
         sources: Sequence[str] = (),
     ) -> None:
         super().__init__(report, notes=notes, sources=sources)
         # A score report carries a copy of what rendering needs from its reference.
-        self._reference = reference or report["reference"]["baseline"]
+        self._reference: Baseline = report["reference"]["baseline"]
 
     @property
     def chunk_count(self) -> int:
@@ -428,19 +439,19 @@ class ScoreResult(_Result):
         return Verdict(self._verdict["verdict"])
 
     @property
-    def _verdict(self) -> dict[str, Any]:
+    def _verdict(self) -> ScoreVerdict:
         return self._report["reference"]["verdict"]
 
     @property
     def contrast_label(self) -> str | None:
         """The contrast set's name (``LLM``) when the profile was built with one."""
-        contrast = self._reference.get("contrast")
+        contrast = self._reference["contrast"]
         return contrast["label"] if contrast else None
 
     @property
     def likeness(self) -> float | None:
         """Mean likeness to the contrast set, when the profile was built with one."""
-        return self._report["reference"].get("likeness_mean")
+        return self._report["reference"]["likeness_mean"]
 
     @property
     def likeness_verdict(self) -> LikenessVerdict | None:
@@ -468,7 +479,7 @@ class ScoreResult(_Result):
         return f"<ScoreResult: {self.verdict} (Delta {self.delta:.2f})>"
 
 
-class Evaluation(_Result):
+class Evaluation(_Result[EvaluationReport]):
     """The rewording stress test: what ``styleprofile evaluate`` prints and saves."""
 
     def to_text(self, *, color: bool = False) -> str:
@@ -659,7 +670,7 @@ def _notes_on_error(notes: list[Note]) -> Iterator[None]:
         raise wrapped from error
 
 
-def _thin_reference(report: dict[str, Any], settings: Settings) -> list[Note]:
+def _thin_reference(report: ReferenceReport, settings: Settings) -> list[Note]:
     """Why a reference may be too small to trust, each with its fix."""
     documents = report["document_count"]
     thin: list[Note] = []

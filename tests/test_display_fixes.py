@@ -21,10 +21,11 @@ from styleprofile.display import (
 )
 from styleprofile.metrics import METRICS
 from styleprofile.profile import write_report
+from styleprofile.schema import Baseline, GroupRange
 
 # The demo's areas: sentence shape's raw Delta is higher, but it is well inside its own wide
 # held-out range, while voice is just past a narrow one.
-AREAS = {
+AREAS: dict[str, tuple[float, GroupRange]] = {
     "sentence_shape": (1.45, {"median": 0.73, "p95": 2.24}),
     "voice": (1.34, {"median": 0.80, "p95": 0.95}),
     "punctuation": (0.68, {"median": 0.46, "p95": 0.88}),
@@ -32,9 +33,10 @@ AREAS = {
 }
 
 
-def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[dict[str, Any], dict[str, Any]]:
-    """A scored report and its reference, with the areas above and one metric per area."""
-    reference: dict[str, Any] = {
+def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[Any, Baseline]:
+    """The parts of a score report that rendering reads, and its reference's baseline, with
+    the areas above and one metric per area."""
+    reference: Baseline = {
         "chunk_count": 7,
         "summary": {
             "voice": {
@@ -42,16 +44,21 @@ def _comparison(calibrated: bool = True, chunks: int = 1) -> tuple[dict[str, Any
                 "hedges_per_1k": {"mean": 2.1, "sd": 1.0},
             }
         },
-    }
-    if calibrated:
-        reference["calibration"] = {
+        "calibration": {
             "sources": 7,
             "delta": {
                 "median": 0.78,
                 "p95": 0.99,
+                "max": 1.2,
                 "by_group": {group: stats for group, (_, stats) in AREAS.items()},
             },
+            "chunk_words": 400.0,
+            "by_length": {},
         }
+        if calibrated
+        else None,
+        "contrast": None,
+    }
     report = {
         "chunk_count": chunks,
         "word_count": 400 * chunks,
@@ -195,11 +202,21 @@ def test_openers_name_themselves_outside_their_heading() -> None:
 
 def test_evaluation_rows_show_whole_labels() -> None:
     longest = max((metric for metric in METRICS), key=lambda metric: len(metric.label))
-    result = {
+    # The parts of an evaluation report that rendering reads.
+    result: Any = {
         "label": "LLM",
         "contrast": {"drafts": 2},
         "reference": {"documents": 3},
-        "sets": {"original": {"likeness_median_chunks": 1.0, "flagged": 1, "drafts": 2}},
+        "sets": {
+            "original": {
+                "auc": None,
+                "auc_ci": None,
+                "bootstrap": {"method": None},
+                "likeness_median_chunks": 1.0,
+                "flagged": 1,
+                "drafts": 2,
+            }
+        },
         "signals": [
             {
                 "metric": f"{longest.group}.{longest.name}",
@@ -208,6 +225,7 @@ def test_evaluation_rows_show_whole_labels() -> None:
                 "edited": {},
             }
         ],
+        "retrain": None,
         "warnings": [],
     }
     assert longest.label in format_evaluation(result)

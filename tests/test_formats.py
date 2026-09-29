@@ -24,6 +24,7 @@ from styleprofile.profile import (
     score,
     window,
 )
+from styleprofile.schema import ReferenceReport
 from styleprofile.surface import prose
 
 WRITER = Path(__file__).resolve().parent.parent / "examples" / "writer"
@@ -104,13 +105,15 @@ def _article(markdown: str) -> str:
     )
 
 
-def _delta(text: str, reference: dict[str, Any]) -> float:
+def _delta(text: str, reference: ReferenceReport) -> float:
     chunks = window([Chunk("essay", "essay", text)], 500)
-    return score(chunks, reference, parser=None)["reference"]["delta_mean"]
+    delta = score(chunks, reference, parser=None)["reference"]["delta_mean"]
+    assert delta is not None
+    return delta
 
 
 @pytest.fixture(scope="module")
-def writer_reference() -> dict[str, Any]:
+def writer_reference() -> ReferenceReport:
     return build_reference(window(load_chunks([str(WRITER)]), 500), parser=None)
 
 
@@ -120,7 +123,7 @@ def writer_reference() -> dict[str, Any]:
     ids=["p-per-line", "blog-page", "pandoc-wrapped", "article-header"],
 )
 def test_html_essays_score_like_their_markdown(
-    writer_reference: dict[str, Any], dress: Any, tmp_path: Path
+    writer_reference: ReferenceReport, dress: Any, tmp_path: Path
 ) -> None:
     """Acceptance: HTML versions of the writer's essays, saved as .txt so they are found by
     sniffing, score within 0.05 Delta of the Markdown originals (before HTML was converted,
@@ -137,7 +140,7 @@ def test_html_essays_score_like_their_markdown(
 
 
 def test_pandoc_html_on_stdin_is_detected(
-    writer_reference: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    writer_reference: ReferenceReport, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     markdown = (WRITER / "sharpening.md").read_text(encoding="utf-8")
     _stdin(monkeypatch, _pandoc(markdown))

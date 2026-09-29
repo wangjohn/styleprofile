@@ -7,6 +7,7 @@ import dataclasses
 import doctest
 import json
 import random
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +47,11 @@ def examples(monkeypatch: pytest.MonkeyPatch) -> Path:
     return ROOT
 
 
-def _saved(path: Path) -> dict[str, Any]:
+def _saved(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _as_saved(report: dict[str, Any]) -> dict[str, Any]:
+def _as_saved(report: Mapping[str, Any]) -> Any:
     """A report as it is written to disk, with floats rounded."""
     return json.loads(dumps_report(report))
 
@@ -404,7 +405,12 @@ def test_verdicts_match_the_command_line_headline(
 
 
 def test_a_result_with_nothing_compared_is_not_comparable() -> None:
-    report = {"chunk_count": 1, "warnings": [], "reference": {"delta_mean": None, "baseline": {}}}
+    baseline = {"chunk_count": 3, "summary": {}, "calibration": None, "contrast": None}
+    report: Any = {
+        "chunk_count": 1,
+        "warnings": [],
+        "reference": {"delta_mean": None, "likeness_mean": None, "baseline": baseline},
+    }
     result = sp.ScoreResult(report)
     assert result.verdict is sp.Verdict.NOT_COMPARABLE and result.likeness_verdict is None
 
@@ -457,7 +463,7 @@ def test_rewindowing_chunks_keeps_their_documents() -> None:
     }
 
 
-def _as_main_saved_it(report: dict[str, Any]) -> dict[str, Any]:
+def _as_main_saved_it(report: Mapping[str, Any]) -> Any:
     """A report shaped as main (report version 5) saved it: syntax is the parser that ran,
     no windowing is null, and one input is recorded bare."""
     settings = {
@@ -490,12 +496,18 @@ def test_reports_from_older_versions_are_refused_with_rebuild_it(
         load_report(old_score)
     assert error.value.code == "outdated"
 
-    # The command line says the same for both, with its hint, and never blames a flag.
-    for command in (["score", DRAFT, str(old_profile)], ["show", str(old_score)]):
+    # The command line says the same for both, naming the file as typed; the message says how
+    # to fix it, so no hint follows, and it never blames a flag.
+    for command, again in (
+        (["score", DRAFT, str(old_profile)], "rebuild it with `styleprofile build`"),
+        (["show", str(old_score)], "score it again with `styleprofile score`"),
+    ):
         assert main(command) == 1
         err = capsys.readouterr().err
-        assert "not a style profile this version of styleprofile can read; rebuild it" in err
-        assert "hint: run `styleprofile build` again" in err and "--" not in err.split("\n")[0]
+        assert err == (
+            f"error: {command[-1]} was made by an older styleprofile (report version 5; this "
+            f"one reads 6); {again}\n"
+        )
 
 
 def test_evaluation_reports_have_their_own_version(examples: Path, tmp_path: Path) -> None:

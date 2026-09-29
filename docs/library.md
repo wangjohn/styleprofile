@@ -28,7 +28,9 @@ CLI (see [Reading the output](../README.md#reading-the-output)). A score with no
 common with the profile is `Verdict.NOT_COMPARABLE`. Delta and the verdicts are pooled over
 every input you score at once, each chunk read against the writer's range at its own length;
 per-document results arrive with plan PR 7. `result.to_text()` is what `styleprofile score`
-prints, and `result.report` is the full JSON report: the live dict, not a copy.
+prints, and `result.report` is the full JSON report: the live dict, not a copy. Its keys are
+typed by the TypedDicts in `styleprofile.schema` (`ReferenceReport`, `ScoreReport`,
+`EvaluationReport`), so a type checker catches a misspelled key.
 
 A text too short to judge gets no verdict: `judged` is False, both verdicts are `TOO_SHORT`,
 and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdicts)).
@@ -121,8 +123,9 @@ A `progress` callback, if given, is called with a `Progress` at the start of eac
   `posts/2024/a.md`; see [method.md](method.md)), while `result.sources` lists the real
   files read, unsaved. A profile keeps summaries only; `sp.build(..., keep_chunks=True)`
   also saves every chunk's metrics, for debugging.
-  A report saved by another version of styleprofile is refused with a message saying to
-  build (or score) it again; nothing is migrated before 0.2.0.
+  A report saved by another version of styleprofile, or one lacking or garbling a part this
+  version needs, is refused with a message naming the part and saying to build (or score)
+  it again; nothing is migrated before 0.2.0.
 - `sp.evaluate(inputs, contrast, {"light": Path("edits/light")})` runs the rewording stress
   test that `styleprofile evaluate` runs.
 - `build_reference(chunks)` and `score(chunks, reference)` in `styleprofile.profile` are

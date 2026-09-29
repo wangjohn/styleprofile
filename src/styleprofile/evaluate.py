@@ -18,7 +18,7 @@ import os
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from styleprofile.profile import (
     EVALUATION,
@@ -30,6 +30,18 @@ from styleprofile.profile import (
     base_id,
     build_contrast_reference,
     z_against_reference,
+)
+from styleprofile.schema import (
+    ContrastCalibration,
+    DraftVerdict,
+    EditStatistics,
+    EvaluationReport,
+    EvaluationSettings,
+    Retrain,
+    RetrainedSet,
+    SetSummary,
+    Signal,
+    Survival,
 )
 from styleprofile.surface import prose, words
 from styleprofile.syntax import Parser
@@ -103,7 +115,7 @@ def _texts(chunks: Sequence[Chunk]) -> dict[str, str]:
     return {key: prose("\n\n".join(texts)).text for key, texts in grouped.items()}
 
 
-def edit_statistics(originals: Mapping[str, str], edited: Mapping[str, str]) -> dict[str, Any]:
+def edit_statistics(originals: Mapping[str, str], edited: Mapping[str, str]) -> EditStatistics:
     """How much an edited set changed its drafts' prose: the share of each original's
     13-word sequences that no longer appear verbatim, and the ratio of word counts."""
     changed: list[float] = []
@@ -130,17 +142,17 @@ def _set_summary(
     names: Mapping[str, str],
     learned: CrossValidated,
     reference_documents: Sequence[str],
-    calibration: Mapping[str, Any],
+    calibration: ContrastCalibration,
     label: str,
-) -> dict[str, Any]:
+) -> SetSummary:
     """AUC against the reference's held-out chunks, and each draft's verdict."""
     per_draft: dict[str, list[float]] = defaultdict(list)
     for score, document in zip(scores, documents, strict=True):
         per_draft[document].append(score)
-    drafts = []
+    drafts: list[DraftVerdict] = []
     for document, values in sorted(per_draft.items(), key=lambda item: names[item[0]]):
         mean = statistics.fmean(values)
-        level = likeness_level(mean, dict(calibration), len(values))
+        level = likeness_level(mean, calibration, len(values))
         drafts.append(
             {
                 "draft": names[document],
@@ -181,7 +193,7 @@ def signal_survival(
     original_z: Sequence[ZScores],
     edited: Mapping[str, tuple[Sequence[ZScores], Sequence[ZScores]]],
     count: int = SIGNALS_TRACKED,
-) -> list[dict[str, Any]]:
+) -> list[Signal]:
     """For the strongest contrast metrics, how much of the original drafts' gap from the
     reference each edited set keeps.
 
@@ -193,10 +205,10 @@ def signal_survival(
     means pushed past it, and above 1 means the edit strengthened the signal.
     """
     ranked = sorted(learned.effects.items(), key=lambda item: -abs(item[1]))[:count]
-    rows: list[dict[str, Any]] = []
+    rows: list[Signal] = []
     for key, effect in ranked:
         reference = _mean_z(reference_held, key) or 0.0
-        by_set: dict[str, Any] = {}
+        by_set: dict[str, Survival] = {}
         for label, (rows_z, covered) in edited.items():
             value, original = _mean_z(rows_z, key), _mean_z(covered, key)
             gap = None if original is None else original - reference
@@ -242,7 +254,7 @@ def evaluate_rewording(
     contrast_label: str = "LLM",
     retrain: bool = False,
     settings: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> EvaluationReport:
     """Score edited copies of the contrast drafts without leaking; see the module docstring.
 
     ``edited`` maps a label (``light``, ``humanize``) to that set's chunks, windowed the same
@@ -284,11 +296,13 @@ def evaluate_rewording(
     # Originals dropped for having too little prose have no fold; their edits are skipped.
     dropped = {match_key(chunk) for chunk in contrast_chunks} - set(documents_by_key)
     original_texts = _texts(contrast_chunks)
+    if "contrast" not in profile:  # a contrast reference always has one
+        raise StyleProfileError("the reference learned no contrast", code="no_contrast")
     calibration = profile["contrast"]["calibration"]
     label = contrast_label
 
     warnings: list[str] = list(profile["warnings"])
-    sets = {
+    sets: dict[str, SetSummary] = {
         ORIGINAL: _set_summary(
             learned.contrast_scores,
             fit.contrast_documents,
@@ -355,15 +369,20 @@ def evaluate_rewording(
         result["edits"] = edit_statistics(original_texts, _texts(chunks))
         sets[set_label] = result
 
-    return {
-        "kind": EVALUATION,
-        "version": VERSION,
-        "settings": {
+    # The settings are recorded as given, whatever their keys.
+    recorded = cast(
+        EvaluationSettings,
+        {
             **(settings or {}),
             "min_words": min_words,
             "retrain": retrain,
             "syntax_used": profile["settings"]["syntax_used"],
         },
+    )
+    return {
+        "kind": EVALUATION,
+        "version": VERSION,
+        "settings": recorded,
         "label": label,
         "reference": {
             "chunks": profile["chunk_count"],
@@ -386,7 +405,7 @@ def _retrain(
     fit: ContrastFit,
     edited_z: Mapping[str, Sequence[ZScores]],
     edited_documents: Mapping[str, Sequence[str]],
-) -> dict[str, Any]:
+) -> Retrain:
     """Cross-validated AUCs when the edited drafts join the contrast set.
 
     Edited chunks carry their original's document, so a lineage is held out as a whole: an
@@ -406,7 +425,7 @@ def _retrain(
         z_rows += rows
         documents += edited_documents[label]
     retrained = cross_validate(reference_held, reference_documents, z_rows, documents)
-    by_set: dict[str, Any] = {}
+    by_set: dict[str, RetrainedSet] = {}
     for label, (start, end) in slices.items():
         scores = retrained.contrast_scores[start:end]
         by_set[label] = {
