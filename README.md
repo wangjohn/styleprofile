@@ -283,12 +283,13 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   parts of at least half a window, never inside code blocks or front matter. `build` says
   so (`note: split book.md into 14 documents at its level-1 headings`), and the reference
   gets held-out calibration and can take `--contrast`. A file with no such markers is cut
-  into 8 stand-in documents of consecutive text, with a note: they share topics, so its
-  calibration is optimistic and verdicts on new text may be harsher, and separate files or
-  headings are better. This happens only when the writer's texts are fewer than 3
+  into 8 stand-in documents of consecutive text, with a note: if topics run from one part
+  into the next, their ranges come out too narrow and verdicts on new text can read harsher
+  than they should, so headings, rules or separate files are better. This happens only when the writer's texts are fewer than 3
   documents; `--split-on heading` (or `rule`) splits every file, and `--split-on none`
   never. `score` does not split a draft unless asked: `score book.md writer.json
-  --split-on heading` gives each chapter its own verdict.
+  --split-on heading` (or `rule`) gives each chapter its own verdict; `--split-on auto`
+  never splits a draft, since a draft needs no held-out calibration.
 - **Contrast drafts from the writer's own briefs.** Have LLMs write from the same briefs or
   outlines the writer worked from, and use several models; the weights only know the drafts
   they were learned from.

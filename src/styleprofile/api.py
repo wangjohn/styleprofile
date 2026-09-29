@@ -180,7 +180,7 @@ class Settings:
       the texts are fewer than ``MIN_CALIBRATION_DOCUMENTS`` documents: then at its headings
       or rules, whichever gives the fewest parts of at least half a window (three or more),
       or, with neither, as 8 (``split.STAND_INS``) stand-in documents of consecutive windows, with a
-      note that their calibration is optimistic. JSONL records are never split. Each split
+      note that their calibration may be optimistic. JSONL records are never split. Each split
       is noted. ``Profile.score`` does not inherit it, and ``"auto"`` never splits drafts:
       each is one document unless ``"heading"`` or ``"rule"`` is asked for, which splits a
       text into two parts or more and gives a manuscript a verdict per chapter.
@@ -506,8 +506,9 @@ class Profile(_Result[ReferenceReport]):
             if STAND_IN in (self._report.get("settings") or {}).get("split_used", []):
                 report["warnings"].append(
                     "the reference's held-out calibration comes from stand-in documents, "
-                    "consecutive parts of one text that share its topics, so its ranges are "
-                    "optimistic and this verdict may be harsher than it should be"
+                    "consecutive parts of one file: if its topics run from one part into the "
+                    "next, its ranges are too narrow and this verdict can read harsher than it "
+                    "should"
                 )
             step(Phase.DONE)
             return ScoreResult(
@@ -1608,7 +1609,7 @@ def _stand_ins(
 ) -> list[Chunk]:
     """``windows`` with those of each of ``documents`` that has ``split.MIN_PARTS`` windows
     or more grouped, in order, into stand-in documents (``split.stand_in_groups``), named
-    ``book.md#3#w1``, each text with a note on why their calibration is optimistic. The
+    ``book.md#3#w1``, each text with a note on why their calibration may be optimistic. The
     same list when there are none."""
     positions: dict[str, list[int]] = {}
     for index, chunk in enumerate(windows):
@@ -1642,11 +1643,11 @@ def _stand_ins(
         notes.append(
             Note(
                 f"{role}{_label(first)} has no headings or rules that split it into "
-                f"documents, so {grouped} for held-out calibration. They are "
-                "parts of one text and share its topics, so that calibration is optimistic, "
-                "and verdicts on new text may be harsher than they should be; give the "
-                "writer's texts as separate files, or start each with a heading, for a "
-                "better one",
+                f"documents, so {grouped} for held-out calibration. These are "
+                "consecutive parts of one file: if topics run from one part into the next, "
+                "the ranges come out too narrow and verdicts on new text can read harsher "
+                "than they should; mark where each piece begins with a heading or a rule, "
+                "or give the pieces as separate files",
                 NoteCode.STAND_INS,
                 setting="split_on",
             )

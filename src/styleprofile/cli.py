@@ -216,7 +216,7 @@ def _add_input_flags(parser: argparse.ArgumentParser, *, inherited: bool) -> Non
         choices=SPLIT_ON,
         default=None if inherited else AUTO,
         metavar="HOW",
-        help="heading or rule: split each draft there, for a verdict per part (default: none)"
+        help="heading or rule: a verdict per part of each draft (auto and none: no split)"
         if inherited
         else "auto, heading, rule or none: split texts into documents (default: auto, "
         "if under 3 documents)",

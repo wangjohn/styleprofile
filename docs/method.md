@@ -128,8 +128,9 @@ split each Markdown, text or HTML text among them (`--split-on auto`, the defaul
   grouped in order into 8 stand-in documents of nearly equal size (as many as it has
   windows, when fewer), named `book.md#3#w1`. Consecutive windows share topics, and
   nothing in the pieces' within-document similarity can see the similarity *between*
-  neighbouring stand-ins, so calibration on them is optimistic and verdicts on new text
-  may be harsher; the note says so, and a score against such a reference warns. Eight
+  neighbouring stand-ins: if topics run from one part into the next, the ranges come out
+  too narrow and verdicts on new text can read harsher than they should. The note says so,
+  and a score against such a reference warns. Eight
   keeps them under the 10 documents below which that similarity is floored at 0.2 (see
   "An honest 95% bound"), which widens their ranges. The contrast set, when it is one file,
   is split the same way.

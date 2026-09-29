@@ -1076,7 +1076,7 @@ def summarize(chunk_metrics: Sequence[Metrics]) -> Summary:
 #   Markdown, text or HTML text among them is split at its headings or rules into parts of
 #   at least half a window, ``book.md#3-mud-season``; one with none is cut into stand-in
 #   documents of consecutive windows, ``book.md#3#w1``, which share topics, so calibration
-#   on them is optimistic. JSONL records are never split: each is already a document.
+#   on them may be optimistic. JSONL records are never split: each is already a document.
 #
 # Windows of a document stay in it. Ids name chunks for people (``post#w2``,
 # ``thread=t1#r12``, ``c0012..c0019``) and are never read back to find a document, except
