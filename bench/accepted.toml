@@ -14,10 +14,3 @@
 # An entry applies only to the PR it names (its PR runs, and the push to main that merges it).
 # Afterwards it is inert and CI warns until it is deleted; delete it in any later PR. See
 # bench/gate.py.
-
-[[regression]]
-pr = 18
-case = "comments"
-metric = "profile_mb"
-ratio = 1.5
-reason = "Pooling: the comments reference is now ~500-word windows instead of 50-word records, so length calibration can cut 75-, 150- and 300-word pieces and stores their ranges (0.05 to 0.07 MB, still far under the 1 MB target). Build CPU time falls to 0.40x and peak memory to 0.27x."
