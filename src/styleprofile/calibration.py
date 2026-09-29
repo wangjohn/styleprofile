@@ -34,12 +34,15 @@ from styleprofile.weighting import (
     LIKENESS_MIN_CEILING,
     MIN_CEILING,
     TOO_SHORT,
+    HeldDeltas,
     Key,
     ZScores,
     calibrate_delta,
     delta_level,
     flatten,
+    held_out_deltas,
     held_out_z,
+    intraclass_correlation,
     likeness_step,
     likeness_words,
     nest,
@@ -58,6 +61,17 @@ MIN_JUDGED_WORDS = 75
 # observed rather than set by the single largest piece.
 MIN_CALIBRATION_DOCUMENTS = 3
 MIN_CALIBRATION_PIECES = 20
+# With few documents the within-document similarity of pieces (their intraclass
+# correlation) is poorly estimated even pooled over the lengths, and an estimate that
+# happens to be low calls the pieces more independent than they are. Below FLOOR_DOCUMENTS
+# documents it is taken as at least SIMILARITY_FLOOR, a little above the 0.17 measured on
+# the synthetic corpus. In a simulation of 3 to 9 documents with true similarities of 0 to
+# 0.4, among references that pass as calibrated, the share whose bound is exceeded more
+# than 7.5% of the time falls from 7.5% with each length's own estimate to 2.6% (worst case
+# 49% to 12%); a floor of 0.3 would reach 0.9% but calibrate half as many small
+# references (see docs/method.md).
+FLOOR_DOCUMENTS = 10
+SIMILARITY_FLOOR = 0.2
 # The contrast's likeness range at a length is only its median, which needs fewer pieces.
 MIN_CONTRAST_PIECES = 5
 # At most this many words of pieces are measured per length, taken evenly across the corpus,
@@ -212,11 +226,52 @@ def held_out_pieces(
     )
 
 
+Pieces = tuple[Sequence[ZScores], Sequence[str], Sequence[float]]
+
+
+def calibrate_lengths(pieces: Mapping[int, Pieces]) -> tuple[dict[int, dict[str, Any]], float]:
+    """Every length's stored calibration (``calibrate_length``), from its pieces' held-out
+    z-scores (``held_out_pieces``), documents and word counts; and the intraclass
+    correlation their bounds share (``similarity``)."""
+    deltas = {
+        length: held_out_deltas(held, documents) for length, (held, documents, _) in pieces.items()
+    }
+    documents = {document for _, sources, _ in pieces.values() for document in sources}
+    icc = similarity([(found.overall, found.sources) for found in deltas.values()], len(documents))
+    entries = {
+        length: calibrate_length(held, sources, words, deltas=deltas[length], icc=icc)
+        for length, (held, sources, words) in pieces.items()
+    }
+    return entries, icc
+
+
+def similarity(values: Sequence[tuple[Sequence[float], Sequence[str]]], documents: int) -> float:
+    """How alike one document's pieces are: the intraclass correlation of their Deltas,
+    pooled over the lengths (weighted by pieces), since one length's estimate from a few
+    documents swings widely; and, below ``FLOOR_DOCUMENTS`` documents, at least
+    ``SIMILARITY_FLOOR``, so that a lucky low estimate cannot pass a length as calibrated
+    with an optimistic bound."""
+    estimates = [
+        (estimate, len(found))
+        for found, sources in values
+        if (estimate := intraclass_correlation(found, sources)) is not None
+    ]
+    total = sum(count for _, count in estimates)
+    pooled = sum(estimate * count for estimate, count in estimates) / total if total else 0.0
+    return max(pooled, SIMILARITY_FLOOR) if documents < FLOOR_DOCUMENTS else pooled
+
+
 def calibrate_length(
-    held: Sequence[ZScores], piece_documents: Sequence[str], words: Sequence[float]
+    held: Sequence[ZScores],
+    piece_documents: Sequence[str],
+    words: Sequence[float],
+    *,
+    deltas: HeldDeltas | None = None,
+    icc: float | None = None,
 ) -> dict[str, Any]:
     """One length's stored calibration, from its pieces' held-out z-scores
-    (``held_out_pieces``), their documents and their word counts.
+    (``held_out_pieces``), their documents and their word counts, with the intraclass
+    correlation ``icc`` for its bounds (estimated from these pieces alone when None).
 
     The entry always records how many pieces and documents it rests on, and how many
     independent pieces they are worth (``effective``); the rms and the Delta range only when
@@ -229,9 +284,9 @@ def calibrate_length(
     }
     if len(held) < MIN_CALIBRATION_PIECES or entry["documents"] < MIN_CALIBRATION_DOCUMENTS:
         return entry
-    # Every 95th percentile is an upper confidence bound, and the 99th percentile is for
+    # Every 95th percentile is an upper confidence bound; the 99th percentile is for
     # flagging one passage among many (plan PR 12's drift localization).
-    delta = calibrate_delta(held, piece_documents, upper=True)
+    delta = calibrate_delta(held, piece_documents, upper=True, icc=icc, deltas=deltas)
     if delta is None:
         return entry
     delta.pop("max", None)

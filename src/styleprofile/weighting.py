@@ -185,16 +185,23 @@ def quantile(values: Sequence[float], share: float) -> float:
     return ordered[round(share * (len(ordered) - 1))]
 
 
-def effective_count(values: Sequence[float], groups: Sequence[str]) -> float:
-    """How many independent values ``values`` are worth, given that values from one group
-    (one document) are alike: n over the design effect 1 + (n0 - 1) x ICC, with the
-    intraclass correlation from a one-way analysis of variance and n0 the usual adjusted
-    mean group size. Values that are no more alike within groups than between count fully.
-    """
+def _group_size(groups: Sequence[str]) -> float:
+    """n0, the usual adjusted mean group size of a one-way analysis of variance."""
+    count = len(groups)
+    sizes = [len(index) for index in _by_source(groups).values()]
+    if len(sizes) < 2:
+        return float(count)
+    return (count - sum(size * size for size in sizes) / count) / (len(sizes) - 1)
+
+
+def intraclass_correlation(values: Sequence[float], groups: Sequence[str]) -> float | None:
+    """How alike values from one group (one document) are: the intraclass correlation from
+    a one-way analysis of variance, clipped to [0, 1]; None with fewer than two groups or
+    no group of two or more."""
     count = len(values)
     positions = _by_source(groups)
     if len(positions) < 2 or count <= len(positions):
-        return float(min(count, len(positions))) if len(positions) < 2 else float(count)
+        return None
     mean = statistics.fmean(values)
     means = {
         group: statistics.fmean(values[i] for i in index) for group, index in positions.items()
@@ -205,22 +212,50 @@ def effective_count(values: Sequence[float], groups: Sequence[str]) -> float:
     )
     mean_between = between / (len(positions) - 1)
     mean_within = within / (count - len(positions))
-    size = (count - sum(len(index) ** 2 for index in positions.values()) / count) / (
-        len(positions) - 1
-    )
-    spread = mean_between + (size - 1) * mean_within
-    icc = min(max((mean_between - mean_within) / spread, 0.0), 1.0) if spread > 0 else 0.0
-    return count / (1 + (size - 1) * icc)
+    spread = mean_between + (_group_size(groups) - 1) * mean_within
+    return min(max((mean_between - mean_within) / spread, 0.0), 1.0) if spread > 0 else 0.0
+
+
+def effective_count(
+    values: Sequence[float], groups: Sequence[str], icc: float | None = None
+) -> float:
+    """How many independent values ``values`` are worth, given that values from one group
+    (one document) are alike: n over the design effect 1 + (n0 - 1) x ICC, with n0 the
+    adjusted mean group size. ``icc`` is the intraclass correlation to use; by default it
+    is estimated from the values themselves (``intraclass_correlation``). Values from one
+    group count as one."""
+    count = len(values)
+    if len(set(groups)) < 2:
+        return float(min(count, 1))
+    if icc is None:
+        icc = intraclass_correlation(values, groups) or 0.0
+    return count / (1 + (_group_size(groups) - 1) * icc)
 
 
 def upper_quantile(
-    values: Sequence[float], groups: Sequence[str], share: float, z: float = UPPER_Z
+    values: Sequence[float],
+    groups: Sequence[str],
+    share: float,
+    z: float = UPPER_Z,
+    icc: float | None = None,
 ) -> float:
     """An upper confidence bound on the ``share`` quantile of ``values``: the quantile at
     share + z x sqrt(share (1 - share) / n_eff), with n_eff from ``effective_count``, so a
-    bound read from few documents is set higher rather than trusted as exact."""
-    effective = max(effective_count(values, groups), 1.0)
+    bound read from few documents is set higher rather than trusted as exact. For the 95th
+    percentile that is the sample maximum below about 31 effective values."""
+    effective = max(effective_count(values, groups, icc), 1.0)
     return quantile(values, min(share + z * math.sqrt(share * (1 - share) / effective), 1.0))
+
+
+@dataclass(frozen=True)
+class HeldDeltas:
+    """Held-out Deltas of chunks (or pieces), overall and per area, with the source each
+    came from (see ``held_out_deltas``)."""
+
+    overall: list[float]
+    sources: list[str]
+    areas: dict[str, list[float]]
+    area_sources: dict[str, list[str]]
 
 
 def likeness(
@@ -566,17 +601,10 @@ def by_document(scores: Sequence[float], sources: Sequence[str]) -> list[list[fl
     return list(grouped.values())
 
 
-def calibrate_delta(
-    held: Sequence[ZScores], sources: Sequence[str], *, upper: bool = False
-) -> dict[str, Any] | None:
-    """The reference's own Delta range on held-out chunks, overall and per area.
-
-    Each source is scored with reliability weights learned without it, so the range shows
-    how Delta behaves on the writer's new text rather than on text the weights have seen.
-    With ``upper`` (for calibration pieces, many per document), each 95th percentile is an
-    upper confidence bound (``upper_quantile``), the overall 99th percentile is added, and
-    ``effective`` records how many independent pieces the overall values are worth.
-    """
+def held_out_deltas(held: Sequence[ZScores], sources: Sequence[str]) -> HeldDeltas:
+    """Each chunk's Delta, overall and per area, with reliability weights learned without
+    its own source, so the values show how Delta behaves on the writer's new text rather
+    than on text the weights have seen."""
     total, parts = _sums(held, sources)
     full = delta_weights(_rms(total))
     scored: list[tuple[float | None, dict[str, float]]] = [(None, {})] * len(held)
@@ -604,17 +632,40 @@ def calibrate_delta(
         for group, amount in by_group.items():
             areas[group].append(amount)
             area_sources[group].append(source)
+    return HeldDeltas(overall, overall_sources, dict(areas), dict(area_sources))
+
+
+def calibrate_delta(
+    held: Sequence[ZScores],
+    sources: Sequence[str],
+    *,
+    upper: bool = False,
+    icc: float | None = None,
+    deltas: HeldDeltas | None = None,
+) -> dict[str, Any] | None:
+    """The reference's own Delta range on held-out chunks (``held_out_deltas``, or
+    ``deltas`` when already computed), overall and per area.
+
+    With ``upper`` (for calibration pieces, many per document), each 95th percentile is an
+    upper confidence bound (``upper_quantile``) with the intraclass correlation ``icc``
+    (estimated from the values when None), the overall 99th percentile is added, and
+    ``effective`` records how many independent pieces the overall values are worth.
+    """
+    deltas = deltas or held_out_deltas(held, sources)
+    overall, overall_sources = deltas.overall, deltas.sources
     if not overall:
         return None
 
     def p95(values: list[float], groups: list[str]) -> float:
-        return upper_quantile(values, groups, 0.95) if upper else quantile(values, 0.95)
+        if upper:
+            return upper_quantile(values, groups, 0.95, icc=icc)
+        return quantile(values, 0.95)
 
     extra: dict[str, float] = {}
     if upper:
         extra = {
-            "p99": upper_quantile(overall, overall_sources, 0.99),
-            "effective": effective_count(overall, overall_sources),
+            "p99": quantile(overall, 0.99),
+            "effective": effective_count(overall, overall_sources, icc),
         }
     return {
         "median": statistics.median(overall),
@@ -622,8 +673,11 @@ def calibrate_delta(
         **extra,
         "max": max(overall),
         "by_group": {
-            group: {"median": statistics.median(values), "p95": p95(values, area_sources[group])}
-            for group, values in areas.items()
+            group: {
+                "median": statistics.median(values),
+                "p95": p95(values, deltas.area_sources[group]),
+            }
+            for group, values in deltas.areas.items()
         },
     }
 
@@ -725,6 +779,8 @@ def likeness_range(
     contrast_piece_z: Sequence[ZScores],
     contrast_piece_sources: Sequence[str],
     learned: CrossValidated,
+    *,
+    icc: float | None = None,
 ) -> dict[str, Any]:
     """The likeness range of shorter pieces: the reference's held-out median and 95th
     percentile, and the contrast pieces' median.
@@ -758,7 +814,7 @@ def likeness_range(
     return {
         "reference": {
             "median": statistics.median(reference_scores),
-            "p95": upper_quantile(reference_scores, piece_sources, 0.95),
+            "p95": upper_quantile(reference_scores, piece_sources, 0.95, icc=icc),
         },
         "contrast": {"median": statistics.median(contrast_scores)},
     }

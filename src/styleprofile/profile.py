@@ -31,7 +31,7 @@ from styleprofile.calibration import (
     MIN_JUDGED_WORDS,
     AtLength,
     Lengths,
-    calibrate_length,
+    calibrate_lengths,
     held_out_pieces,
     plan_pieces,
     verdict,
@@ -1035,6 +1035,8 @@ class _Calibrated:
 
     held: list[ZScores]
     pieces: dict[int, tuple[list[ZScores], list[str]]]
+    # The intraclass correlation the pieces' bounds use (``calibration.similarity``).
+    icc: float = 0.0
 
 
 def _calibrate(report: dict[str, Any], measured: _Measured) -> _Calibrated | None:
@@ -1063,18 +1065,19 @@ def _calibrate(report: dict[str, Any], measured: _Measured) -> _Calibrated | Non
         [documents[piece.chunk] for piece in measured.pieces],
         floor,
     )
+    grouped: dict[int, tuple[list[ZScores], list[str], list[float]]] = {}
     for length in sorted({piece.length for piece in measured.pieces}):
         chosen = [index for index, piece in enumerate(measured.pieces) if piece.length == length]
-        piece_held = [all_held[index] for index in chosen]
-        piece_documents = [documents[measured.pieces[index].chunk] for index in chosen]
-        entry = calibrate_length(
-            piece_held,
-            piece_documents,
+        grouped[length] = (
+            [all_held[index] for index in chosen],
+            [documents[measured.pieces[index].chunk] for index in chosen],
             [measured.pieces[index].metrics["size"]["words"] or 0.0 for index in chosen],
         )
+    entries, icc = calibrate_lengths(grouped)
+    for length, entry in entries.items():
         by_length[str(length)] = entry
         if "delta" in entry:
-            pieces[length] = (piece_held, piece_documents)
+            pieces[length] = grouped[length][:2]
     report["calibration"] = {
         "sources": len(set(documents)),
         "delta": calibration,
@@ -1084,7 +1087,7 @@ def _calibrate(report: dict[str, Any], measured: _Measured) -> _Calibrated | Non
         ),
         "by_length": by_length,
     }
-    return _Calibrated(held, pieces)
+    return _Calibrated(held, pieces, icc)
 
 
 @dataclass(frozen=True)
@@ -1203,6 +1206,7 @@ def _calibrate_contrast_lengths(
             [_z_against(piece.metrics, report["summary"], floor) for piece in chosen],
             [fit.contrast_documents[piece.chunk] for piece in chosen],
             fit.learned,
+            icc=calibrated.icc,
         )
 
 

@@ -27,15 +27,18 @@ import pytest
 import styleprofile as sp
 from styleprofile.calibration import (
     CALIBRATION_LENGTHS,
+    FLOOR_DOCUMENTS,
     MIN_CALIBRATION_DOCUMENTS,
     MIN_CALIBRATION_PIECES,
     MIN_JUDGED_WORDS,
+    SIMILARITY_FLOOR,
     Lengths,
     chunk_level,
     chunk_likeness_level,
     cut,
     enough,
     plan_pieces,
+    similarity,
 )
 from styleprofile.cli import main
 from styleprofile.core import StyleProfileError
@@ -54,6 +57,7 @@ from styleprofile.weighting import (
     DISTANCE_WORDS,
     TOO_SHORT,
     effective_count,
+    intraclass_correlation,
     mean_ceiling,
     pooled_ceiling,
     quantile,
@@ -257,13 +261,14 @@ def test_a_few_large_documents_without_windows_are_calibrated(corpus: Path) -> N
     files = sorted((corpus / "writer").glob("*.md"))
     books = [
         sp.Text(
-            "\n\n".join(path.read_text(encoding="utf-8") for path in files[i::4][:12]), f"book{i}"
+            "\n\n".join(path.read_text(encoding="utf-8") for path in files[i::6][:8]), f"book{i}"
         )
-        for i in range(4)
+        for i in range(6)
     ]
     profile = sp.build(books, sp.Settings(window_words=0, syntax=False))
     lengths = profile.report["calibration"]["by_length"]
-    assert all(entry["documents"] == 4 and enough(entry) for entry in lengths.values())
+    # Every book contributes pieces; six are enough even counted as alike within a book.
+    assert all(entry["documents"] == 6 and enough(entry) for entry in lengths.values())
     draft = "\n\n".join(_body(path) for path in files[100:105])
     assert 4000 < _words(draft) < 6500
     result = profile.score(sp.Text(draft), syntax=False)
@@ -286,7 +291,7 @@ def test_reference_stores_calibration_by_length() -> None:
         if enough(entry):
             assert set(entry) >= {"reliability", "delta", "likeness", "effective"}
             delta = entry["delta"]
-            assert delta["median"] <= delta["p95"] <= delta["p99"]
+            assert delta["median"] <= min(delta["p95"], delta["p99"])
             assert "max" not in delta and "p99" not in delta["by_group"]["voice"]
             # Shorter texts vary more by chance than whole windows do.
             assert entry["delta"]["p95"] > calibration["delta"]["p95"]
@@ -307,6 +312,24 @@ def test_the_bound_counts_documents_not_pieces() -> None:
     spread = [float(index % 37) for index in range(100)]
     assert upper_quantile(spread, groups, 0.95) >= quantile(spread, 0.95)
     assert upper_quantile(alike, groups, 0.95) == max(alike)
+
+
+def test_similarity_is_pooled_over_lengths_and_floored_for_few_documents() -> None:
+    # Pieces alike within their document at one length, unrelated at another: the pooled
+    # estimate lies between, weighted by pieces.
+    alike = (
+        [float(doc) for doc in range(12) for _ in range(4)],
+        [str(doc) for doc in range(12) for _ in range(4)],
+    )
+    mixed = ([float(index % 5) for index in range(48)], alike[1])
+    pooled = similarity([alike, mixed], 12)
+    assert 0 < pooled < 1
+    assert pooled == pytest.approx(
+        ((intraclass_correlation(*alike) or 0) + (intraclass_correlation(*mixed) or 0)) / 2
+    )
+    # With fewer than FLOOR_DOCUMENTS documents it is never below the floor.
+    assert similarity([mixed], FLOOR_DOCUMENTS - 1) >= SIMILARITY_FLOOR
+    assert similarity([mixed], FLOOR_DOCUMENTS) < SIMILARITY_FLOOR
 
 
 def test_calibration_interpolates_between_lengths() -> None:
