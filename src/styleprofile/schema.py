@@ -91,6 +91,11 @@ class InputSettings(TypedDict, total=False):
     pool: Literal["auto"] | bool
     # Whether short texts were joined into windows (``pool`` is what was asked).
     pool_used: bool
+    split_on: Literal["auto", "heading", "rule", "none"]
+    # How texts were split into documents (``split_on`` is what was asked): "heading",
+    # "rule" and "stand-in" (consecutive windows of a text with neither), sorted; empty when
+    # nothing was split.
+    split_used: list[str]
     # Paths as given, and ``Text`` or ``Chunk`` inputs by name.
     inputs: list[str]
 

@@ -522,7 +522,8 @@ def test_the_review_paragraph_abstains(tmp_path: Path, capsys: pytest.CaptureFix
 def test_a_reference_from_one_document_does_not_judge_short_texts(corpus: Path) -> None:
     files = sorted((corpus / "writer").glob("*.md"))
     one = "\n\n".join(path.read_text(encoding="utf-8") for path in files[:20])
-    profile = sp.build(sp.Text(one, "all.md"), sp.Settings(syntax=False))
+    # Kept whole: split, its 20 documents would calibrate it (see test_split).
+    profile = sp.build(sp.Text(one, "all.md"), sp.Settings(syntax=False, split_on="none"))
     assert profile.report["word_count"] > 15_000 and "calibration" not in profile.report
     # The writer's own paragraphs: none may read "somewhat" or worse; all abstain.
     results = [
