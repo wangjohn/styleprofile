@@ -1,0 +1,5 @@
+$ styleprofile score -q --by-paragraph examples/draft.md examples/writer/old-maps.md '<tmp>/demo-writer.json'
+[exit 0]
+--- stdout
+examples/draft.md: close (Delta 0.65); LLM-likeness a few LLM traits (0.75); drifts at lines 9, 15
+examples/writer/old-maps.md: close (Delta 0.48); LLM-likeness like the reference (0.20)

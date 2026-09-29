@@ -339,6 +339,11 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     score_parser.add_argument(
         "--all", action="store_true", help="show every metric and document, not just key ones"
     )
+    score_parser.add_argument(
+        "--by-paragraph",
+        action="store_true",
+        help="experimental: show where each document drifts, paragraph by paragraph",
+    )
     _add_input_flags(score_parser, inherited=True)
     score_parser.set_defaults(top_k=None)
     score_parser.epilog = f"{score_parser.epilog}\n\n{SCORE_EXIT_STATUS}"
@@ -356,6 +361,11 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     )
     show.add_argument(
         "--all", action="store_true", help="show every metric and document, not just key ones"
+    )
+    show.add_argument(
+        "--by-paragraph",
+        action="store_true",
+        help="for a score report made with --by-paragraph (experimental), list every paragraph",
     )
 
     metrics = commands.add_parser(
@@ -602,6 +612,21 @@ def _flag_count(flagged: int, judged: int, chunks: int, label: str | None) -> st
     return flagged_text(flagged, judged, chunks, label) if flagged and judged > 1 else ""
 
 
+def _drifts(result: ScoreResult, name: str) -> str:
+    """ "; drifts at lines 9, 15" for a document whose paragraphs drift (``passages``), or
+    "; drifts throughout" when more than half of them do."""
+    passages = [passage for passage in result.passages if passage.document == name]
+    where = [
+        f"{first}" if first == last else f"{first}-{last}"
+        for passage in passages
+        if passage.drifts
+        for first, last in [passage.lines]
+    ]
+    if len(where) * 2 > len(passages):
+        return "; drifts throughout"
+    return f"; drifts at line{'s' * (len(where) > 1)} {', '.join(where)}" if where else ""
+
+
 def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
     """``-q``: one line per document, furthest from the reference first, each named where
     it can be opened (``DocumentResult.shown``)."""
@@ -625,6 +650,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
                 note=not_judged(doc.chunks, doc.chunks_judged),
                 flagged=_flag_count(doc.flagged, doc.chunks_judged, doc.chunks, label),
             )
+            + _drifts(result, doc.name)
             for doc in ranked
         ]
     if documents:
@@ -653,6 +679,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
                 verdict["flagged"], verdict["chunks_judged"], verdict["chunks"], label
             ),
         )
+        + (_drifts(result, documents[0].name) if documents else "")
     ]
 
 
@@ -732,7 +759,7 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["group_field"] = args.group_field
     if args.pool is not None:
         overrides["pool"] = args.pool
-    result = profile.score(samples, **overrides)
+    result = profile.score(samples, passages=args.by_paragraph, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     failed = _failed(args, result)
@@ -759,7 +786,10 @@ def _run_score(args: argparse.Namespace) -> int:
             _note(f"{_plural(len(result.warnings), 'warning')}; run without -q to see them")
     else:
         setting = result.report["reference"]["verdict"].get("setting")
-        print(_flagged(result.to_text(color=_color(), full=args.all, width=_width()), setting))
+        text = result.to_text(
+            color=_color(), full=args.all, width=_width(), by_paragraph=args.by_paragraph
+        )
+        print(_flagged(text, setting))
         if args.output:
             print(f"\nwrote {args.output}")
     if failed:
@@ -781,7 +811,15 @@ def _run_show(args: argparse.Namespace) -> int:
         print(format_summary(report, color=color, full=args.all))
         return 0
     baseline = report["reference"]["baseline"]
-    print(format_summary(report, baseline, color=color, full=args.all, width=_width()))
+    text = format_summary(
+        report,
+        baseline,
+        color=color,
+        full=args.all,
+        width=_width(),
+        by_paragraph=args.by_paragraph,
+    )
+    print(text)
     return 0
 
 

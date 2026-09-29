@@ -1,0 +1,36 @@
+$ styleprofile score examples/draft.md '<tmp>/demo-writer.json'
+[exit 0]
+--- stdout
+STYLE COMPARISON   1 chunk, 542 words   vs demo-writer.json (55 chunks)
+
+Overall: close   Delta 0.64
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.59 typically (95% under 0.91).
+
+LLM-likeness: a few LLM traits   0.84
+  The reference's own writing at this length (542 words) scores 0.24 typically (95% under 0.61); the LLM drafts 8.62.
+  Strongest LLM signals: Nominalizations (-tion, -ment) ▲, "these" ▲
+
+By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
+  close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
+  Voice and stance             1.18x  ████░░░░░░░░░░░░░░░░  somewhat different
+  Punctuation                  0.78x  ███░░░░░░░░░░░░░░░░░  close
+  Function words               0.76x  ███░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.58x  ███░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.56x  ███░░░░░░░░░░░░░░░░░  close
+  Vocabulary                   0.56x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.45x  ██░░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.37x  ██░░░░░░░░░░░░░░░░░░  close
+  Formatting                   0.27x  █░░░░░░░░░░░░░░░░░░░  close
+
+Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
+                                                   this text   reference
+  "but"                                              5.5 /1k     1.8 /1k   ▲▲
+  "has"                                              7.4 /1k     2.5 /1k   ▲▲
+  Sentences starting However / Moreover                 2.9%        0.0%   ▲▲  reference never varies
+  Nominalizations (-tion, -ment)                     7.4 /1k     2.8 /1k   ▲
+  Em dashes                                          1.8 /1k     0.0 /1k   ▲  reference never varies
+  LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲  reference never varies
+  "these"                                            1.8 /1k     0.0 /1k   ▲  reference never varies
+  "by"                                               9.2 /1k     4.4 /1k   ▲
+
+Pass --all to see every metric.

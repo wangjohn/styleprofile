@@ -1,0 +1,18 @@
+$ styleprofile build '<tmp>/demo/writer' --contrast '<tmp>/demo/contrast' -o '<tmp>/demo-writer.json' --no-syntax
+[exit 0]
+--- stdout
+STYLE PROFILE   55 chunks, 29,312 words
+
+As a reference   held-out Delta 0.53 typically, 95% under 0.84 (40 documents)
+  Shorter texts: calibrated at 75 words (393 pieces), 150 words (197 pieces), 300 words (85 pieces). Under 75 words, no verdict.
+
+Contrast: LLM drafts   13 chunks from 10 documents; separates them from the reference with AUC 1.00 (perfect separation on 40 reference and 10 contrast documents)
+  LLM-likeness on held-out text: reference 0.16 typically (95% under 0.43), LLM drafts 7.71
+  Length alone: AUC 0.54 (reference 564 words per chunk, LLM drafts 571): not a length effect
+  Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, "these" ▲
+
+Pass --all, or run `styleprofile show` on it, to see the metrics.
+
+wrote <tmp>/demo-writer.json
+Next, score a draft against it:
+  styleprofile score <draft> <tmp>/demo-writer.json

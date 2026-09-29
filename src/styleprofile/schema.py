@@ -222,6 +222,46 @@ class LengthCalibration(BaselineLength):
     reliability: NotRequired[Grouped]
 
 
+class DriftTail(TypedDict):
+    """The upper tail of a paragraph null (``drift.fit_tail``): ``share`` of ``count`` values
+    exceed ``threshold``, by ``scale`` on average (an exponential tail)."""
+
+    count: int
+    threshold: float
+    share: float
+    scale: float
+
+
+class DriftLevels(TypedDict):
+    """The spread of held-out reference documents' levels: the median, and the
+    ``drift.LEVEL_SHARE`` quantile."""
+
+    median: float
+    high: float
+
+
+class DriftCalibration(TypedDict):
+    """The null of the paragraph statistic, from held-out reference documents read in parts
+    (``profile._calibrate_drift``), which sets each scored document's thresholds."""
+
+    # The score spans are judged by, the span length and the chance of any false flag in a
+    # document of the writer's that the thresholds aim at.
+    by: Literal["delta", "likeness"]
+    span_words: int
+    alpha: float
+    # What the null rests on.
+    documents: int
+    paragraphs: int
+    # The spread of the documents' levels (each document's median statistic), the tail of a
+    # paragraph's excess over its document's level (paragraphs on two spans), and the tail
+    # of the statistic of paragraphs on one span. None when the reference is too small to
+    # estimate one; without ``levels`` and ``within`` no paragraph drifts, and without
+    # ``one`` no paragraph on one span does.
+    levels: DriftLevels | None
+    within: DriftTail | None
+    one: DriftTail | None
+
+
 class _CalibrationBase(TypedDict):
     # How many documents the chunks came from.
     sources: int
@@ -238,6 +278,9 @@ class Calibration(_CalibrationBase):
     # Length in words ("75", "150", "300") -> its calibration. Empty when the chunks are too
     # short to cut into pieces.
     by_length: dict[str, LengthCalibration]
+    # The paragraph null (``drift``); only for a reference whose shorter lengths were
+    # calibrated (not for ``evaluate``). A score's baseline leaves it out.
+    drift: NotRequired[DriftCalibration]
 
 
 class BaselineCalibration(_CalibrationBase):
@@ -568,6 +611,103 @@ class FailedDocument(TypedDict):
     chunks_judged: int
 
 
+class PassageTrait(TypedDict):
+    """One way a span differs from the writer (``drift.traits``)."""
+
+    metric: str
+    # In standard deviations of the writer's own text at the span's length.
+    z: float
+    value: float | None
+    # The writer's mean.
+    reference: float | None
+
+
+class SpanScore(TypedDict):
+    """One span of at least ``span_words`` words, judged at its length (``drift.judge_span``)."""
+
+    # The paragraphs it covers, as a [start, end) range of indices into ``paragraphs``.
+    paragraphs: list[int]
+    words: int
+    # The score it is judged by: likeness with a likeness range at its length, else Delta.
+    by: Literal["delta", "likeness"]
+    # That score over its 95% bound; None when the span is not judged.
+    relative: float | None
+    delta: float | None
+    # The Delta verdict's bound, with its floor.
+    ceiling: float | None
+    likeness: float | None
+    likeness_ceiling: float | None
+    # The Delta level (0-3) against its length's range; None when not judged.
+    level: int | None
+
+
+class ParagraphScore(TypedDict):
+    """One paragraph and how it reads, from the lower of its two spans (``drift.judge``)."""
+
+    # The first and last line of its prose in the document as read.
+    lines: list[int]
+    words: int
+    # The start of its prose, about 60 characters.
+    excerpt: str
+    # How many judged spans its statistic rests on (1 or 2); the figures below are None
+    # when none.
+    spans: int
+    by: Literal["delta", "likeness"] | None
+    # Its statistic: the lower span's score over its 95% bound; and the threshold it drifts
+    # above (None when the reference has no null for it).
+    relative: float | None
+    threshold: float | None
+    delta: float | None
+    level: int | None
+    likeness: float | None
+    likeness_level: int | None
+    # The paragraph's own traits, measured on it alone.
+    traits: list[PassageTrait]
+    # Its own score over the bound at its length, read alone (not a verdict: below 75 words
+    # the bound is only widened). One above 1 reads unlike the writer by itself, so no
+    # neighbour explains it away.
+    alone: float | None
+    # Whether it drifts (a paragraph's own flag, distinct from a chunk's ``flagged``), and
+    # when its statistic is above its span's 95% bound but it does not, why.
+    drifts: bool
+    note: str | None
+
+
+class DriftThresholds(TypedDict):
+    """A document's thresholds for paragraphs resting on two spans and on one (None: a
+    paragraph on one span never drifts against this reference)."""
+
+    two: float
+    one: float | None
+
+
+class DocumentPassages(TypedDict):
+    """Where one scored document drifts (``profile._passages``)."""
+
+    # As ``documents`` names it (``DocumentEntry.name``), and its saved source.
+    name: str
+    source: str
+    # Read from HTML: its lines are those of the Markdown conversion.
+    converted: bool
+    # Scored as pooled windows of records, so not read in parts (``reason`` says so).
+    pooled: bool
+    words: int
+    span_words: int
+    # False when no span could be judged; ``reason`` says why, and ``paragraphs`` is empty.
+    judged: bool
+    reason: str | None
+    # The score its spans are judged by; None when not judged.
+    by: Literal["delta", "likeness"] | None
+    # Whether the reference has a null for that score (``calibration.drift``), so
+    # paragraphs can be flagged at all, and the thresholds it sets for this document.
+    sensitive: bool
+    # The document's own level (``drift.level``): its median paragraph statistic.
+    own_level: float | None
+    thresholds: DriftThresholds | None
+    spans: list[SpanScore]
+    paragraphs: list[ParagraphScore]
+
+
 class ScoreReport(ReportBase):
     """Drafts scored against a reference, as ``styleprofile score`` saves them."""
 
@@ -575,6 +715,9 @@ class ScoreReport(ReportBase):
     chunks: list[ScoredChunk]
     # Each document's own verdict, in input order.
     documents: list[DocumentEntry]
+    # Each document read in overlapping spans (``drift``); None when the score did not
+    # (by default, a score of several documents).
+    passages: list[DocumentPassages] | None
     reference: ReferenceScore
     # Only when ``score`` was given --fail-above, --fail-likeness or --fail-flagged.
     fail: NotRequired[FailLevels]

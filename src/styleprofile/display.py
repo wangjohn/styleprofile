@@ -7,6 +7,7 @@ report was scored against a reference.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -26,6 +27,8 @@ from styleprofile.calibration import (
     too_short_text,
 )
 from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict
+from styleprofile.drift import DELTA, LIKENESS
+from styleprofile.drift import excerpt as excerpt_text
 from styleprofile.metrics import (
     DISTRIBUTION_LABELS,
     KEY_VIEW,
@@ -44,9 +47,11 @@ from styleprofile.schema import (
     BaselineLength,
     Contrast,
     DocumentEntry,
+    DocumentPassages,
     EvaluationReport,
     LengthBaseline,
     MetricStats,
+    ParagraphScore,
     ReferenceReport,
     ReportBase,
     ScoredChunk,
@@ -91,9 +96,20 @@ LIKENESS_CELLS = {
     # Judged on Delta, but the reference has no likeness range at its length.
     LikenessVerdict.TOO_SHORT: "too short",
 }
+# The paragraph section's title: experimental, and shown only when asked (--by-paragraph),
+# since on topics the reference never saw it can find a writer's own paragraph drifting
+# (docs/method.md, "Where a draft drifts").
+DRIFT_TITLE = "Where it drifts (experimental)"
+# Paragraphs that drift "Where it drifts" shows, and the excerpt length in "By paragraph".
+PASSAGES_SHOWN = 3
+EXCERPT_SHOWN = 40
 BAR_WIDTH = 20
-# A full bar is 3x an area's usual held-out range, or a raw Delta of 3 without calibration.
-BAR_SCALE = 3.0
+# Bars grow with log(1 + amount), full at BAR_MAX times an area's usual held-out range (or a
+# raw Delta of BAR_MAX without calibration). A linear bar full at 3x filled 7 of 9 bars for an
+# LLM draft, whose areas run from 1.3x to over 20x, so it ranked nothing; on this scale
+# they spread from 5 to 18 cells, while the verdict steps stay apart (1x fills 4 cells, 1.5x
+# 5, 2x 6) and a close area stays short.
+BAR_MAX = 32.0
 
 
 # How far from the reference, as one orange ramp (pale -> deep). "Close" stays uncolored so
@@ -169,8 +185,10 @@ def _arrow(z: float | None) -> str:
 
 
 def _bar(amount: float, style: _Style, level: int) -> str:
-    """Filled length carries the amount; only the filled part is colored."""
-    filled = max(0, min(BAR_WIDTH, round(amount / BAR_SCALE * BAR_WIDTH)))
+    """Filled length carries the amount, on a log scale (``BAR_MAX``); only the filled part
+    is colored."""
+    share = math.log1p(max(amount, 0.0)) / math.log1p(BAR_MAX)
+    filled = max(0, min(BAR_WIDTH, round(share * BAR_WIDTH)))
     return style.distance("█" * filled, level) + style.dim("░" * (BAR_WIDTH - filled))
 
 
@@ -460,9 +478,11 @@ def _likeness(
     signals = []
     for metric in ranked:
         z = sum(zs[metric]) / len(zs[metric])
-        signals.append(
-            f"{label(metric.split('.', 1)[1])[0]} {style.distance(_arrow(z), z_level(z))}"
-        )
+        # A signal under one standard deviation has no arrow to show, so it is left out.
+        if arrow := _arrow(z):
+            signals.append(
+                f"{label(metric.split('.', 1)[1])[0]} {style.distance(arrow, z_level(z))}"
+            )
     words = style.bold(entry["verdict"])
     lines = [
         style.bold(f"{name}-likeness: ")
@@ -637,7 +657,7 @@ def _area_lines(areas: list[_Area], style: _Style, *, judged: bool = True) -> li
     gets the numbers without verdict words."""
     calibrated = any(area.relative is not None for area in areas)
     about = (
-        "   Delta ÷ the top of the reference's usual range in each area"
+        "   Delta ÷ the top of the reference's usual range in each area; bars on a log scale"
         if calibrated
         else "   Delta in each area"
     )
@@ -686,6 +706,255 @@ def _area_deltas(areas: list[_Area], style: _Style) -> list[str]:
     return lines
 
 
+# Where a draft drifts (``drift``).
+
+SMALL_REFERENCE = (
+    "the reference is too small to set paragraph thresholds (they need 10 or more documents "
+    "and about 200 paragraphs); "
+    "add more of the writer's documents"
+)
+NEEDS_CONTRAST = (
+    "paragraph checks need a reference built with --contrast; judged by Delta alone they "
+    "rarely catch an LLM passage"
+)
+CONVERTED = "line numbers are of the text converted from HTML"
+POOLED = (
+    "paragraph checks don't apply to pooled records; score without --pool for each "
+    "record's own verdict in the document table"
+)
+
+
+def _line_range(entry: ParagraphScore) -> str:
+    first, last = entry["lines"]
+    return f"line {first}" if first == last else f"lines {first}-{last}"
+
+
+def _passage_verdict(entry: ParagraphScore, label: str | None, style: _Style) -> str:
+    """How a paragraph reads: likeness words first when a contrast set judges it, then Delta,
+    each with its value and colored by its level."""
+    parts = []
+    if label is not None and entry["likeness"] is not None:
+        level = entry["likeness_level"] or 0
+        words = likeness_words(level, label)
+        parts.append(style.distance(words, level) + f" ({entry['likeness']:.2f})")
+    if entry["delta"] is not None:
+        level = entry["level"] or 0
+        parts.append(
+            style.distance(str(DISTANCE_WORDS[level]), level) + f" (Delta {entry['delta']:.2f})"
+        )
+    return ", ".join(parts)
+
+
+def _trait_line(entry: ParagraphScore, style: _Style) -> str:
+    """A paragraph's own traits with their arrows; a trait under one standard deviation has
+    none, and is left out."""
+    return ", ".join(
+        f"{label(trait['metric'].split('.', 1)[1])[0]} "
+        + style.distance(_arrow(trait["z"]), z_level(trait["z"]))
+        for trait in entry["traits"]
+        if _arrow(trait["z"])
+    )
+
+
+def _document_label(document: DocumentPassages, several: bool, names: Mapping[str, str]) -> str:
+    """How the document table and ``-q`` name a document, before its lines when several."""
+    return f"{names.get(document['name'], document['name'])}, " if several else ""
+
+
+def throughout(document: DocumentPassages) -> bool:
+    """Whether more than half of a document's paragraphs drift: it drifts throughout, and
+    listing them would say less than that."""
+    paragraphs = document["paragraphs"]
+    return sum(entry["drifts"] for entry in paragraphs) * 2 > len(paragraphs) > 0
+
+
+def _caveats(documents: Sequence[DocumentPassages]) -> list[str]:
+    """What limits the paragraph checks of these documents: no contrast set, a reference
+    too small for thresholds, lines of converted HTML."""
+    found = []
+    if any(document["by"] == DELTA for document in documents):
+        found.append(NEEDS_CONTRAST)
+    elif any(not document["sensitive"] for document in documents if document["judged"]):
+        found.append(SMALL_REFERENCE)
+    if any(document["converted"] for document in documents):
+        found.append(CONVERTED)
+    return found
+
+
+def _where_it_drifts(
+    documents: list[DocumentPassages],
+    label: str | None,
+    style: _Style,
+    names: Mapping[str, str],
+) -> list[str]:
+    """Up to ``PASSAGES_SHOWN`` paragraphs that drift, most unlike the writer first by their
+    statistic, shown in document order; a document drifting in more than half its
+    paragraphs is one line, "drifts throughout". Nothing when none drifts."""
+    several = len(documents) > 1
+    lines: list[str] = []
+    whole = [document for document in documents if throughout(document)]
+    for document in whole:
+        count = sum(entry["drifts"] for entry in document["paragraphs"])
+        name = _document_label(document, several, names).rstrip(", ")
+        lines.append(
+            f"  {name + ': ' if name else ''}drifts throughout ({count} of "
+            f"{len(document['paragraphs'])} paragraphs read unlike the writer)"
+        )
+    drifting = [
+        (document, entry)
+        for document in documents
+        if document not in whole
+        for entry in document["paragraphs"]
+        if entry["drifts"]
+    ]
+    if not drifting and not whole:
+        return []
+    shown = sorted(drifting, key=lambda item: -(item[1]["relative"] or 0.0))[:PASSAGES_SHOWN]
+    order = {id(entry): index for index, (_, entry) in enumerate(drifting)}
+    shown.sort(key=lambda item: order[id(item[1])])
+    total = sum(len(document["paragraphs"]) for document in documents if document not in whole)
+    header = style.bold(DRIFT_TITLE)
+    if drifting:
+        count = len(drifting)
+        header += style.dim(
+            f"   {count} of {total} paragraphs drift{'s' * (count == 1)}, read in spans of at "
+            f"least {documents[0]['span_words']} words"
+        )
+    places = [
+        _document_label(document, several, names) + _line_range(entry) for document, entry in shown
+    ]
+    # Capitalized only when it starts with "line", not a document's name.
+    places = [place if several else place[:1].upper() + place[1:] for place in places]
+    width = max(14, *(len(place) for place in places)) + 2 if places else 0
+    indent = " " * (width + 2)
+    for (_, entry), place in zip(shown, places, strict=True):
+        lines.append(f"  {place:{width}}{_passage_verdict(entry, label, style)}")
+        lines.append(style.dim(f'{indent}"{entry["excerpt"]}"'))
+        if traits := _trait_line(entry, style):
+            lines.append(f"{indent}{traits}")
+    if len(drifting) > len(shown):
+        lines.append(
+            style.dim(
+                f"  and {len(drifting) - len(shown)} more; --by-paragraph lists every paragraph."
+            )
+        )
+    lines += [style.dim(f"  {caveat[0].upper()}{caveat[1:]}.") for caveat in _caveats(documents)]
+    return ["", header, *lines]
+
+
+def _paragraph_level(entry: ParagraphScore, label: str | None) -> tuple[str, str, int]:
+    """A paragraph's statistic (its lower span's score over its 95% bound: what its
+    threshold applies to), and that span's verdict words and level, by the score its spans
+    are judged by."""
+    value = f"{entry['relative']:.2f}x" if entry["relative"] is not None else "-"
+    if entry["by"] == LIKENESS and label is not None and entry["likeness"] is not None:
+        level = entry["likeness_level"] or 0
+        return value, likeness_words(level, label), level
+    if entry["delta"] is not None:
+        level = entry["level"] or 0
+        return value, str(DISTANCE_WORDS[level]), level
+    return value, "no span", 0
+
+
+def _by_paragraph(
+    documents: list[DocumentPassages],
+    label: str | None,
+    style: _Style,
+    names: Mapping[str, str],
+) -> list[str]:
+    """Every paragraph of each document: its statistic (x its range) against the
+    document's threshold, its lower span's verdict, and * for one that drifts, with why not
+    when it is above its range but does not drift."""
+    lines: list[str] = []
+    for document in documents:
+        name = style.dim(f"   {names.get(document['name'], document['name'])}")
+        if not document["judged"]:
+            reason = document["reason"] or "no span could be judged"
+            lines += ["", style.bold("By paragraph") + name, f"  Not read in parts: {reason}."]
+            continue
+        by = document["by"] or DELTA
+        score = f"{label}-likeness" if by == LIKENESS and label else "Delta"
+        limits = document["thresholds"]
+        above = ""
+        if limits:
+            one = limits["one"]
+            above = f"; * drifts, above {limits['two']:.2f}x its range" + (
+                f" ({one:.2f}x on one span)" if one is not None else ""
+            )
+        lines += [
+            "",
+            style.bold("By paragraph")
+            + name
+            + style.dim(f"   spans of at least {document['span_words']} words{above}"),
+        ]
+        lines += [
+            style.dim(f"  {caveat[0].upper()}{caveat[1:]}.") for caveat in _caveats([document])
+        ]
+        lines.append(style.dim(f"     {'lines':10}{'words':>6}   {'x range':>7}  {score}"))
+        for entry in document["paragraphs"]:
+            value, words, level = _paragraph_level(entry, label)
+            first, last = entry["lines"]
+            where = str(first) if first == last else f"{first}-{last}"
+            mark = "*" if entry["drifts"] else " "
+            excerpt = excerpt_text(entry["excerpt"], EXCERPT_SHOWN)
+            lines.append(
+                f"  {mark}  {where:10}{entry['words']:>6}   {value:>7}  "
+                + style.distance(f"{words:22}", level)
+                + style.dim(f"  {excerpt}")
+            )
+            if entry["note"]:
+                lines.append(style.dim(f"{'':32}does not drift: {entry['note']}"))
+    return lines
+
+
+def _no_drift(documents: list[DocumentPassages]) -> str:
+    """The one line "Where it drifts" becomes when no paragraph drifts: that the check ran
+    and on how much, or why it could not or says little."""
+    judged = [document for document in documents if document["judged"]]
+    if any(document["pooled"] for document in documents):
+        return f"{DRIFT_TITLE}: {POOLED}."
+    if not judged:
+        if all(not document["spans"] for document in documents):
+            words = documents[0]["span_words"]
+            return f"{DRIFT_TITLE}: too short to check paragraphs (under {words} words)."
+        return (
+            f"{DRIFT_TITLE}: the reference has no range for passages this short, so "
+            "paragraphs cannot be checked; add more of the writer's documents."
+        )
+    caveats = _caveats(judged)
+    if caveats and caveats[0] in (NEEDS_CONTRAST, SMALL_REFERENCE):
+        return f"{DRIFT_TITLE}: {'; '.join(caveats)}."
+    count = sum(len(document["paragraphs"]) for document in judged)
+    text = f"{DRIFT_TITLE}: no paragraph drifts ({count} paragraphs checked)"
+    return text + "".join(f"; {caveat}" for caveat in caveats) + "."
+
+
+def _drift_view(
+    report: ScoreReport,
+    reference: Baseline,
+    style: _Style,
+    by_paragraph: bool,
+    shown: Mapping[str, str],
+) -> list[str]:
+    """The "Where it drifts" section, and with ``by_paragraph`` every paragraph. Several
+    documents come in the document table's order (``worst_first``), named as it names them
+    (``shown``)."""
+    documents = report.get("passages") or []
+    if not documents:
+        return []
+    order = {doc["name"]: index for index, doc in enumerate(worst_first(report["documents"]))}
+    documents = sorted(documents, key=lambda document: order.get(document["name"], len(order)))
+    label = reference["contrast"]["label"] if reference["contrast"] else None
+    judged = [document for document in documents if document["judged"]]
+    lines = _where_it_drifts(judged, label, style, shown) or [
+        "",
+        style.dim(_no_drift(documents)),
+    ]
+    if by_paragraph:
+        lines += _by_paragraph(documents, label, style, shown)
+    return lines
+
+
 def _comparison_view(
     report: ScoreReport,
     reference: Baseline,
@@ -693,6 +962,7 @@ def _comparison_view(
     full: bool,
     width: int,
     shown: Mapping[str, str],
+    by_paragraph: bool = False,
 ) -> list[str]:
     scored = report["reference"]
     verdict = scored["verdict"]
@@ -754,6 +1024,7 @@ def _comparison_view(
         lines += ["", *_likeness(view, reference, style, verdict)]
     areas = _areas(verdict)
     lines += ["", *_area_lines(areas, style, judged=judged)]
+    lines += _drift_view(report, reference, style, by_paragraph, shown)
     lines += ["", *_differences(view, reference, style, judged=judged)]
     # With every document one chunk, the chunk lists would repeat the document table.
     if report["chunk_count"] > max(len(documents), 1):
@@ -966,13 +1237,16 @@ def format_summary(
     full: bool = False,
     width: int = DEFAULT_WIDTH,
     shown: Mapping[str, str] | None = None,
+    by_paragraph: bool = False,
 ) -> str:
     """Terminal view of a report; ``full`` shows every metric instead of the key ones.
 
     A score report is compared with ``reference``, its ``reference.baseline``; without it,
     or for a reference profile, this shows the report's own metrics. The document table of
     a multi-document score fits ``width`` columns, and names each document by ``shown``
-    (its saved name to how the command line names it), or else by its saved name."""
+    (its saved name to how the command line names it), or else by its saved name. A score
+    that read its documents in parts shows where they drift, and ``by_paragraph`` lists
+    every paragraph."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
     style = _Style(color, truecolor=color and truecolor)
     size = _size(report)
@@ -985,7 +1259,7 @@ def format_summary(
             style.bold("STYLE COMPARISON")
             + style.dim(f"   {size}   vs {ref_name} ({reference['chunk_count']} chunks)")
         ]
-        lines += _comparison_view(report, reference, style, full, width, shown or {})
+        lines += _comparison_view(report, reference, style, full, width, shown or {}, by_paragraph)
     else:
         lines = [style.bold("STYLE PROFILE") + style.dim(f"   {size}")]
         lines += _profile_view(report, style, full)

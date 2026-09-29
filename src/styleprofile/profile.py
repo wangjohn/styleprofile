@@ -11,18 +11,21 @@ contrast-likeness score is in ``weighting``.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
 import stat
 import statistics
 import sys
+from bisect import bisect_right
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, TypedDict, cast
 
+from styleprofile import drift
 from styleprofile.calibration import (
     CALIBRATION_LENGTHS,
     CALIBRATION_WORDS,
@@ -64,16 +67,20 @@ from styleprofile.schema import (
     Contrast,
     DeltaRange,
     DocumentEntry,
+    DocumentPassages,
+    DriftCalibration,
     EvaluationReport,
     LengthCalibration,
     LikenessSignal,
     MetricStats,
+    ParagraphScore,
     Problem,
     ReferenceReport,
     Report,
     ReportSettings,
     ScoredChunk,
     ScoreReport,
+    SpanScore,
     Summary,
     Unseen,
     find_problem,
@@ -94,6 +101,8 @@ from styleprofile.surface import (
 from styleprofile.syntax import Parser, pos_trigrams, syntax_metrics
 from styleprofile.weighting import (
     LENGTH_AUC_WARNING,
+    LIKENESS_MIN_CEILING,
+    MIN_CEILING,
     UNSCORED_GROUPS,
     CrossValidated,
     Key,
@@ -104,6 +113,7 @@ from styleprofile.weighting import (
     delta_weights,
     flatten,
     floors,
+    held_out_effects,
     held_out_z,
     likeness,
     likeness_range,
@@ -212,6 +222,8 @@ class Chunk:
     document: str | None = field(default=None, compare=False, repr=False)
     parts: tuple[str, ...] | None = field(default=None, compare=False, repr=False)
     record: str | None = field(default=None, compare=False, repr=False)
+    # Converted from HTML, so line numbers are the Markdown conversion's (``drift``).
+    converted: bool = field(default=False, compare=False, repr=False)
 
 
 def _decode(data: bytes, name: str | Path) -> str:
@@ -580,7 +592,7 @@ def _file_chunks(
         if not re.search(r"\w", text):
             detected.empty.append(label)
     document = document_of(str(path), chunk_id)
-    return [Chunk(chunk_id, source, text, str(path), folder, document)]
+    return [Chunk(chunk_id, source, text, str(path), folder, document, converted=fmt == HTML)]
 
 
 def _stdin_chunks(
@@ -613,7 +625,9 @@ def _stdin_chunks(
         text = html_to_markdown(text)
         if not re.search(r"\w", text):
             notes.append(Note("stdin has no readable text after conversion", NoteCode.EMPTY_HTML))
-    return [Chunk("stdin", "stdin", text, document=document_of("stdin", "stdin"))]
+    return [
+        Chunk("stdin", "stdin", text, document=document_of("stdin", "stdin"), converted=fmt == HTML)
+    ]
 
 
 def _listing(items: Sequence[str], shown: int = 3) -> str:
@@ -1391,10 +1405,13 @@ def _score(
     reference: ReferenceReport,
     prepared: _Prepared,
     at: AtLength,
+    cap: float | None = None,
 ) -> ChunkScore:
     """One chunk's scores, with Delta weights and likeness scaled by the reference's
-    held-out rms at the chunk's own length (``at``)."""
+    held-out rms at the chunk's own length (``at``). With ``cap`` (a span of ``drift``),
+    Delta and likeness count each z up to that size."""
     z_scores = _z_against(metrics, reference["summary"], prepared.floor)
+    counted = _capped(z_scores, cap) if cap is not None else z_scores
     summary = reference["summary"]
     unseen: list[Unseen] = [
         {"metric": f"{group}.{name}", "value": metrics[group][name], "reference_value": mean}
@@ -1402,11 +1419,11 @@ def _score(
         if z and not summary[group][name].get("sd")
         for mean in [summary[group][name]["mean"]]
     ]
-    overall, by_group = delta(z_scores, delta_weights(at.rms))
+    overall, by_group = delta(counted, delta_weights(at.rms))
     deviations = sorted(z_scores.items(), key=lambda item: -abs(item[1]))[:DEVIATIONS_SHOWN]
     liked: _Liked = {}
     if prepared.effects:
-        score, signals = likeness(z_scores, prepared.effects, at.rms)
+        score, signals = likeness(counted, prepared.effects, at.rms)
         liked = {"likeness": score, "likeness_signals": signals}
     return {
         "delta": overall,
@@ -1440,6 +1457,331 @@ class _Liked(TypedDict, total=False):
 
     likeness: float
     likeness_signals: list[LikenessSignal]
+
+
+# What a score report keeps of each span (``drift.judge_span``).
+SPAN_KEYS = ("by", "relative", "delta", "ceiling", "likeness", "likeness_ceiling", "level")
+
+
+class _Joined:
+    """One document's windows as one parse (``Doc.from_docs``), so spans that cross a window
+    edge are measured without parsing the document again.
+
+    The document's prose is its windows' prose joined by blank lines, which ``from_docs``
+    joins by one space instead, so an offset in the prose maps to the joined parse by
+    dropping one character per window edge before it."""
+
+    def __init__(self, text: str, texts: Sequence[str], docs: Sequence[Any]) -> None:
+        self.text = text
+        self.starts: list[int] = []
+        offset = 0
+        for part in texts:
+            self.starts.append(offset)
+            offset += len(part) + 2
+        self.doc = docs[0] if len(docs) == 1 else type(docs[0]).from_docs(list(docs))
+
+    def span(self, start: int, end: int) -> Any | None:
+        def mapped(offset: int) -> int:
+            return offset - (bisect_right(self.starts, offset) - 1)
+
+        return self.doc.char_span(mapped(start), mapped(end), alignment_mode="expand")
+
+
+def _parsed_document(
+    text: str,
+    windows: Sequence[tuple[str, Any]],
+    parser: Parser,
+) -> _Joined:
+    """The document's prose (``text``) as parsed: its windows' parses (prose text, doc)
+    joined when they make up the whole document in order, else a fresh parse (a window was
+    dropped for ``min_words``, say)."""
+    texts = [part for part, _ in windows]
+    if windows and "\n\n".join(texts) == text:
+        return _Joined(text, texts, [doc for _, doc in windows])
+    return _Joined(text, [text], list(parser.docs([text])))
+
+
+@dataclass(frozen=True)
+class _Parts:
+    """A document read in parts (``drift``): its paragraphs and spans, the metrics of each
+    span, and of each paragraph on its own (for its traits)."""
+
+    paragraphs: list[drift.Paragraph]
+    layout: drift.Plan
+    spans: list[Metrics]
+    own: list[Metrics]
+
+
+def _read_in_parts(
+    text: str,
+    windows: Sequence[tuple[str, Any]],
+    parser: Parser | None,
+    *,
+    own: bool = True,
+) -> _Parts:
+    """Measure a document's spans, and with ``own`` its paragraphs, each once: from its
+    Markdown, and with a parser from its part of the document's parse (``windows``: its
+    windows' prose and parses, in order), so nothing is parsed twice."""
+    found = drift.paragraphs(text)
+    layout = drift.plan([paragraph.words for paragraph in found])
+    if not layout.spans:
+        return _Parts(found, layout, [], [])
+    whole = _parsed_document(prose(text).text, windows, parser) if parser else None
+
+    def measure(parts: Sequence[str]) -> list[Metrics]:
+        measured: list[Metrics] = []
+        cursor = 0
+        for markdown in parts:
+            parsed = prose(markdown)
+            metrics = surface_metrics(markdown, parsed)
+            if whole is not None:
+                offset = whole.text.find(parsed.text, cursor)
+                if offset >= 0:
+                    cursor = offset
+                    span = whole.span(offset, offset + len(parsed.text))
+                    if span is not None:
+                        metrics = _merge(metrics, syntax_metrics(span))
+            measured.append(metrics)
+        return measured
+
+    spans = measure(
+        ["\n\n".join(paragraph.raw for paragraph in found[a:b]) for a, b in layout.spans]
+    )
+    return _Parts(found, layout, spans, measure([item.own for item in found]) if own else [])
+
+
+def _paragraph_alone(
+    metrics: Metrics,
+    reference: ReferenceReport,
+    prepared: _Prepared,
+    by: str,
+) -> tuple[list[dict[str, Any]], float | None]:
+    """A paragraph read on its own: its traits (its metrics' z at its own length, its
+    strongest contrast signals when its spans are judged by likeness), and its score over
+    the bound at its length (``drift.judge_span``'s ``relative``, parser metrics capped as a
+    span's are; below 75 words the bound is widened, and it is not a verdict)."""
+    z_scores = _z_against(metrics, reference["summary"], prepared.floor)
+    at = prepared.lengths.at(int(metrics["size"]["words"] or 0))
+    signals = None
+    if by == drift.LIKENESS and prepared.effects:
+        signals = likeness(z_scores, prepared.effects, at.rms)[1]
+    found = drift.traits(nest(z_scores), nest(at.scale), metrics, reference["summary"], signals)
+    capped = _capped(z_scores, drift.SPAN_Z)
+    relative = None
+    if by == drift.LIKENESS and prepared.effects and at.likeness is not None:
+        value = likeness(capped, prepared.effects, at.rms)[0]
+        relative = value / max(at.likeness["p95"], LIKENESS_MIN_CEILING)
+    elif by == drift.DELTA and at.delta is not None:
+        value, _ = delta(capped, delta_weights(at.rms))
+        relative = value / max(at.delta["p95"], MIN_CEILING) if value is not None else None
+    return found, relative
+
+
+# Why a pooled score is not read in parts (``score``).
+POOLED_REASON = "paragraph checks don't apply to pooled records"
+
+
+def _abstained(name: str, source: str, reason: str, *, pooled: bool = False) -> DocumentPassages:
+    """A document not read in parts, and why."""
+    return {
+        "name": name,
+        "source": source,
+        "converted": False,
+        "pooled": pooled,
+        "words": 0,
+        "span_words": drift.SPAN_WORDS,
+        "judged": False,
+        "reason": reason,
+        "by": None,
+        "sensitive": False,
+        "own_level": None,
+        "thresholds": None,
+        "spans": [],
+        "paragraphs": [],
+    }
+
+
+def _passages(
+    document: Chunk,
+    name: str,
+    windows: Sequence[tuple[str, Any]],
+    reference: ReferenceReport,
+    prepared: _Prepared,
+    parser: Parser | None,
+) -> DocumentPassages:
+    """Where one document drifts (``drift``): its paragraphs, the spans of at least
+    ``SPAN_WORDS`` words read across them, and each paragraph's figures and flag, against
+    the thresholds the reference's null sets for a document of its length."""
+    parts = _read_in_parts(document.text, windows, parser)
+    entry: DocumentPassages = {
+        "name": name,
+        "source": document.source,
+        "converted": document.converted,
+        "pooled": False,
+        "words": sum(paragraph.words for paragraph in parts.paragraphs),
+        "span_words": drift.SPAN_WORDS,
+        "judged": False,
+        "reason": None,
+        "by": None,
+        "sensitive": False,
+        "own_level": None,
+        "thresholds": None,
+        "spans": [],
+        "paragraphs": [],
+    }
+    if not parts.layout.spans:
+        entry["reason"] = f"under {drift.SPAN_WORDS} words, too short to read in parts"
+        return entry
+    judged: list[dict[str, Any]] = []
+    reason = None
+    for metrics in parts.spans:
+        at = prepared.lengths.at(int(metrics["size"]["words"] or 0))
+        reason = reason or at.reason
+        scored = _score(metrics, {}, reference, prepared, at, cap=drift.SPAN_Z)
+        judged.append(drift.judge_span(scored))
+    entry["spans"] = [
+        cast(
+            SpanScore,
+            {
+                "paragraphs": [start, end],
+                "words": sum(paragraph.words for paragraph in parts.paragraphs[start:end]),
+                **{key: span[key] for key in SPAN_KEYS},
+            },
+        )
+        for (start, end), span in zip(parts.layout.spans, judged, strict=True)
+    ]
+    scored = [span for span in judged if span["judged"]]
+    if not scored:
+        entry["reason"] = reason
+        return entry
+    by = scored[0]["by"]
+    stats = drift.statistics(parts.layout, [span["relative"] for span in judged])
+    limits = drift.thresholds(
+        (reference.get("calibration") or {}).get("drift"),
+        sum(stat is not None for stat in stats),
+        by,
+    )
+    alone = [_paragraph_alone(metrics, reference, prepared, by) for metrics in parts.own]
+    entry["judged"], entry["by"] = True, by
+    entry["sensitive"], entry["thresholds"] = limits is not None, cast(Any, limits)
+    entry["own_level"] = drift.level(stats)
+    entry["paragraphs"] = cast(
+        list[ParagraphScore],
+        drift.judge(
+            parts.paragraphs,
+            parts.layout,
+            judged,
+            limits,
+            [traits for traits, _ in alone],
+            [relative for _, relative in alone],
+        ),
+    )
+    return entry
+
+
+def _calibrate_drift(
+    report: ReferenceReport,
+    measured: _Measured,
+    fit: ContrastFit | None,
+    parser: Parser | None,
+    chosen: Sequence[str],
+) -> None:
+    """The null of the paragraph statistic (``drift``), from reference documents each read
+    in parts and scored held out, as a draft of theirs would be: z-scores against the
+    windows of every other document, likeness with the contrast fold that left the document
+    out, both at the span's length. Up to ``drift.CALIBRATION_WORDS`` words of documents are
+    read, taken evenly. Stored as ``calibration.drift``."""
+    calibration = report.get("calibration")
+    if not calibration or not calibration.get("by_length"):
+        return
+    documents = _documents(measured.chunks)
+    grouped: dict[str, list[int]] = defaultdict(list)
+    for index, document in enumerate(documents):
+        grouped[document].append(index)
+    lengths = Lengths(report)
+    floor = floors(report["summary"])
+    by = drift.LIKENESS if fit is not None else drift.DELTA
+    effects = _held_out_effects(fit) if fit is not None else None
+    read: list[tuple[str, _Parts]] = []
+    for document in chosen:
+        indices = grouped.get(document)
+        if not indices:
+            continue  # all its windows were dropped for min_words
+        windows = (
+            [window for index in indices if (window := measured.docs[index]) is not None]
+            if measured.docs is not None
+            else []
+        )
+        text = "\n\n".join(measured.chunks[index].text for index in indices)
+        read.append((document, _read_in_parts(text, windows, parser, own=False)))
+    span_metrics = [metrics for _, parts in read for metrics in parts.spans]
+    span_documents = [document for document, parts in read for _ in parts.spans]
+    held = held_out_z(measured.metrics, documents, floor, others=(span_metrics, span_documents))
+    relatives: list[float | None] = []
+    for metrics, z_scores, document in zip(span_metrics, held, span_documents, strict=True):
+        at = lengths.at(int(metrics["size"]["words"] or 0))
+        relatives.append(_held_out_relative(z_scores, at, by, effects, document))
+    found: list[list[tuple[float, int, int] | None]] = []
+    position = 0
+    for _, parts in read:
+        count = len(parts.spans)
+        found.append(drift.statistics(parts.layout, relatives[position : position + count]))
+        position += count
+    calibration["drift"] = cast(
+        DriftCalibration,
+        drift.calibrate(len(read), found, by),
+    )
+
+
+def _drift_documents(chunks: Sequence[Chunk]) -> list[str]:
+    """Every k-th reference document (``chunk_document``), so the ones read for the
+    paragraph null hold about ``drift.CALIBRATION_WORDS`` words (counted roughly, as
+    whitespace-separated tokens)."""
+    sizes: dict[str, int] = defaultdict(int)
+    for chunk in chunks:
+        sizes[chunk_document(chunk)] += len(chunk.text.split())
+    step = max(1, math.ceil(sum(sizes.values()) / drift.CALIBRATION_WORDS))
+    return list(sizes)[::step]
+
+
+def _held_out_relative(
+    z_scores: ZScores,
+    at: AtLength,
+    by: str,
+    effects: Callable[[str], dict[Key, float]] | None,
+    document: str,
+) -> float | None:
+    """A held-out span's score over its 95% bound at its length, as ``drift.judge_span``
+    reads a draft's, each z capped as a draft's span is (``drift.SPAN_Z``); None when its
+    length is not judged or has no range for the score."""
+    if not at.judged or at.delta is None:
+        return None
+    z_scores = _capped(z_scores, drift.SPAN_Z)
+    if by == drift.LIKENESS:
+        if at.likeness is None or effects is None:
+            return None
+        value = likeness(z_scores, effects(document), at.rms)[0]
+        return value / max(at.likeness["p95"], LIKENESS_MIN_CEILING)
+    value, _ = delta(z_scores, delta_weights(at.rms))
+    return value / max(at.delta["p95"], MIN_CEILING) if value is not None else None
+
+
+def _held_out_effects(fit: ContrastFit) -> Callable[[str], dict[Key, float]]:
+    """The likeness effects learned without one reference document, as ``likeness_range``
+    scores its pieces."""
+    return held_out_effects(
+        fit.reference_held, fit.reference_documents, fit.contrast_z, fit.learned
+    )
+
+
+def _capped(z_scores: ZScores, cap: float) -> ZScores:
+    """Each z of the groups ``drift.SPAN_Z_GROUPS`` names (every group when None) limited
+    to ``cap`` either way (``drift.SPAN_Z``)."""
+    groups = drift.SPAN_Z_GROUPS
+    return {
+        key: max(-cap, min(cap, z)) if groups is None or key[0] in groups else z
+        for key, z in z_scores.items()
+    }
 
 
 def _mean_of(values: Sequence[float | None]) -> float | None:
@@ -1639,6 +1981,9 @@ class _Measured:
     empty: int
     below: int
     pieces: list[_Piece]
+    # Each chunk's prose text and spaCy parse, when kept (``keep_docs``) to measure spans
+    # of it later.
+    docs: list[tuple[str, Any] | None] | None = None
 
 
 def _measure(
@@ -1649,13 +1994,16 @@ def _measure(
     allow_empty: bool = False,
     piece_lengths: Sequence[int] = (),
     piece_words: int = CALIBRATION_WORDS,
+    keep_docs: bool | Collection[str] = False,
 ) -> _Measured:
     """Parse each chunk once, drop chunks without enough prose, and compute every metric.
 
     With ``piece_lengths``, also cut up to ``piece_words`` words of the chunks into pieces
     of those lengths and measure them (``calibration.plan_pieces``). A piece's syntax
     metrics come from its span of the chunk's parse, so nothing is parsed twice. With no
-    chunk left this is an error, unless ``allow_empty``."""
+    chunk left this is an error, unless ``allow_empty``. With a parser and ``keep_docs``
+    (True, or the documents to keep, as ``chunk_document`` names them), each chunk's parse
+    is kept (``docs``, None for the others)."""
     parsed_all = [prose(chunk.text) for chunk in chunks]
     sizes = [len(words(parsed.text)) for parsed in parsed_all]
     empty = sum(not size for size in sizes)
@@ -1692,11 +2040,18 @@ def _measure(
         parsed = prose(markdown)
         if words(parsed.text):
             pieces.append((index, length, parsed, surface_metrics(markdown, parsed)))
+    docs: list[tuple[str, Any] | None] | None = [] if keep_docs and parser is not None else None
+    kept_documents = [chunk_document(chunk) for chunk, _, _ in kept]
     if parser is not None:
         by_chunk: dict[int, list[int]] = defaultdict(list)
         for position, (index, _, _, _) in enumerate(pieces):
             by_chunk[index].append(position)
         for index, doc in enumerate(parser.docs(texts)):
+            if docs is not None:
+                wanted = keep_docs is True or (
+                    not isinstance(keep_docs, bool) and kept_documents[index] in keep_docs
+                )
+                docs.append((texts[index], doc) if wanted else None)
             chunk_metrics[index] = _merge(chunk_metrics[index], syntax_metrics(doc))
             chunk_distributions[index]["pos_trigram"] = pos_trigrams(doc)
             cursors: dict[int, int] = defaultdict(int)
@@ -1714,6 +2069,7 @@ def _measure(
         empty,
         below,
         [_Piece(index, length, metrics) for index, length, _, metrics in pieces],
+        docs,
     )
 
 
@@ -2093,11 +2449,14 @@ def _build_reference(
     keep_chunks: bool,
     calibrate_lengths: bool = True,
 ) -> tuple[ReferenceReport, ContrastFit | None]:
+    # The documents read for the paragraph null (``_calibrate_drift``), whose parses are kept.
+    chosen = _drift_documents(chunks) if calibrate_lengths else []
     measured = _measure(
         chunks,
         parser,
         min_words,
         piece_lengths=CALIBRATION_LENGTHS if calibrate_lengths else (),
+        keep_docs=set(chosen),
     )
     base = _base_report(
         measured,
@@ -2121,6 +2480,8 @@ def _build_reference(
         report["contrast"], fit = _learn_contrast(
             report, measured, calibrated, contrast, contrast_label, parser, min_words
         )
+    if chosen and calibrated is not None:
+        _calibrate_drift(report, measured, fit, parser, chosen)
     return report, fit
 
 
@@ -2194,9 +2555,16 @@ def score(
     min_words: int = 1,
     settings: Mapping[str, Any] | None = None,
     reference_path: Path | None = None,
+    read_in_parts: Sequence[Chunk] | None = None,
+    pooled: bool = False,
 ) -> ScoreReport:
     """Profile sample chunks and score each against ``reference``: z-scores, Delta, pattern
     divergence and, when the reference learned a contrast, likeness to the contrast set.
+
+    With ``read_in_parts`` (the chunks before windowing, or some of them), each is also read
+    in overlapping spans to show where it drifts (``drift``): ``report["passages"]`` holds one
+    entry per document, and is None without ``read_in_parts``. When the chunks are
+    ``pooled`` windows, every document abstains instead.
 
     This is the lower-level step under ``Profile.score``: nothing is inherited from the
     reference, so pass chunks cut into the reference's windows, its ``min_words`` and a
@@ -2207,7 +2575,7 @@ def score(
     ``verdict`` cover the chunks long enough to judge; when none is, they cover every
     chunk, and the verdict is "too short to judge"."""
     check_version(reference, "the reference")
-    measured = _measure(chunks, parser, min_words)
+    measured = _measure(chunks, parser, min_words, keep_docs=bool(read_in_parts))
     base = _base_report(
         measured, kind=SCORE, parser=parser, top_k=top_k, min_words=min_words, settings=settings
     )
@@ -2277,6 +2645,37 @@ def score(
                 f"({reference_syntax.get('model')} {reference_syntax.get('model_version')}); "
                 "syntax metrics may not be comparable"
             )
+    passages: list[DocumentPassages] | None = None
+    if pooled:
+        # Pooled windows join records: their paragraphs are records, which the paragraph
+        # null was not calibrated for. Each document abstains, and each record's own
+        # verdict is in ``documents``.
+        keys = list(dict.fromkeys((row["source"], base_id(row["id"])) for row in rows))
+        passages = [
+            _abstained(name, source, POOLED_REASON, pooled=True)
+            for (source, _), name in zip(keys, _document_names(keys), strict=True)
+        ]
+    elif read_in_parts is not None:
+        parsed: dict[str, list[tuple[str, Any]]] = defaultdict(list)
+        if measured.docs is not None:
+            for chunk, found in zip(measured.chunks, measured.docs, strict=True):
+                if found is not None:
+                    parsed[chunk_document(chunk)].append(found)
+        # Named as ``documents`` names them, so the two can be read together.
+        keys = list(dict.fromkeys((row["source"], base_id(row["id"])) for row in rows))
+        names = dict(zip(keys, _document_names(keys), strict=True))
+        passages = [
+            _passages(
+                document,
+                names.get((document.source, base_id(document.id)))
+                or document_label(document.source, base_id(document.id)),
+                parsed[chunk_document(document)],
+                reference,
+                prepared,
+                parser,
+            )
+            for document in read_in_parts
+        ]
     return {
         "version": VERSION,
         "kind": SCORE,
@@ -2284,6 +2683,7 @@ def score(
         "warnings": warnings,
         "chunks": rows,
         "documents": documents(rows, reference),
+        "passages": passages,
         "reference": {
             # Only the profile's file name: a saved report never reveals where files live.
             "path": root_name(str(reference_path)) if reference_path else None,

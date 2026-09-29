@@ -58,6 +58,7 @@ from styleprofile.display import (
     format_reference_summary,
     format_summary,
 )
+from styleprofile.drift import Passage
 from styleprofile.evaluate import evaluate_rewording
 from styleprofile.formats import INPUT_FORMATS
 from styleprofile.profile import (
@@ -347,6 +348,7 @@ class Profile(_Result[ReferenceReport]):
         settings: Settings | None = None,
         *,
         progress: ProgressCallback | None = None,
+        passages: bool = False,
         **overrides: Unpack[SettingsOverrides],
     ) -> ScoreResult:
         """Score drafts against this profile.
@@ -364,6 +366,12 @@ class Profile(_Result[ReferenceReport]):
         since z-scores assume chunks like the reference's; another ``min_words`` gets a
         note. A ``text_field`` given here is the only one read; the profile's is tried
         first, then the defaults.
+
+        ``passages=True`` (experimental, off by default) also reads each document in
+        overlapping spans of 100 words or more to show where it drifts
+        (``ScoreResult.passages``). On writer text of topics the reference never saw, it
+        found a paragraph drifting in up to about a quarter of the writer's own documents
+        (docs/method.md, "Where a draft drifts"), so treat what it finds as a lead to read.
         """
         notes: list[Note] = []
         with _notes_on_error(notes):
@@ -456,6 +464,8 @@ class Profile(_Result[ReferenceReport]):
                     **chosen.to_report(),
                     "pool_used": cut.pooled is not None,
                 },
+                read_in_parts=chunks if passages and cut.pooled is None else None,
+                pooled=passages and cut.pooled is not None,
             )
             report["warnings"] += _pooling_mismatch(cut, reference_pooled)
             step(Phase.DONE)
@@ -662,6 +672,20 @@ class ScoreResult(_Result[ScoreReport]):
         return self._report["reference"]["verdict"]
 
     @property
+    def passages(self) -> tuple[Passage, ...]:
+        """Every paragraph of each document read in parts, in order, with how it reads
+        against the writer and whether it ``drifts`` (see
+        ``styleprofile.drift``). Empty unless the score was asked to read documents in parts
+        (``passages=True``, experimental), or when every document was too short for a span
+        of 100 words."""
+        contrast = self.contrast_label is not None
+        return tuple(
+            Passage.from_report(document["name"], entry, contrast)
+            for document in self._report.get("passages") or []
+            for entry in document["paragraphs"]
+        )
+
+    @property
     def contrast_label(self) -> str | None:
         """The contrast set's name (``LLM``) when the profile was built with one."""
         contrast = self._reference["contrast"]
@@ -687,13 +711,27 @@ class ScoreResult(_Result[ScoreReport]):
             return LikenessVerdict.TOO_SHORT
         return LIKENESSES[entry["level"]]
 
-    def to_text(self, *, full: bool = False, color: bool = False, width: int = 80) -> str:
+    def to_text(
+        self,
+        *,
+        full: bool = False,
+        color: bool = False,
+        width: int = 80,
+        by_paragraph: bool = False,
+    ) -> str:
         """The comparison ``styleprofile score`` prints; ``full`` shows every metric and
-        every document, and the document table fits ``width`` columns."""
+        every document, the document table fits ``width`` columns, and ``by_paragraph``
+        lists every paragraph of the documents read in parts (``passages``)."""
         # The document table names each document as -q does: where it was typed, if known.
         shown = {document.name: document.shown for document in self.documents}
         return format_summary(
-            self._report, self._reference, color=color, full=full, width=width, shown=shown
+            self._report,
+            self._reference,
+            color=color,
+            full=full,
+            width=width,
+            shown=shown,
+            by_paragraph=by_paragraph,
         )
 
     def __repr__(self) -> str:

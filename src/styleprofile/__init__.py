@@ -31,6 +31,7 @@ from styleprofile.core import (
     StyleProfileError,
     Verdict,
 )
+from styleprofile.drift import Passage, Trait
 from styleprofile.profile import Chunk
 from styleprofile.syntax import SyntaxUnavailableError
 
@@ -46,6 +47,7 @@ __all__ = [
     "LikenessVerdict",
     "Note",
     "NoteCode",
+    "Passage",
     "Phase",
     "Profile",
     "Progress",
@@ -54,6 +56,7 @@ __all__ = [
     "StyleProfileError",
     "SyntaxUnavailableError",
     "Text",
+    "Trait",
     "Verdict",
     "__version__",
     "build",

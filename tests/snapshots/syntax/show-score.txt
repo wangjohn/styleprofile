@@ -9,16 +9,16 @@ Overall: close   Delta 0.81
 LLM-likeness: like the reference   0.73
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.90); the LLM drafts 13.74.
 
-By area   Delta ÷ the top of the reference's usual range in each area
+By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.32x  █████████░░░░░░░░░░░  somewhat different
-  Vocabulary                   0.72x  █████░░░░░░░░░░░░░░░  close
-  Function words               0.66x  ████░░░░░░░░░░░░░░░░  close
-  Punctuation                  0.66x  ████░░░░░░░░░░░░░░░░  close
-  Sentence shape               0.49x  ███░░░░░░░░░░░░░░░░░  close
-  Rhythm                       0.47x  ███░░░░░░░░░░░░░░░░░  close
-  Syntax                       0.41x  ███░░░░░░░░░░░░░░░░░  close
-  How sentences open           0.28x  ██░░░░░░░░░░░░░░░░░░  close
+  Voice and stance             1.32x  █████░░░░░░░░░░░░░░░  somewhat different
+  Vocabulary                   0.72x  ███░░░░░░░░░░░░░░░░░  close
+  Function words               0.66x  ███░░░░░░░░░░░░░░░░░  close
+  Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.49x  ██░░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.41x  ██░░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)

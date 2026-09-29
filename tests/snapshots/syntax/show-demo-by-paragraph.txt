@@ -1,0 +1,55 @@
+$ styleprofile show --by-paragraph '<tmp>/demo-draft.json'
+[exit 0]
+--- stdout
+STYLE COMPARISON   1 chunk, 542 words   vs demo-writer.json (55 chunks)
+
+Overall: close   Delta 0.64
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.59 typically (95% under 0.91).
+
+LLM-likeness: a few LLM traits   0.84
+  The reference's own writing at this length (542 words) scores 0.24 typically (95% under 0.61); the LLM drafts 8.62.
+  Strongest LLM signals: Nominalizations (-tion, -ment) ▲, "these" ▲
+
+By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
+  close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
+  Voice and stance             1.18x  ████░░░░░░░░░░░░░░░░  somewhat different
+  Punctuation                  0.78x  ███░░░░░░░░░░░░░░░░░  close
+  Function words               0.76x  ███░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.58x  ███░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.56x  ███░░░░░░░░░░░░░░░░░  close
+  Vocabulary                   0.56x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.45x  ██░░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.37x  ██░░░░░░░░░░░░░░░░░░  close
+  Formatting                   0.27x  █░░░░░░░░░░░░░░░░░░░  close
+
+Where it drifts (experimental)   2 of 8 paragraphs drift, read in spans of at least 100 words
+  Line 9          a few LLM traits (1.04), close (Delta 1.15)
+                  "But the store is more than a place to buy things — it's a…"
+                  Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
+  Line 15         a few LLM traits (0.92), close (Delta 0.89)
+                  "Ultimately, the future of the village hardware store depends…"
+                  "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲, Long words (7+ letters) ▲▲▲
+
+By paragraph   draft.md   spans of at least 100 words; * drifts, above 1.00x its range
+     lines      words   x range  LLM-likeness
+     3             70     0.17x  like the reference      The hardware store in the village has…
+     5             85     0.24x  like the reference      It's a narrow building, long and dim…
+     7             84     0.24x  like the reference      I go in for one thing and come out an…
+  *  9             60     1.48x  a few LLM traits        But the store is more than a place to…
+     11            86     0.32x  like the reference      The big store in the city is cheaper. I…
+     13            63     0.32x  like the reference      Walt is seventy-one. His daughter works…
+  *  15            33     1.14x  a few LLM traits        Ultimately, the future of the village…
+     17            61     0.73x  like the reference      I bought a pound of eightpenny nails…
+
+Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
+                                                   this text   reference
+  "but"                                              5.5 /1k     1.8 /1k   ▲▲
+  "has"                                              7.4 /1k     2.5 /1k   ▲▲
+  Sentences starting However / Moreover                 2.9%        0.0%   ▲▲  reference never varies
+  Nominalizations (-tion, -ment)                     7.4 /1k     2.8 /1k   ▲
+  Em dashes                                          1.8 /1k     0.0 /1k   ▲  reference never varies
+  LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲  reference never varies
+  "these"                                            1.8 /1k     0.0 /1k   ▲  reference never varies
+  "by"                                               9.2 /1k     4.4 /1k   ▲
+
+Pass --all to see every metric.

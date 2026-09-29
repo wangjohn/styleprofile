@@ -140,32 +140,45 @@ def markdown_blocks(markdown: str) -> list[str]:
     with a language (model output cut off mid-block) runs to the end of the text; a bare
     unclosed ``` or ~~~ line (often a section break) is dropped on its own.
     """
-    text = strip_front_matter(markdown.replace("\r\n", "\n"))
-    blocks: list[str] = []
+    return [raw for raw, _ in numbered_blocks(markdown)]
+
+
+def numbered_blocks(markdown: str) -> list[tuple[str, int]]:
+    """``markdown_blocks`` with the line each block starts on in ``markdown`` (from 1)."""
+    markdown = markdown.replace("\r\n", "\n")
+    text = strip_front_matter(markdown)
+    return _numbered(text, markdown.count("\n") - text.count("\n") + 1)
+
+
+def _numbered(text: str, first_line: int) -> list[tuple[str, int]]:
+    blocks: list[tuple[str, int]] = []
     current: list[str] = []
+    start = first_line
     fence: str | None = None
-    for line in text.split("\n"):
+    for number, line in enumerate(text.split("\n"), start=first_line):
         opening = _fence(line) if fence is None else None
         if opening:
             if current:
-                blocks.append("\n".join(current))
-            current, fence = [line], opening
+                blocks.append(("\n".join(current), start))
+            current, start, fence = [line], number, opening
         elif fence is not None:
             current.append(line)
             closing = _FENCE_CLOSE.match(line)
             if closing and closing.group(1)[0] == fence[0] and len(closing.group(1)) >= len(fence):
-                blocks.append("\n".join(current))
+                blocks.append(("\n".join(current), start))
                 current, fence = [], None
         elif _BLOCKQUOTE.sub("", line).strip():
+            if not current:
+                start = number
             current.append(line)
         elif current:
-            blocks.append("\n".join(current))
+            blocks.append(("\n".join(current), start))
             current = []
     if fence is not None and not current[0].strip().lstrip("`~").strip():
         # A bare opener that never closes: drop that line and read the rest as usual.
-        return blocks + markdown_blocks("\n".join(current[1:]))
+        return blocks + _numbered("\n".join(current[1:]), start + 1)
     if current:
-        blocks.append("\n".join(current))
+        blocks.append(("\n".join(current), start))
     return blocks
 
 
@@ -188,13 +201,21 @@ class Block:
     raw: str
     code: bool
     continues_list: bool
+    # The line it starts on in the Markdown it was read from, counting from 1.
+    line: int = 1
+
+    @property
+    def end_line(self) -> int:
+        """The line it ends on."""
+        return self.line + self.raw.count("\n")
 
 
 def classify(markdown: str) -> list[Block]:
-    """Mark code blocks, using list context to tell indented code from list continuations."""
+    """Mark code blocks, using list context to tell indented code from list continuations.
+    Each block records the line it starts on."""
     classified: list[Block] = []
     after_list = False
-    for raw in markdown_blocks(markdown):
+    for raw, number in numbered_blocks(markdown):
         lines = [line for line in raw.split("\n") if line.strip()]
         indented = all(_INDENTED_CODE.match(line) for line in lines)
         code_like = (
@@ -203,16 +224,16 @@ def classify(markdown: str) -> list[Block]:
             and not _reads_like_prose(lines)
         )
         if _fence(lines[0]):
-            classified.append(Block(raw, code=True, continues_list=False))
+            classified.append(Block(raw, code=True, continues_list=False, line=number))
             continue
         if code_like and not after_list:
-            classified.append(Block(raw, code=True, continues_list=False))
+            classified.append(Block(raw, code=True, continues_list=False, line=number))
             after_list = False
             continue
         continues = indented and after_list
         has_items = any(_LIST_ITEM.match(_BLOCKQUOTE.sub("", line)) for line in lines)
         after_list = has_items or continues
-        classified.append(Block(raw, code=False, continues_list=continues))
+        classified.append(Block(raw, code=False, continues_list=continues, line=number))
     return classified
 
 

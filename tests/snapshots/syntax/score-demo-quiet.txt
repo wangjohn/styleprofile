@@ -1,0 +1,4 @@
+$ styleprofile score -q examples/draft.md '<tmp>/demo-writer.json'
+[exit 0]
+--- stdout
+examples/draft.md: close (Delta 0.64); LLM-likeness a few LLM traits (0.84)

@@ -21,11 +21,12 @@ deviations.
 
 from __future__ import annotations
 
+import functools
 import math
 import random
 import statistics
 from collections import defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, groupby, islice
 from operator import itemgetter, mul
@@ -456,6 +457,29 @@ def _fold_without(
         else:
             effects.pop(key, None)
     return effects, rms
+
+
+def held_out_effects(
+    reference_held: Sequence[ZScores],
+    reference_sources: Sequence[str],
+    contrast_z: Sequence[ZScores],
+    learned: CrossValidated,
+) -> Callable[[str], dict[Key, float]]:
+    """The likeness effects learned without one reference source, as ``likeness_range``
+    scores its pieces: a function of the source, each computed once."""
+    reference_total, reference_parts = _sums(reference_held, reference_sources)
+    contrast_total = _sums(contrast_z, [""] * len(contrast_z), by_source=False)[0]
+
+    @functools.cache
+    def without(source: str) -> dict[Key, float]:
+        return _fold_without(
+            reference_total,
+            contrast_total,
+            (learned.effects, learned.rms),
+            reference_part=reference_parts.get(source, {}),
+        )[0]
+
+    return without
 
 
 def _rms_without(

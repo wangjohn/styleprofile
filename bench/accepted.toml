@@ -14,3 +14,17 @@
 # An entry applies only to the PR it names (its PR runs, and the push to main that merges it).
 # Afterwards it is inert and CI warns until it is deleted; delete it in any later PR. See
 # bench/gate.py.
+
+[[regression]]
+pr = 21
+case = "medium-nosyntax"
+metric = "build_cpu_s"
+ratio = 1.35
+reason = "Where it drifts: build reads up to 40,000 words of reference documents in paragraph spans, held out, to calibrate the per-document paragraph thresholds (calibration.drift); measured 1.24x (1.83 s to 2.27 s), entry at measured + 0.1."
+
+[[regression]]
+pr = 21
+case = "medium-nosyntax"
+metric = "build_mb"
+ratio = 1.20
+reason = "Where it drifts: build keeps the paragraph spans of up to 40,000 words of reference documents, measured and scored held out, to calibrate the per-document paragraph thresholds (calibration.drift); measured 1.09x (137 MB to 149 MB), just under the 1.10x margin, so declared to keep CI from flaking."
