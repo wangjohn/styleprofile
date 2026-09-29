@@ -221,7 +221,7 @@ with another revision as CI does, add `--against`:
 CI's benchmark job runs `bench/run.py --quick --repeat 5 --against HEAD^ --check`. It
 benchmarks your change and its base (the tip of `main` it merges into) in the same job, on the
 same runner, and fails when your change is worse than the base by more than a margin set in
-`bench/targets.py`: CPU time 1.25x, peak memory 1.2x, reference profile size 1.05x. Time is
+`bench/targets.py`: CPU time 1.15x, peak memory 1.1x, reference profile size 1.05x. Time is
 judged on CPU time because wall time on shared runners swings by up to 75% between runs. Wall
 time and the plan's targets are reported in the job summary but never fail the job.
 

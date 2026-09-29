@@ -46,7 +46,7 @@ jobs:
     # request, HEAD is GitHub's merge commit and HEAD^ the tip of main it merges into; for a
     # push to main, the commit before). The two alternate on the same runner, five runs each,
     # and the job fails when the change is worse than its base by more than the margins in
-    # bench/targets.py (CPU time 1.25x, peak memory 1.2x, profile size 1.05x), unless
+    # bench/targets.py (CPU time 1.15x, peak memory 1.1x, profile size 1.05x), unless
     # bench/accepted.toml accepts the cost for this PR. Wall time on shared runners swings by
     # up to ~75% between runs, so absolute budgets were flaky; the plan's targets are now only
     # a report. The tables go to the job summary.

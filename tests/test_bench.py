@@ -30,12 +30,12 @@ def _entry(**overrides: Any) -> Any:
 
 
 def test_the_gate_allows_noise_and_fails_a_regression() -> None:
-    assert targets.MARGINS["build_cpu_s"].ratio == 1.25
-    assert gate.judge(CASE, "build_cpu_s", 2.0, 2.4, [], None).passed
-    verdict = gate.judge(CASE, "build_cpu_s", 2.0, 2.6, [], None)
+    assert targets.MARGINS["build_cpu_s"].ratio == 1.15
+    assert gate.judge(CASE, "build_cpu_s", 2.0, 2.28, [], None).passed
+    verdict = gate.judge(CASE, "build_cpu_s", 2.0, 2.4, [], None)
     assert not verdict.passed
     assert verdict.status == "REGRESSION"
-    assert "1.30x" in verdict.problem()
+    assert "1.20x" in verdict.problem()
     # Faster is always fine.
     assert gate.judge(CASE, "build_cpu_s", 2.0, 1.0, [], None).passed
 

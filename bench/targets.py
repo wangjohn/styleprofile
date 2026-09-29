@@ -65,16 +65,17 @@ class Margin:
 
 
 # The relative gate: only these metrics are judged against the base. Wall time is not (CPU
-# time stands in for it). The ratios were picked from A/A runs, where base and change are the
-# same code, on the CI runner (see the PR that introduced them, #16): CPU time stayed within
-# ~5% of its base while wall time swung by far more, memory within ~1%, and profile size is
-# deterministic.
+# time stands in for it). The ratios come from seven A/A runs of the CI job, where base and
+# change are the same code (#19): build time swung between 2.47s and 3.23s from run to run,
+# but CPU time stayed within 1% of its base's in every run, peak memory within 0.3%, and
+# profile size is deterministic. The margins leave over ten times that noise, so they don't
+# flake, while catching a 15% slowdown or a 10% memory increase.
 MARGINS = {
-    "build_cpu_s": Margin(ratio=1.25, floor=0.05),
-    "build_mb": Margin(ratio=1.20, floor=5.0),
+    "build_cpu_s": Margin(ratio=1.15, floor=0.05),
+    "build_mb": Margin(ratio=1.10, floor=5.0),
     "profile_mb": Margin(ratio=1.05, floor=0.0),
-    "score_cpu_s": Margin(ratio=1.25, floor=0.05),
-    "score_mb": Margin(ratio=1.20, floor=5.0),
+    "score_cpu_s": Margin(ratio=1.15, floor=0.05),
+    "score_mb": Margin(ratio=1.10, floor=5.0),
 }
 
 # Values over this multiple of their target get a warning in the report; they never fail CI.
