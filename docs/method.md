@@ -173,8 +173,9 @@ for that mean, built from each chunk's range at its own length:
   standard errors, with the standard error from n_eff as for the 95% bound and t the 90%
   quantile of Student's t with one degree of freedom fewer than there are documents (1.89
   for 3 documents, 1.53 for 5, 1.28 for many), so a mean from few documents is set higher
-  rather than trusted as exact. The windows' ranges use the same within-document similarity
-  as the pieces', floored at 0.2 below 10 documents. The centre is not capped at the 95%
+  rather than trusted as exact. n_eff uses the within-document similarity of the range's
+  documents, floored at 0.2 below 10 documents: the pooled pieces' for a length's overall
+  range, the windows' own for theirs, and each area's own for an area. The centre is not capped at the 95%
   bound: a heavy-tailed range can have its mean above its 95th percentile, and a long run
   still converges to the mean.
 - **Narrowing with n, but not to nothing.** Each chunk's spread is s = 95% bound − centre.
@@ -237,10 +238,9 @@ area's spread, which is the calibration's to match rather than the bound's to ab
 
 The pooled headline answers whether the run as a whole is like the writer. Once a bound
 for a mean no longer closes in on the median, a small minority of very different chunks
-moves the mean too little to cross it. In the review's harness (80-document references,
-400 random batches of held-out chunks with 10% LLM chunks mixed in), at the revision with
-one r of 0.05 for every range (each range's own r is never less), the headline read
-"somewhat different" or worse:
+moves the mean too little to cross it. In the review's harness (400 random batches of
+held-out chunks with 10% LLM chunks mixed in), the headline read "somewhat different" or
+worse, before → at the revision with one r of 0.05 for every range:
 
 | chunks | n = 20 | n = 50 | n = 200 |
 |---|---|---|---|
@@ -249,26 +249,44 @@ one r of 0.05 for every range (each range's own r is never less), the headline r
 | single paragraphs | 62.0% → 8.8% | 97.5% → 7.8% | 100% → 1.5% |
 | against a 4-document reference | 87.2% → 25.5% | 100% → 22.0% | — |
 
-With 30% LLM chunks the headline still reads "somewhat different" or worse in every
-batch. This is intended: the headline is not the place to catch a few chunks. The user
-never misses them, though:
+Each range's own r is never less than 0.05, so these are upper bounds now: at this
+revision the records row reads 2.5%, 0.2% and 0.0%. With 30% LLM chunks the headline
+still reads "somewhat different" or worse in 99–100% of batches, though "clearly different"
+or "leans LLM" far less often (35% of 30% batches on one topic-clustered corpus, and about
+1% against 4- or 5-document references). This is intended: the headline is not the place
+to catch a few chunks. The user never misses them, though:
 
 - **Chunks flagged on their own are counted beside the headline.** A chunk is flagged
   when, judged at its own length, it reads "clearly different" or worse, or leans toward
-  the contrast set or more: levels the writer's own chunks almost never reach. Whenever a
-  run over several judged chunks has one, the headline says how many ("close   Delta 0.89;
-  1 of 9 chunks reads clearly different or leans LLM on its own (see below)"), `-q` ends
-  its line with "(1 of 9 chunks flagged)", the report's verdict records `flagged`, and the
-  library has `ScoreResult.flagged` and `DocumentResult.flagged`.
+  the contrast set or more. Whenever a run has more chunks than documents and some are
+  flagged, the headline says how many ("close   Delta 1.08; 2 of 17 chunks read clearly
+  different or lean LLM on their own (see below)"), `-q` ends its line with "(2 of 17
+  chunks read clearly different or lean LLM)", the report's verdict and each document
+  record `flagged`, and the library has `ScoreResult.flagged` and `DocumentResult.flagged`.
+  With one chunk per document the per-document table and its count line already say it.
 - **The chunk lists always name them.** "Most LLM-like chunks" and "Least like the
-  reference" put the flagged chunks first (`--all` lists every one), and with one chunk
-  per document the per-document table does the same, with its count line.
-- **The By area view** still reads such a mixture as different in 81–100% of the review's
-  batches, and **drift passages** (plan PR 12) will point at the passages within a
-  document.
+  reference" put the flagged chunks first (`--all` lists every one).
+- **Exit codes.** `--fail-above` and `--fail-likeness` judge each document's verdict, as a
+  whole; `--fail-flagged N` fails a document with N or more flagged chunks
+  (`ScoreResult.failing(flagged=N)`), and every `failed:` line and JSON `failed` entry
+  gives the count whichever check failed.
+- **The By area view** still reads such a mixture as different in 81–100% of batches
+  against 80-document references, but less against small ones: 64% and 76% (n = 20, 50)
+  against a 4-document reference, 40% and 39% against a 5-document one, since each range's
+  r is at least 0.2 below 10 documents. **Drift passages** (plan PR 12) will point at the
+  passages within a document.
 
 On the tests' own chunks, every writer batch of 20 or 50 with 10% LLM chunks named a
 flagged chunk, and the headline read "somewhat different" or worse in 78–100% of them.
+
+**Chance flags.** The writer's own chunks are flagged rarely, 0–0.14% of held-out chunks in
+the review's harness, but a long run has many chances: runs of 200 of the writer's own
+chunks name at least one in 15–27% of batches, and runs of 50 in 0–8%. So a flagged chunk
+in a long document is a pointer to read, not proof, and `--fail-flagged 1` on documents of
+a hundred windows or more will sometimes fail the writer's own text; choose N by length.
+The note does not say how many to expect by chance: that rate depends on the reference and
+on how the text is cut (it varies nearly tenfold across the harness's corpora), and a
+reference does not yet store its own held-out flag rate to quote.
 
 ### How well it holds
 
