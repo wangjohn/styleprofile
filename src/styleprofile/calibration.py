@@ -49,6 +49,7 @@ from styleprofile.weighting import (
     Key,
     ZScores,
     calibrate_delta,
+    centre,
     delta_level,
     flatten,
     held_out_deltas,
@@ -382,17 +383,23 @@ class _Anchor:
 def _likeness_range(stored: Mapping[str, Any] | None) -> LikenessAtLength | None:
     if not stored or "reference" not in stored:
         return None
-    return {
-        "median": stored["reference"]["median"],
-        "p95": stored["reference"]["p95"],
-        "target": stored["contrast"]["median"],
-    }
+    reference = _range(stored["reference"])
+    if reference is None:
+        return None
+    return {**reference, "target": stored["contrast"]["median"]}
 
 
 def _range(stats: Mapping[str, Any] | None) -> GroupRange | None:
+    """A stored range as a verdict reads it: its median (what the output calls typical),
+    the centre a mean over many chunks settles on (``weighting.centre``), and its 95%
+    bound."""
     if not stats or stats.get("p95") is None:
         return None
-    return {"median": stats.get("median", stats["p95"]), "p95": stats["p95"]}
+    return {
+        "median": stats.get("median", stats["p95"]),
+        "mean": centre(stats),
+        "p95": stats["p95"],
+    }
 
 
 def _interpolate(points: Sequence[tuple[float, float]], words: float) -> float:
@@ -489,11 +496,12 @@ class Lengths:
         if not points:
             return None
         median = self._value(words, lambda anchor: (stats(anchor) or {}).get("median"))
+        mean = self._value(words, lambda anchor: (stats(anchor) or {}).get("mean"))
         p95 = self._value(words, lambda anchor: (stats(anchor) or {}).get("p95"))
-        if median is None or p95 is None:
+        if median is None or mean is None or p95 is None:
             return None
         widen = stretch(points[0].words, words)
-        return {"median": median * widen, "p95": p95 * widen}
+        return {"median": median * widen, "mean": mean * widen, "p95": p95 * widen}
 
     def at(self, words: int) -> AtLength:
         """The calibration for a chunk of ``words`` prose words."""

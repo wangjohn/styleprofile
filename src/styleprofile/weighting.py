@@ -60,6 +60,17 @@ MIN_CEILING = 0.5
 # |z| (E max(0, z) = E|z| / 2), so the equivalent band is half as wide. It only binds when
 # the reference's own held-out likeness is near zero or averaged over very many chunks.
 LIKENESS_MIN_CEILING = MIN_CEILING / 2
+# How alike the chunks of one run are taken to be, beyond chance: the share of a chunk's
+# variation that every chunk of the run shares. They share whatever sets that text apart
+# from the calibration pieces (its documents, its format, how it was cut), and that part
+# does not average away, so the bound for a mean over n chunks narrows as
+# sqrt(RUN_SIMILARITY + (1 - RUN_SIMILARITY) / n) rather than 1 / sqrt(n): to about a
+# fifth of one chunk's spread, not to nothing. On the synthetic corpus, cutting held-out
+# text as whole paragraphs or as runs of sentences moves an area's mean by up to a tenth of
+# its spread, and the writer's own pieces are alike within a document by about 0.01; 0.05
+# covers both, with room for the noise of a mean over a few hundred chunks (see
+# docs/method.md).
+RUN_SIMILARITY = 0.05
 # Calibration pieces come many to a document, so their 95th percentile is read as an upper
 # confidence bound: one-sided, at this many standard errors of the quantile's share (90%).
 UPPER_Z = 1.2816
@@ -253,6 +264,22 @@ def upper_quantile(
     percentile that is the sample maximum below about 31 effective values."""
     effective = max(effective_count(values, groups, icc), 1.0)
     return quantile(values, min(share + z * math.sqrt(share * (1 - share) / effective), 1.0))
+
+
+def upper_mean(
+    values: Sequence[float], groups: Sequence[str], z: float = UPPER_Z, icc: float | None = None
+) -> float:
+    """An upper confidence bound on the mean of ``values``: the mean plus z standard errors,
+    with n_eff from ``effective_count``. It is the centre a mean over many chunks is read
+    against (``pooled_ceiling``): held-out Deltas are skewed to the right, so their mean sits
+    above their median, and a mean over many chunks settles on the mean. A mean estimated
+    from few documents is set higher rather than trusted as exact, as ``upper_quantile``
+    does for the 95th percentile."""
+    mean = statistics.fmean(values)
+    if len(values) < 2:
+        return mean
+    effective = max(effective_count(values, groups, icc), 1.0)
+    return mean + z * statistics.stdev(values) / math.sqrt(effective)
 
 
 @dataclass(frozen=True)
@@ -677,12 +704,14 @@ def calibrate_delta(
         }
     return {
         "median": statistics.median(overall),
+        "mean": upper_mean(overall, overall_sources, icc=icc),
         "p95": p95(overall, overall_sources),
         **extra,
         "max": max(overall),
         "by_group": {
             group: {
                 "median": statistics.median(values),
+                "mean": upper_mean(values, deltas.area_sources[group], icc=icc),
                 "p95": p95(values, deltas.area_sources[group]),
             }
             for group, values in deltas.areas.items()
@@ -822,6 +851,7 @@ def likeness_range(
     return {
         "reference": {
             "median": statistics.median(reference_scores),
+            "mean": upper_mean(reference_scores, piece_sources, icc=icc),
             "p95": upper_quantile(reference_scores, piece_sources, 0.95, icc=icc),
         },
         "contrast": {"median": statistics.median(contrast_scores)},
@@ -847,6 +877,7 @@ def summarize_contrast(
         "calibration": {
             "reference": {
                 "median": statistics.median(reference_scores),
+                "mean": upper_mean(reference_scores, reference_sources),
                 "p95": quantile(reference_scores, 0.95),
                 "max": max(reference_scores),
             },
@@ -892,35 +923,45 @@ def delta_level(delta: float, ceiling: float | None = None) -> int:
     return 0 if delta < 1.0 else 1 if delta < 1.5 else 2 if delta < 2.5 else 3
 
 
-def mean_ceiling(stats: Mapping[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
-    """The usual upper bound for an average over ``count`` chunks.
+def centre(stats: Mapping[str, Any]) -> float:
+    """Where a mean over many chunks settles, as a range stores it: its upper bound on the
+    held-out mean (``upper_mean``), else its median (a range stored without one), and never
+    above its 95% bound."""
+    return min(stats.get("mean", stats.get("median", stats["p95"])), stats["p95"])
 
-    A single chunk is unusual above the held-out 95th percentile; an average over n chunks
-    varies about 1/sqrt(n) as much, so its bound sits that much closer to the median. The
-    bound is never below ``floor``, so a near-zero held-out range cannot make a negligible
-    deviation look large.
-    """
+
+def mean_ceiling(stats: Mapping[str, Any], count: int, floor: float = MIN_CEILING) -> float | None:
+    """The usual upper bound for an average over ``count`` chunks (``pooled_ceiling`` of
+    ``count`` equal ranges)."""
     if stats.get("p95") is None:
         return None
-    median = stats.get("median", stats["p95"])
-    return max(median + (stats["p95"] - median) / math.sqrt(max(count, 1)), floor)
+    return pooled_ceiling([stats] * max(count, 1), floor)
 
 
 def pooled_ceiling(stats: Sequence[Mapping[str, Any]], floor: float = MIN_CEILING) -> float | None:
-    """``mean_ceiling`` for the mean of several chunks that each have their own range, as
-    chunks of different lengths do.
+    """The usual upper bound for the mean of several chunks, each with the range for its
+    own length.
 
-    Each chunk's spread above its median is taken as (p95 - median); the mean's median is
-    the mean of the medians, and its spread the root sum of squares over n, as for a mean
-    of independent values. With n equal ranges this is ``mean_ceiling(stats, n)``.
+    One chunk is unusual above its 95% bound, p95. A mean over n chunks settles on the mean
+    of their centres (``centre``): held-out Deltas are skewed to the right, so their mean
+    sits above their median, and a bound that closed in on the median would call the
+    writer's own text different once enough of it is pooled. Each chunk's spread about its
+    centre is taken as (p95 - centre), and the mean's spread as for n values that share
+    ``RUN_SIMILARITY`` of their variation: sqrt((1 - r) x sum of squares + r x square of
+    sum) / n. So one chunk's bound is its own p95, n chunks of one length read
+    centre + (p95 - centre) x sqrt(r + (1 - r) / n), and the bound never closes in on the
+    centre entirely. It is never below ``floor``, so a near-zero held-out range cannot make
+    a negligible deviation look large.
     """
     if not stats or any(item.get("p95") is None for item in stats):
         return None
-    medians = [item.get("median", item["p95"]) for item in stats]
+    centres = [centre(item) for item in stats]
+    spreads = [item["p95"] - middle for item, middle in zip(stats, centres, strict=True)]
+    alike = RUN_SIMILARITY
     spread = math.sqrt(
-        sum((item["p95"] - median) ** 2 for item, median in zip(stats, medians, strict=True))
+        (1 - alike) * sum(value * value for value in spreads) + alike * sum(spreads) ** 2
     )
-    return max(statistics.fmean(medians) + spread / len(stats), floor)
+    return max(statistics.fmean(centres) + spread / len(stats), floor)
 
 
 def likeness_level(score: float, calibration: Mapping[str, Any], count: int = 1) -> int:

@@ -154,9 +154,11 @@ class ReportBase(TypedDict):
 
 
 class GroupRange(TypedDict):
-    """A held-out Delta range: typical and 95th percentile."""
+    """A held-out Delta range: typical, the centre a mean over many chunks is read against
+    (an upper confidence bound on the mean, ``weighting.upper_mean``), and 95th percentile."""
 
     median: float
+    mean: float
     p95: float
 
 
@@ -241,6 +243,8 @@ class LikenessRange(TypedDict):
     """Held-out likeness of the reference's own chunks."""
 
     median: float
+    # An upper confidence bound on the mean (``weighting.upper_mean``).
+    mean: float
     p95: float
     max: float
 
