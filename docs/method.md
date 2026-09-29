@@ -117,8 +117,15 @@ different". So every verdict is read against the writer's own range *at the text
   *effective* number of pieces, is n / (1 + (n0 − 1) × ICC), with the intraclass correlation
   of the pieces' Deltas within documents from a one-way analysis of variance (n0 is the
   adjusted mean number of pieces per document). Few documents or alike pieces give a small
-  n_eff and a higher bound. The windows' own range (a text as long as a window) is the
-  plain percentile, as before.
+  n_eff and a higher bound; below about 31 effective pieces the bound is simply the sample
+  maximum, which is conservative. The correlation is estimated once, pooled over the three
+  lengths (weighted by pieces), since one length's estimate from a few documents swings
+  widely; with fewer than 10 documents it is taken as at least 0.2. That floor comes from a
+  simulation of 3 to 9 documents with true correlations of 0 to 0.4: among references that
+  pass as calibrated, the share whose bound is exceeded more than 7.5% of the time falls
+  from 7.5% with each length's own estimate to 2.6% (worst case 49% to 12%). A floor of 0.3
+  would reach 0.9% but calibrate half as many small references. The windows' own range (a
+  text as long as a window) is the plain percentile, as before.
 - **Scoring at the text's length.** Each scored chunk reads the calibration for its own word
   count, interpolated linearly in log word count between the stored lengths; the windows
   themselves (their median word count) are the longest anchor, and anything longer uses the
@@ -126,7 +133,12 @@ different". So every verdict is read against the writer's own range *at the text
   length-matched rms, and "Biggest differences" divides each z by how many times more that
   metric swings at the chunk's length than in a window, so a short text's arrows count
   standard deviations of the writer's own text at that length. The verdict bounds for Delta,
-  each area and likeness use the length-matched ranges.
+  each area and likeness use the length-matched ranges. Below the shortest calibrated length
+  (with none calibrated, anything shorter than a window) a range is widened by
+  sqrt(anchor words / words), as the chance variation of a rate grows when a text shrinks;
+  a reference without calibration reads its fixed steps that much wider for texts shorter
+  than its windows. Without that, the writer's own 300-word passages read "somewhat
+  different" up to 35% of the time against two-document references; with it, at most 10%.
 - **Too short to judge.** Under 75 words there is no verdict: the headline, `-q`, the JSON
   report (`reference.verdict`) and the library say "too short to judge (N words)", the By
   area block drops its verdict words, and the numbers and traits are shown as indicative.
@@ -166,7 +178,10 @@ of sentences that split paragraphs.
   each other far less than a real writer's topics do.
 - **Sample corpus** (`examples/`, seven essays, one left out at a time): no piece reads
   "clearly different" at any length (0 of 27–35 judged pieces at 75 and 150 words, 0 of 14
-  at 300), and LLM drafts at 150 words are flagged 87–100%. With so few pieces the
+  at 300), and LLM drafts at 150 words are flagged 83–100%. Detection at 75 words is the
+  price of honest bounds: only 44–61% of the judged 75-word LLM pieces are flagged (86–94%
+  on the synthetic corpus), since a range wide enough for the writer's own 75-word pieces
+  leaves little room above it. With so few pieces the
   evidence is thin: the 95% confidence intervals on a 0% rate reach 12% (28 pieces) and 23%
   (14 pieces). A second real corpus should be tracked before the bound is trusted further.
 

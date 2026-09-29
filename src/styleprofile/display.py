@@ -210,23 +210,24 @@ def _lengths_line(lengths: dict[str, Any]) -> str:
         if "delta" in entry
     ]
     thin = [
-        f"{length} words is not ({shortfall(entry)})"
+        f"{length} words ({shortfall(entry)})"
         for length, entry in lengths.items()
         if not enough(entry)
     ]
     if not lengths:
         text = "Shorter texts: not calibrated (its chunks are too short to cut into pieces)"
-    elif not calibrated:
-        text = "Shorter texts: not calibrated"
     else:
-        text = "Shorter texts: calibrated at " + ", ".join(calibrated)
-    if thin:
-        text += "; " + ", ".join(thin)
-    if thin:
-        text += (
-            f"; a length needs {MIN_CALIBRATION_PIECES} independent pieces from "
-            f"{MIN_CALIBRATION_DOCUMENTS} or more documents"
-        )
+        parts = []
+        if calibrated:
+            parts.append("calibrated at " + ", ".join(calibrated))
+        if thin:
+            parts.append(
+                ("not at " if calibrated else "not calibrated at ")
+                + ", ".join(thin)
+                + f", as a length needs {MIN_CALIBRATION_PIECES} independent pieces from "
+                f"{MIN_CALIBRATION_DOCUMENTS} or more documents"
+            )
+        text = "Shorter texts: " + "; ".join(parts)
     return f"{text}. Under {MIN_JUDGED_WORDS} words, no verdict."
 
 

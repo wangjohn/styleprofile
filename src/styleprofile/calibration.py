@@ -563,10 +563,10 @@ class Lengths:
             )
         entry = self.stored[max(shorter)]
         return (
-            f"the reference has {shortfall(entry)} of about {max(shorter)} words to "
-            f"calibrate texts this short, and needs {MIN_CALIBRATION_PIECES} independent "
-            f"pieces from {MIN_CALIBRATION_DOCUMENTS} or more documents; add more of the "
-            "writer's documents"
+            f"to calibrate texts this short the reference has pieces of about {max(shorter)} "
+            f"words, but only {shortfall(entry)}, and needs {MIN_CALIBRATION_PIECES} "
+            f"independent pieces from {MIN_CALIBRATION_DOCUMENTS} or more documents; add more "
+            "of the writer's documents"
         )
 
 
