@@ -70,8 +70,29 @@ then `styleprofile setup` for the parser-based metrics.
   one and warns when pooling without one may make calibration too narrow. `score` inherits
   the group field and judges each record at its own length, or pools a batch with `--pool`;
   `evaluate` pools and pairs edited drafts the same way (#18).
-<!-- Plan PR 11, splitting a single large file: add here. -->
-<!-- Plan PR 12 (#21), showing where a draft drifts: add here. -->
+- **One big file, or a few manuscripts, just work.** `build` splits a manuscript or an
+  archive in one file into documents where it divides: at its top headings (or `Chapter 12`
+  lines in a `.txt` file), at rules before headings as a newsletter's issues have, or
+  between an HTML page's `<article>`s, and says so. With fewer than 10 documents, long texts
+  are split at their headings the same way when their parts average a window or more. A
+  file with no such markers is cut into 8 stand-in documents, and the profile keeps a
+  warning that calibration from them is less sensitive. `--split-on` (`auto`, `heading`,
+  `heading:N`, `rule` or `none`) overrides it; `score` keeps drafts whole unless asked, and
+  `score --split-on heading` (or `heading:2` for the chapters under `# Part`s) gives each
+  chapter its own verdict (#25).
+- **Where a draft drifts (experimental, off by default).** `score --by-paragraph`
+  (`passages=True` in the library) also reads each document in spans of 100 words or more
+  around each paragraph, and lists up to three paragraphs that read unlike the writer,
+  against thresholds `build` sets from the writer's own documents (#21). It is opt-in
+  because it raises false alarms: on synthetic corpora remixed from the sample essays, a
+  paragraph of the writer's own drifted falsely in up to 4% of held-out documents on the
+  reference's own topics, but **21% (28% of long ones) under a wide topic shift with
+  spaCy**, and more is to be expected on a real writer's new topics. It also misses things:
+  a run of two or three spliced LLM blocks was found 76–99% of the time and a single block
+  57–76%, but **a single short paragraph often goes unnoticed** (17–52% found under 30
+  words), so "no paragraph drifts" does not mean the text is clean. Treat what it lists as a
+  lead to read, not a finding. It needs a reference big enough to set thresholds, and
+  without `--contrast` it rarely catches an LLM passage.
 
 ### Changed
 
@@ -82,7 +103,29 @@ then `styleprofile setup` for the parser-based metrics.
   verdict; raw area Deltas move to `--all`. Saved profiles get normal file permissions (#10).
 - `build` and `evaluate` keep only the first of documents with word-for-word the same text
   (#12).
-<!-- Plan PR 13 (#22), progress reporting, spaCy throughput and the measurement cache: add here. -->
+- **Progress and speed** (#22). On a terminal, `build`, `score` and `evaluate` keep one
+  line on stderr up to date (phase, chunks, words a second, time left); nothing is printed
+  when stderr is piped. spaCy loads only the parts the metrics use, and from 50,000 words
+  it parses in worker processes (one per CPU, at most 4, fewer on small machines; `--jobs
+  N` sets how many). Held-out calibration scales to thousands of one-chunk documents.
+  Building 200,000 words with spaCy went from about 22 s to about 10 s on the benchmark
+  machine, and profiles are byte-identical to before.
+- **The measurement cache** (#22). `build` and `evaluate` save what they measure in
+  `~/.cache/styleprofile` (`$XDG_CACHE_HOME/styleprofile` when set), so rebuilding an
+  unchanged corpus measures nothing and adding a few documents measures only those. What
+  it stores and who can read it:
+  - **Numbers derived from your texts, not the texts**, keyed by a hash of each text. But
+    they include character- and word-pattern counts from which much of the wording can
+    be recovered, so **treat the cache like the texts**. The file is readable only by you.
+  - **`score` never uses it** (from Python, only with `cache=True`), so drafts you score
+    leave nothing behind.
+  - It holds about 512 MB at most, dropping the least recently used entries first. A
+    change to the metrics' code, the package version or the spaCy model changes every key,
+    so stale numbers are never read.
+  - `--no-cache`, or `STYLEPROFILE_NO_CACHE=1` for every run, turns it off;
+    `styleprofile cache` shows where it is and how large, and `styleprofile cache --clear`
+    deletes it. When it can't be used (a read-only folder, a full disk), the run goes on
+    without it and says so.
 
 ### Fixed
 
@@ -100,6 +143,9 @@ then `styleprofile setup` for the parser-based metrics.
   close run are always named (#20).
 - HTML saved line by line in `<p>` tags lost its paragraph breaks and read as one paragraph
   (#12).
+- `evaluate` failed, with a misleading "no original" error, when a contrast draft was
+  dropped as a word-for-word duplicate and an edited set had an edit of it; the edit now
+  pairs with the kept copy, with a note (#24).
 - The library and the command line gave different numbers: the library did not window texts
   or inherit a reference's settings (#13).
 - Calibrated verdict ceilings are floored, so near-zero held-out ranges no longer inflate

@@ -217,10 +217,10 @@ reference (a synthetic corpus remixed from the sample essays; see below):
 
 ```
 Where it drifts (experimental)   2 of 8 paragraphs drift, read in spans of at least 100 words
-  Line 9          a few LLM traits (1.04), close (Delta 1.15)
+  Line 9          a few LLM traits (0.92), close (Delta 1.14)
                   "But the store is more than a place to buy things — it's a…"
                   Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
-  Line 15         a few LLM traits (0.92), close (Delta 0.89)
+  Line 15         a few LLM traits (0.92), close (Delta 0.90)
                   "Ultimately, the future of the village hardware store depends…"
                   "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲, Long words (7+ letters) ▲▲▲
 ```

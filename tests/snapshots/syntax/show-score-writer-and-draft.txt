@@ -6,16 +6,16 @@ STYLE COMPARISON   2 documents, 2 chunks, 1,257 words   vs writer.json (7 chunks
 By document   furthest from the reference first
   2 documents: 1 very different, 1 close
   document        words  verdict             Delta  LLM-likeness
-  old-maps.md       620  very different       4.61  leans
+  old-maps.md       620  very different       4.61  like drafts
       most different in: Long words (7+ letters) ▲▲▲, List items ▲▲▲
-  sharpening.md     637  close                0.57  like reference
+  sharpening.md     637  close                0.56  like reference
 
 Across 2 documents: very different   Delta 2.59
-  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.78 typically (a mean over 2 chunks, up to 0.98).
+  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.82 typically (a mean over 2 chunks, up to 0.96).
   Pooled over every document from here on; the table above has each one's own.
 
-LLM-likeness: a few LLM traits   6.95
-  The reference's own writing at these lengths (620-637 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.77); the LLM drafts 13.86.
+LLM-likeness: a few LLM traits   7.01
+  The reference's own writing at these lengths (620-637 words per chunk) scores 0.21 typically (a mean over 2 chunks, up to 0.91); the LLM drafts 13.70.
   Strongest LLM signals: Long words (7+ letters) ▲▲▲, List items ▲▲▲, Bold phrases ▲▲▲
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
@@ -24,7 +24,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Vocabulary                   5.17x  ██████████░░░░░░░░░░  very different
   Voice and stance             2.40x  ███████░░░░░░░░░░░░░  very different
   How sentences open           1.69x  ██████░░░░░░░░░░░░░░  clearly different
-  Syntax                       1.45x  █████░░░░░░░░░░░░░░░  somewhat different
+  Syntax                       1.47x  █████░░░░░░░░░░░░░░░  somewhat different
   Punctuation                  1.39x  █████░░░░░░░░░░░░░░░  somewhat different
   Rhythm                       1.19x  ████░░░░░░░░░░░░░░░░  somewhat different
   Sentence shape               1.03x  ████░░░░░░░░░░░░░░░░  somewhat different
@@ -37,8 +37,8 @@ Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
   Bold phrases                                       7.3 /1k     0.0 /1k   ▲▲▲  reference never varies; 1 of 2 chunks differ
   Opener: verb                                           11%        0.7%   ▲▲▲
   Headings                                           7.2 /1k     1.6 /1k   ▲▲▲
+  Nominalizations (-tion, -ment)                    12.8 /1k     1.8 /1k   ▲▲▲
   "these"                                            4.8 /1k     0.0 /1k   ▲▲▲  reference never varies; 1 of 2 chunks differ
-  Nominalizations (-tion, -ment)                    13.6 /1k     3.1 /1k   ▲▲▲
   We / us / our                                      8.9 /1k     1.1 /1k   ▲▲▲
 
 Pass --all to see every metric.

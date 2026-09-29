@@ -472,3 +472,27 @@ def test_the_parser_counts_only_real_nominalizations() -> None:
     words = sum(token.is_alpha for token in parser.nlp(text))
     value = metrics["syntax"]["nominalizations_per_1k"]
     assert value == pytest.approx(3 * 1000 / words)  # decision, kindness, patience
+
+
+def test_the_cache_fingerprint_covers_the_nominalization_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measurement cache must not serve numbers from before a change to syntax.py (the
+    nominalization rule lives there): its source is part of every cache key, with the
+    parser or without it."""
+    from types import ModuleType
+
+    from styleprofile import cache
+
+    assert syntax.__name__ in cache.MEASURING_MODULES
+    spacy_used = {"model": DEFAULT_MODEL, "model_version": MODEL_VERSION, "spacy_version": "3.8"}
+    before = [cache.fingerprint(None), cache.fingerprint(spacy_used)]
+    source = cache._source
+
+    def edited(module: ModuleType) -> bytes:
+        text = source(module)
+        return text + b"\n# edited" if module.__name__ == syntax.__name__ else text
+
+    monkeypatch.setattr(cache, "_source", edited)
+    after = [cache.fingerprint(None), cache.fingerprint(spacy_used)]
+    assert after[0] != before[0] and after[1] != before[1]

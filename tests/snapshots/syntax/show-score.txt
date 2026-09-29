@@ -4,10 +4,10 @@ $ styleprofile show '<tmp>/draft.json'
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
 Overall: close   Delta 0.81
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.82 typically (95% under 1.10).
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.85 typically (95% under 1.08).
 
-LLM-likeness: like the reference   0.73
-  The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.90); the LLM drafts 13.74.
+LLM-likeness: like the reference   0.70
+  The reference's own writing at this length (542 words) scores 0.21 typically (95% under 1.06); the LLM drafts 13.58.
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
@@ -17,7 +17,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
   Sentence shape               0.49x  ██░░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
-  Syntax                       0.41x  ██░░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.40x  ██░░░░░░░░░░░░░░░░░░  close
   How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
