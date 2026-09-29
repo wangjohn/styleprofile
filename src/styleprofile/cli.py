@@ -342,7 +342,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     score_parser.add_argument(
         "--by-paragraph",
         action="store_true",
-        help="list every paragraph and whether it drifts",
+        help="experimental: show where each document drifts, paragraph by paragraph",
     )
     _add_input_flags(score_parser, inherited=True)
     score_parser.set_defaults(top_k=None)
@@ -365,7 +365,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     show.add_argument(
         "--by-paragraph",
         action="store_true",
-        help="for a score report, list every paragraph of the documents it read in parts",
+        help="for a score report made with --by-paragraph (experimental), list every paragraph",
     )
 
     metrics = commands.add_parser(
@@ -759,7 +759,7 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["group_field"] = args.group_field
     if args.pool is not None:
         overrides["pool"] = args.pool
-    result = profile.score(samples, passages=True if args.by_paragraph else None, **overrides)
+    result = profile.score(samples, passages=args.by_paragraph, **overrides)
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     failed = _failed(args, result)

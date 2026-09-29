@@ -29,9 +29,10 @@ styleprofile score draft.md writer.json
 ```
 
 To try it on the sample corpus in [`examples/`](examples/), run `make demo`: it scores a
-draft that slips into the LLM register in two paragraphs, first against the seven sample
-essays (too few to check paragraphs, as the output says), then against a synthetic corpus
-remixed from them, an optimistic stand-in for a larger archive, which finds the two.
+draft that slips into the LLM register in two paragraphs, with the experimental paragraph
+check (`--by-paragraph`), first against the seven sample essays (too few to check
+paragraphs, as the output says), then against a synthetic corpus remixed from them, an
+optimistic stand-in for a larger archive, which finds the two.
 
 Inputs can be Markdown or text files, HTML (`.html`/`.htm`), JSONL (`--text-field`, default
 `text`/`body_markdown`/`output`/...), directories of them, or `-` for stdin. HTML is converted
@@ -59,9 +60,9 @@ always match. `--contrast` can be repeated.
 `build` prints a short summary: how the reference scores its own held-out writing, what
 separates it from the contrast drafts, and any warnings; pass `--all` to see every metric.
 `score` prints the verdict and the biggest differences, and `--all` prints every metric there
-too. Scoring one document also reads it in overlapping spans of 100 words or more and points
-to the paragraphs that drift from the writer, under "Where it drifts" (see
-[Reading the output](#reading-the-output)); `--by-paragraph` lists every paragraph.
+too. `--by-paragraph` (experimental, off by default) also reads each document in
+overlapping spans of 100 words or more and points to the paragraphs that drift from the
+writer (see [Where it drifts](#where-it-drifts-experimental)).
 
 The profile holds summaries only (each metric's mean and spread, the held-out ranges and the
 contrast weights), so it stays small however large the corpus; `build --keep-chunks` also
@@ -73,13 +74,14 @@ More commands:
 
 - `styleprofile score draft.md writer.json -o draft.json` also saves the full JSON report;
   `--json` prints it on stdout instead of the summary, and `--quiet` prints one verdict line
-  per document (ending "drifts at lines 9, 15" when paragraphs drift).
+  per document (with `--by-paragraph`, ending "drifts at lines 9, 15" when paragraphs
+  drift).
 - `styleprofile score drafts/ writer.json` scores several documents at once. The output opens
   with a table giving each document its own verdict, furthest from the writer first (past
   ten close documents, the rest are counted; `--all` lists them); the figures after it are
   pooled over all of them ("Across 5 documents"). The JSON report lists each one under
   `documents`. Add `--by-paragraph` to also read each one in parts
-  ([Where it drifts](#where-it-drifts)).
+  ([Where it drifts](#where-it-drifts-experimental)).
 - `styleprofile show writer.json` (or a saved score report) shows it again without
   recomputing anything.
 - `styleprofile metrics` lists every metric, what it means and its unit.
@@ -135,21 +137,26 @@ metrics that moved most, with one ▲ or ▼ per standard deviation. See
 [docs/method.md](docs/method.md) for the metrics, the weighting math, the reliability checks
 and the resolution floors.
 
-### Where it drifts
+### Where it drifts (experimental)
+
+**Experimental, and off by default.** On writer text of a topic the reference never saw, it
+found a paragraph drifting in up to about a quarter of the writer's own documents (the table
+below), so it runs only when you ask for it with `--by-paragraph` (`passages=True` in the
+library), and what it finds is a lead to read, not a finding.
 
 One number over a whole draft dilutes a paragraph or two in another register: `make demo`'s
-draft has two paragraphs written like an LLM and still reads "close" overall. So when you
-score a single document, `score` also reads it in spans of 100 words or more, two per
+draft has two paragraphs written like an LLM and still reads "close" overall. With
+`--by-paragraph`, `score` also reads each document in spans of 100 words or more, two per
 paragraph (one running forward from it, one back), judges each against the writer's own
 range at its length, and lists up to three paragraphs that drift. Against the demo's
 reference (a synthetic corpus remixed from the sample essays; see below):
 
 ```
-Where it drifts   2 of 8 paragraphs drift, read in spans of at least 100 words
-  Line 9          a few LLM traits (1.04), close (Delta 1.16)
+Where it drifts (experimental)   2 of 8 paragraphs drift, read in spans of at least 100 words
+  Line 9          a few LLM traits (1.04), close (Delta 1.15)
                   "But the store is more than a place to buy things — it's a…"
                   Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
-  Line 15         a few LLM traits (0.98), close (Delta 0.91)
+  Line 15         a few LLM traits (0.92), close (Delta 0.89)
                   "Ultimately, the future of the village hardware store depends…"
                   "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲, Long words (7+ letters) ▲▲▲
 ```
@@ -166,21 +173,25 @@ more than half the paragraphs drift, it says the document drifts throughout. (A 
 that *drifts* is not the same as a chunk *flagged* in the headline: a flagged chunk is a whole
 window reading clearly different.)
 
-On synthetic corpora remixed from the sample essays, on the reference's own topics and on
-three kinds of topics it never saw, 0–4% of the writer's held-out documents had a paragraph
-drift in seven of eight setups (up to 13% counting a few paragraphs repeated across
-concatenated documents of 25–160 paragraphs); on the widest topic shift with spaCy it was
-21% (28% in long documents), a handful of the writer's paragraphs just over their
-thresholds. A run of two or three LLM blocks spliced in was found 76–99% of the time, and a
-single block 57–76%. **A single short paragraph is often missed** (17–52% found under 30
-words), and so is one paragraph in a long document, so "no paragraph drifts" does not mean
-the text is clean, and one that drifts is a lead to read, not a finding. Those corpora are
-synthetic and optimistic: expect more false drift on a real writer's new topics.
-[docs/method.md](docs/method.md#where-a-draft-drifts) has the tables.
+Measured on synthetic corpora remixed from the sample essays (A on the reference's own
+topics; B, C and D on topics it never saw, D the widest shift), the share of the writer's
+own held-out documents with a paragraph drifting falsely:
+
+| | A | B | C | D |
+|---|---|---|---|---|
+| single documents, without / with spaCy | 4% / 2% | 0% / 0% | 3% / 0% | 0% / **21%** |
+| 4–10 documents joined, without / with spaCy | 0% / 0% | 0% / 0% | 3% / 1% | 0% / **28%** |
+
+A run of two or three LLM blocks spliced in was found 76–99% of the time, and a single block
+57–76%. **A single short paragraph is often missed** (17–52% found under 30 words), and so
+is one paragraph in a long document, so "no paragraph drifts" does not mean the text is
+clean. Those corpora are synthetic and optimistic: expect more false drift on a real
+writer's new topics. [docs/method.md](docs/method.md#where-a-draft-drifts) has the full
+tables.
 
 `--by-paragraph` lists every paragraph with its statistic (x its range, `*` for one that
 drifts) against the document's threshold, and says why a paragraph above its range does not
-drift. With several documents the section is off unless you pass `--by-paragraph`. When no
+drift. When no
 paragraph drifts it is one dim line: "no paragraph drifts (8 paragraphs checked)", or why
 the check could not run or means little: a document under 100 words; a reference too small
 to set thresholds; a reference without `--contrast`, whose Delta-only checks rarely catch an
@@ -191,8 +202,9 @@ says so. The JSON report has it all under `passages`, and the library as
 The thresholds need a reference big enough (see
 [Getting useful results](#getting-useful-results)). With the seven sample essays alone, no
 paragraph drifts and the output says the reference is too small to set paragraph
-thresholds. That is why `make demo` scores the draft against the essays first, then against
-a larger synthetic corpus in the same voice (see [`examples/`](examples/README.md)).
+thresholds. That is why `make demo` scores the draft (with `--by-paragraph`) against the
+essays first, then against a larger synthetic corpus in the same voice (see
+[`examples/`](examples/README.md)).
 
 ### In a pre-commit hook or CI
 
@@ -273,7 +285,7 @@ flagged on their own (`flagged` of `chunks_judged`); that is the form for script
   reference is calibrated for (it needs 3 or more documents), the verdict is "too short to
   judge", with the reason. A reference from a single document judges nothing shorter than
   half a window. Score whole drafts, or several paragraphs together, when you can.
-- **Paragraph checks need more documents than verdicts do.** "Where it drifts" sets its
+- **Paragraph checks need more documents than verdicts do.** "Where it drifts" (experimental) sets its
   thresholds from paragraphs of the writer's own documents: it needs 10 or more documents
   and about 200 paragraphs among the (up to 40,000) words it reads, so in practice 20 or
   more documents of a few hundred words each. With fewer, no paragraph drifts and the output

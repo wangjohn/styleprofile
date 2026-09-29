@@ -45,17 +45,21 @@ and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdic
 
 ```
 
-A single document is also read in spans of 100 words or more to show where it drifts (see
-[Where it drifts](../README.md#where-it-drifts)). `result.passages` holds one `Passage` per
+**Experimental:** `passages=True` also reads each document in spans of 100 words or more to
+show where it drifts (see [Where it drifts](../README.md#where-it-drifts-experimental)). It is
+off by default: on writer text of topics the reference never saw, it found a paragraph
+drifting in up to about a quarter of the writer's own documents (see
+[method.md](method.md#where-a-draft-drifts)). `result.passages` holds one `Passage` per
 paragraph, in order: its `lines` (first and last line of its prose), `words`, `excerpt`, the
 figures of the lower of its two spans (`delta`, `verdict`, `likeness`, `likeness_verdict`),
-its own `traits`, each a `Trait(metric, z, value, reference)`, and whether it `drifts`.
-Pass `passages=True` to read several documents this way (each passage names its `document`
-as `result.documents` does), or `passages=False` to skip it. With a reference as small as the
-seven sample essays no paragraph drifts: it is too small to set paragraph thresholds
-(`report["passages"][0]["sensitive"]` is False), though the planted paragraph reads highest.
+its own `traits`, each a `Trait(metric, z, value, reference)`, and whether it `drifts`; each
+names its `document` as `result.documents` does. Without `passages=True` it is empty. With a
+reference as small as the seven sample essays no paragraph drifts: it is too small to set
+paragraph thresholds (`report["passages"][0]["sensitive"]` is False), though the planted
+paragraph reads highest.
 
 ```python
+>>> result = profile.score(sp.Text(draft), passages=True)
 >>> passage = result.passages[3]
 >>> passage.lines, passage.words, passage.excerpt[:32], passage.drifts
 ((9, 9), 60, 'But the store is more than a pla', False)

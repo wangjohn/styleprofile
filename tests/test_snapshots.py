@@ -82,8 +82,14 @@ COMMANDS: list[tuple[str, list[str]]] = [
         "build-demo",
         ["build", f"{DEMO}/writer", "--contrast", f"{DEMO}/contrast", "-o", DEMO_REFERENCE],
     ),
-    ("score-demo", ["score", DRAFT, DEMO_REFERENCE, "-o", DEMO_REPORT]),
+    # Paragraph drift is experimental, shown only with --by-paragraph.
+    ("score-demo", ["score", DRAFT, DEMO_REFERENCE]),
     ("score-demo-quiet", ["score", "-q", DRAFT, DEMO_REFERENCE]),
+    (
+        "score-demo-by-paragraph",
+        ["score", "--by-paragraph", DRAFT, DEMO_REFERENCE, "-o", DEMO_REPORT],
+    ),
+    ("score-demo-by-paragraph-quiet", ["score", "-q", "--by-paragraph", DRAFT, DEMO_REFERENCE]),
     ("show-demo-by-paragraph", ["show", "--by-paragraph", DEMO_REPORT]),
     (
         "score-demo-two-files-by-paragraph",

@@ -21,10 +21,3 @@ case = "medium-nosyntax"
 metric = "build_cpu_s"
 ratio = 1.35
 reason = "Where it drifts: build reads up to 40,000 words of reference documents in paragraph spans, held out, to calibrate the per-document paragraph thresholds (calibration.drift); measured 1.24x (1.83 s to 2.27 s), entry at measured + 0.1."
-
-[[regression]]
-pr = 21
-case = "medium-nosyntax"
-metric = "score_cpu_s"
-ratio = 1.30
-reason = "Where it drifts: score reads a single document in parts, measuring and scoring two spans per paragraph plus each paragraph alone; measured 1.19x (0.06 s to 0.07 s), inside the 0.05 s floor but over 1.15x without it, so declared; entry at measured + 0.1."

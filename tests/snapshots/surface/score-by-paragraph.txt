@@ -19,7 +19,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
-Where it drifts: the reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.
+Where it drifts (experimental): the reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.
 
 By paragraph   examples/draft.md   spans of at least 100 words
   The reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.

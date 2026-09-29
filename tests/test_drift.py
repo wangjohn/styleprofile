@@ -268,7 +268,7 @@ def test_spans_are_judged_by_likeness_when_there_is_a_range_for_it() -> None:
 def test_the_planted_paragraphs_of_the_draft_are_found_and_nothing_else(
     demo_profile: sp.Profile,
 ) -> None:
-    result = demo_profile.score(DRAFT)
+    result = demo_profile.score(DRAFT, passages=True)
     drifting = [passage.lines for passage in result.passages if passage.drifts]
     assert drifting == PLANTED
     assert all(passage.document == "draft.md" for passage in result.passages)
@@ -282,7 +282,7 @@ def test_the_writers_own_held_out_documents_do_not_drift(
     profile = sp.build(documents[:30], sp.Settings(syntax=False), contrast=contrast)
     drifting = []
     for path in documents[30:]:
-        result = profile.score(path)
+        result = profile.score(path, passages=True)
         assert result.passages
         drifting += [(path.name, p.lines) for p in result.passages if p.drifts]
     assert drifting == []
@@ -294,40 +294,43 @@ def test_a_thin_reference_flags_nothing_rather_than_guess() -> None:
     profile = sp.build(
         examples / "writer", sp.Settings(syntax=False), contrast=examples / "llm-drafts"
     )
-    result = profile.score(DRAFT)
+    result = profile.score(DRAFT, passages=True)
     assert result.passages and not any(passage.drifts for passage in result.passages)
     (document,) = result.report["passages"] or []
     assert not document["sensitive"] and document["thresholds"] is None
     null = profile.report["calibration"].get("drift")
     assert null is not None and null["documents"] == 7 and null["within"] is None
     text = result.to_text()
-    assert "Where it drifts: the reference is too small to set paragraph thresholds" in text
+    assert (
+        "Where it drifts (experimental): the reference is too small to set paragraph thresholds"
+        in text
+    )
     assert "no paragraph drifts" not in text
     assert "too small to set paragraph thresholds" in result.to_text(by_paragraph=True)
 
 
 def test_a_reference_calibrated_for_paragraphs_is_sensitive(demo_profile: sp.Profile) -> None:
-    result = demo_profile.score(ROOT / "examples" / "writer" / "old-maps.md")
+    result = demo_profile.score(ROOT / "examples" / "writer" / "old-maps.md", passages=True)
     (document,) = result.report["passages"] or []
     assert document["sensitive"] and document["thresholds"] is not None
     null = demo_profile.report["calibration"].get("drift")
     assert null is not None and null["by"] == "likeness" and null["documents"] >= 10
     text = result.to_text()
-    assert "Where it drifts: no paragraph drifts (7 paragraphs checked)." in text
+    assert "Where it drifts (experimental): no paragraph drifts (7 paragraphs checked)." in text
     assert "too small" not in text
 
 
 def test_a_reference_without_short_calibration_says_so() -> None:
     essays = sorted((ROOT / "examples" / "writer").glob("*.md"))[:2]
     profile = sp.build(essays, sp.Settings(syntax=False))
-    result = profile.score(DRAFT)
+    result = profile.score(DRAFT, passages=True)
     (document,) = result.report["passages"] or []
     assert not document["judged"] and not document["sensitive"]
     assert "the reference has no range for passages this short" in result.to_text()
 
 
 def test_signals_under_one_sd_get_no_dangling_entry(demo_profile: sp.Profile) -> None:
-    text = demo_profile.score(DRAFT).to_text()
+    text = demo_profile.score(DRAFT, passages=True).to_text()
     signals = next(line for line in text.splitlines() if "Strongest LLM signals" in line)
     assert " ," not in signals and not signals.endswith(" ")
 
@@ -336,7 +339,7 @@ def test_signals_under_one_sd_get_no_dangling_entry(demo_profile: sp.Profile) ->
 
 
 def test_passages_are_typed_for_the_library(demo_profile: sp.Profile) -> None:
-    result = demo_profile.score(DRAFT)
+    result = demo_profile.score(DRAFT, passages=True)
     passage = next(passage for passage in result.passages if passage.drifts)
     assert isinstance(passage, Passage) and sp.Passage is Passage
     assert passage.lines == (9, 9) and passage.words == 60
@@ -347,29 +350,33 @@ def test_passages_are_typed_for_the_library(demo_profile: sp.Profile) -> None:
     assert "punctuation.em_dashes_per_1k" in {trait.metric for trait in passage.traits}
 
 
-def test_several_documents_are_read_in_parts_only_when_asked(demo_profile: sp.Profile) -> None:
+def test_documents_are_read_in_parts_only_when_asked(demo_profile: sp.Profile) -> None:
+    # Experimental, so off by default, even for a single document (docs/method.md).
     other = ROOT / "examples" / "writer" / "old-maps.md"
-    assert demo_profile.score([DRAFT, other]).report["passages"] is None
-    assert demo_profile.score([DRAFT, other]).passages == ()
+    for plain in (demo_profile.score(DRAFT), demo_profile.score([DRAFT, other])):
+        assert plain.report["passages"] is None and plain.passages == ()
+        assert "Where it drifts" not in plain.to_text()
     asked = demo_profile.score([DRAFT, other], passages=True)
     assert {passage.document for passage in asked.passages} == {"draft.md", "old-maps.md"}
-    assert demo_profile.score(DRAFT, passages=False).passages == ()
 
 
 def test_a_document_too_short_for_a_span_abstains(demo_profile: sp.Profile) -> None:
-    result = demo_profile.score(sp.Text("A short note. " * 20, name="note"))
+    result = demo_profile.score(sp.Text("A short note. " * 20, name="note"), passages=True)
     (document,) = result.report["passages"] or []
     assert not document["judged"] and document["paragraphs"] == []
     assert f"under {SPAN_WORDS} words" in (document["reason"] or "")
     assert result.passages == ()
-    assert "Where it drifts: too short to check paragraphs (under 100 words)." in result.to_text()
+    assert (
+        "Where it drifts (experimental): too short to check paragraphs (under 100 words)."
+        in result.to_text()
+    )
     assert "Not read in parts: under" in result.to_text(by_paragraph=True)
 
 
 def test_windows_do_not_split_a_document_read_in_parts(demo_profile: sp.Profile) -> None:
     # Two copies of the draft run past one window; paragraphs keep the document's lines.
     text = DRAFT.read_text() + "\n" + DRAFT.read_text()
-    result = demo_profile.score(sp.Text(text, name="twice"))
+    result = demo_profile.score(sp.Text(text, name="twice"), passages=True)
     assert result.chunk_count == 2
     lines = [passage.lines for passage in result.passages]
     assert lines[:8] == [(3, 3), (5, 5), (7, 7), (9, 9), (11, 11), (13, 13), (15, 15), (17, 17)]
@@ -378,7 +385,7 @@ def test_windows_do_not_split_a_document_read_in_parts(demo_profile: sp.Profile)
 
 def test_saved_reports_show_where_it_drifts(tmp_path: Path, demo_profile: sp.Profile) -> None:
     path = tmp_path / "score.json"
-    result = demo_profile.score(DRAFT)
+    result = demo_profile.score(DRAFT, passages=True)
     result.save(path)
     saved = load_report(path)
     assert saved["kind"] == "score"
@@ -392,14 +399,18 @@ def test_the_command_line_shows_passages_and_lists_paragraphs(
 ) -> None:
     reference = tmp_path / "demo.json"
     demo_profile.save(reference)
+    # Without --by-paragraph, nothing about paragraphs, -q included.
     assert main(["score", "-q", str(DRAFT), str(reference)]) == 0
-    assert capsys.readouterr().out.strip().endswith("drifts at lines 9, 15")
+    assert "drift" not in capsys.readouterr().out
     assert main(["score", str(DRAFT), str(reference)]) == 0
     out = capsys.readouterr().out
-    assert "Where it drifts" in out and "By paragraph" not in out
-    assert out.index("By area") < out.index("Where it drifts") < out.index("Biggest")
+    assert "Where it drifts" not in out and "By paragraph" not in out
+    assert main(["score", "-q", "--by-paragraph", str(DRAFT), str(reference)]) == 0
+    assert capsys.readouterr().out.strip().endswith("drifts at lines 9, 15")
     assert main(["score", "--by-paragraph", str(DRAFT), str(reference)]) == 0
     out = capsys.readouterr().out
+    assert "Where it drifts (experimental)" in out
+    assert out.index("By area") < out.index("Where it drifts") < out.index("Biggest")
     assert "By paragraph" in out and "* drifts, above" in out
 
 
@@ -421,7 +432,7 @@ def test_spans_across_windows_use_the_documents_parse() -> None:
 def test_without_a_contrast_set_it_does_not_reassure(demo: tuple[list[Path], Path]) -> None:
     documents, _ = demo
     profile = sp.build(documents, sp.Settings(syntax=False))
-    result = profile.score(DRAFT)
+    result = profile.score(DRAFT, passages=True)
     (document,) = result.report["passages"] or []
     assert document["by"] == "delta"
     text = result.to_text()
@@ -434,7 +445,7 @@ def test_a_document_drifting_throughout_says_so(
     demo_profile: sp.Profile, capsys: pytest.CaptureFixture[str]
 ) -> None:
     draft = ROOT / "examples" / "llm-drafts" / "mud-season.md"
-    result = demo_profile.score(draft)
+    result = demo_profile.score(draft, passages=True)
     drifting = sum(passage.drifts for passage in result.passages)
     assert drifting * 2 > len(result.passages)
     text = result.to_text()
@@ -453,7 +464,7 @@ def test_traits_are_the_paragraphs_own(demo_profile: sp.Profile) -> None:
         + (DRAFT.read_text().split("\n\n")[2])
         + "\n"
     )
-    result = demo_profile.score(sp.Text(text, name="mixed"))
+    result = demo_profile.score(sp.Text(text, name="mixed"), passages=True)
     prose_paragraph = result.passages[0]
     metrics = {trait.metric for trait in prose_paragraph.traits}
     assert "markdown.list_items_per_1k" not in metrics
@@ -466,7 +477,7 @@ def test_html_line_numbers_are_said_to_be_of_the_converted_text(
     paragraphs_html = "".join(f"<p>{block}</p>" for block in DRAFT.read_text().split("\n\n")[1:])
     page = tmp_path / "page.html"
     page.write_text(f"<html><body><article>{paragraphs_html}</article></body></html>")
-    result = demo_profile.score(page)
+    result = demo_profile.score(page, passages=True)
     (document,) = result.report["passages"] or []
     assert document["converted"]
     assert "line numbers are of the text converted from html" in result.to_text().lower()
@@ -479,7 +490,7 @@ def test_html_line_numbers_are_said_to_be_of_the_converted_text(
 def test_an_llm_opening_is_not_hidden_behind_its_neighbours(demo_profile: sp.Profile) -> None:
     # The review's chain: lines 3, 7 and 11 of an LLM draft were each explained away by the
     # next, down to a weaker paragraph. Explanation now only runs from stronger to weaker.
-    result = demo_profile.score(ROOT / "examples" / "llm-drafts" / "mud-season.md")
+    result = demo_profile.score(ROOT / "examples" / "llm-drafts" / "mud-season.md", passages=True)
     drifting = {passage.lines[0] for passage in result.passages if passage.drifts}
     assert {3, 7, 11} <= drifting
 
@@ -490,11 +501,11 @@ def test_pooled_records_are_not_read_in_parts(tmp_path: Path, demo_profile: sp.P
     records.write_text(
         "".join(json.dumps({"id": str(i), "text": b}) + "\n" for i, b in enumerate(blocks))
     )
-    result = demo_profile.score(records, pool=True)
+    result = demo_profile.score(records, pool=True, passages=True)
     documents = result.report["passages"] or []
     assert documents and all(d["pooled"] and not d["judged"] for d in documents)
     assert result.passages == ()
-    line = "Where it drifts: paragraph checks don't apply to pooled records"
+    line = "Where it drifts (experimental): paragraph checks don't apply to pooled records"
     assert line in result.to_text()
     path = tmp_path / "score.json"
     result.save(path)
@@ -505,3 +516,5 @@ def test_pooled_records_are_not_read_in_parts(tmp_path: Path, demo_profile: sp.P
     # Unpooled, each record is its own document and none is pooled.
     plain = demo_profile.score(records, pool=False, passages=True)
     assert not any(d["pooled"] for d in plain.report["passages"] or [])
+    # Not asked for, pooled records say nothing about paragraphs.
+    assert demo_profile.score(records, pool=True).report["passages"] is None

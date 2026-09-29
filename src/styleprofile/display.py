@@ -96,6 +96,10 @@ LIKENESS_CELLS = {
     # Judged on Delta, but the reference has no likeness range at its length.
     LikenessVerdict.TOO_SHORT: "too short",
 }
+# The paragraph section's title: experimental, and shown only when asked (--by-paragraph),
+# since on topics the reference never saw it can find a writer's own paragraph drifting
+# (docs/method.md, "Where a draft drifts").
+DRIFT_TITLE = "Where it drifts (experimental)"
 # Paragraphs that drift "Where it drifts" shows, and the excerpt length in "By paragraph".
 PASSAGES_SHOWN = 3
 EXCERPT_SHOWN = 40
@@ -809,7 +813,7 @@ def _where_it_drifts(
     order = {id(entry): index for index, (_, entry) in enumerate(drifting)}
     shown.sort(key=lambda item: order[id(item[1])])
     total = sum(len(document["paragraphs"]) for document in documents if document not in whole)
-    header = style.bold("Where it drifts")
+    header = style.bold(DRIFT_TITLE)
     if drifting:
         count = len(drifting)
         header += style.dim(
@@ -908,20 +912,20 @@ def _no_drift(documents: list[DocumentPassages]) -> str:
     and on how much, or why it could not or says little."""
     judged = [document for document in documents if document["judged"]]
     if any(document["pooled"] for document in documents):
-        return f"Where it drifts: {POOLED}."
+        return f"{DRIFT_TITLE}: {POOLED}."
     if not judged:
         if all(not document["spans"] for document in documents):
             words = documents[0]["span_words"]
-            return f"Where it drifts: too short to check paragraphs (under {words} words)."
+            return f"{DRIFT_TITLE}: too short to check paragraphs (under {words} words)."
         return (
-            "Where it drifts: the reference has no range for passages this short, so "
+            f"{DRIFT_TITLE}: the reference has no range for passages this short, so "
             "paragraphs cannot be checked; add more of the writer's documents."
         )
     caveats = _caveats(judged)
     if caveats and caveats[0] in (NEEDS_CONTRAST, SMALL_REFERENCE):
-        return f"Where it drifts: {'; '.join(caveats)}."
+        return f"{DRIFT_TITLE}: {'; '.join(caveats)}."
     count = sum(len(document["paragraphs"]) for document in judged)
-    text = f"Where it drifts: no paragraph drifts ({count} paragraphs checked)"
+    text = f"{DRIFT_TITLE}: no paragraph drifts ({count} paragraphs checked)"
     return text + "".join(f"; {caveat}" for caveat in caveats) + "."
 
 

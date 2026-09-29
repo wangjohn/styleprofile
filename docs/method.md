@@ -339,8 +339,8 @@ to catch a few chunks. The user never misses them, though:
 - **The By area view** still reads such a mixture as different in 81–100% of batches
   against 80-document references, but less against small ones: 64% and 76% (n = 20, 50)
   against a 4-document reference, 40% and 39% against a 5-document one, since each range's
-  r is at least 0.2 below 10 documents. **Drift passages** (plan PR 12) will point at the
-  passages within a document.
+  r is at least 0.2 below 10 documents. `--by-paragraph` (experimental; see
+  [Where a draft drifts](#where-a-draft-drifts)) points at the paragraphs within a document.
 
 On the tests' own chunks, every writer batch of 20 or 50 with 10% LLM chunks named a
 flagged chunk, and the headline read "somewhat different" or worse in 78–100% of them.
@@ -380,8 +380,11 @@ of sentences that split paragraphs.
 
 One Delta or likeness over a whole draft dilutes a paragraph or two in another register:
 `examples/draft.md` has two paragraphs written like an LLM (lines 9 and 15, 93 of its 542
-words) and reads "close" overall. So `score` also reads a single document in parts
-(`drift`; `--by-paragraph` or `passages=True` does it for several). A paragraph that reads
+words) and reads "close" overall. So `score --by-paragraph` (`passages=True` in the
+library) also reads each document in parts (`drift`). **It is experimental and off by
+default:** on corpus D below, a topic shift with spaCy, 21% of the writer's own held-out
+documents and 28% of long ones had a paragraph drift falsely, which is too often for a
+check that runs unasked. `-q` says nothing about paragraphs without it. A paragraph that reads
 unlike the writer is said to *drift*; that is a different thing from a chunk *flagged* on its
 own (a whole window reading clearly different), which the headline notes.
 
@@ -506,6 +509,19 @@ Before capping the parser's metrics in spans and restricting explanation to stro
 paragraphs, D with spaCy drifted falsely in 67% of single documents and 86% of long ones
 (one rare parser metric carrying a 100-word span), and two adjacent LLM paragraphs at a
 document's start or end were never both found (now 64–97%).
+
+Paragraph drift should judge style, not topic, so leaving the topic-sensitive metrics out of
+span scoring (and its null) was tried: in D with spaCy, long words carried 45% of the
+likeness of the top 5% of the writer's spans, and nominalizations 9%. Without the vocabulary
+area (word length, long words, the three lexical-diversity measures) and nominalizations, D
+with spaCy fell to 6% of single documents and 0% of long ones, but the false drift moved to
+C, whose topics the LLM drafts share: 25% of single documents and 70% of long ones without
+spaCy, 6% and 34% with it. Two-block detection fell to 66–84%, and adjacent LLM pairs were
+both found 6–62% of the time. (Also leaving out adjectives and two sentence openers, which
+lean toward the contrast on D's unseen topics, took D to 0% but 2-block detection to 68%.)
+With the metrics that separate the writer from the LLM drafts also tracking topic, the
+exclusion was not kept, and the check stays experimental and opt-in, with the measured
+rates above.
 
 Before this rule (a constant floor of 1.2 times the bound, and single spans judged against a
 tail fitted to all spans), the same harness gave C 9–16% false drift in single documents and

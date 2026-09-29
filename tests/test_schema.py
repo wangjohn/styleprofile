@@ -152,10 +152,14 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     contrast = sp.build(WRITER, contrast=CONTRAST)
     made += [
         ("reference with contrast", contrast.report, ReferenceReport),
-        ("score with contrast", contrast.score(DRAFT).report, ScoreReport),
+        ("score with contrast", contrast.score(DRAFT, passages=True).report, ScoreReport),
         ("score of two files", contrast.score([DRAFT, WRITER / "old-maps.md"]).report, ScoreReport),
         # No verdict: every chunk is too short to judge.
-        ("score of a short text", contrast.score(sp.Text(SHORT)).report, ScoreReport),
+        (
+            "score of a short text",
+            contrast.score(sp.Text(SHORT), passages=True).report,
+            ScoreReport,
+        ),
         # A verdict that leaves out a chunk too short to judge.
         (
             "score of files with a short one",
@@ -169,12 +173,12 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     large = sp.build(demo / "writer", sp.Settings(syntax=False), contrast=demo / "contrast")
     made += [
         ("reference large enough for paragraph thresholds", large.report, ReferenceReport),
-        ("score with paragraph thresholds", large.score(DRAFT).report, ScoreReport),
+        ("score with paragraph thresholds", large.score(DRAFT, passages=True).report, ScoreReport),
     ]
     plain = sp.build(WRITER, sp.Settings(syntax=False))
     made += [
         ("reference without contrast", plain.report, ReferenceReport),
-        ("score without contrast", plain.score(DRAFT).report, ScoreReport),
+        ("score without contrast", plain.score(DRAFT, passages=True).report, ScoreReport),
     ]
     # One document: no reliability or calibration, and a baseline without them. Its chunks
     # are kept, as ``--keep-chunks`` does.
@@ -183,8 +187,12 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     )
     made += [
         ("reference of one document", single.report, ReferenceReport),
-        ("score against one document", single.score(DRAFT).report, ScoreReport),
-        ("short text against one document", single.score(sp.Text(SHORT)).report, ScoreReport),
+        ("score against one document", single.score(DRAFT, passages=True).report, ScoreReport),
+        (
+            "short text against one document",
+            single.score(sp.Text(SHORT), passages=True).report,
+            ScoreReport,
+        ),
     ]
     # The lower-level functions record only the settings they are given.
     chunks = [Chunk(f"post{index}", "posts", text) for index, text in enumerate(POSTS)]

@@ -27,7 +27,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Vocabulary                   0.49x  ██░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.21x  █░░░░░░░░░░░░░░░░░░░  close
 
-Where it drifts   2 of 15 paragraphs drift, read in spans of at least 100 words
+Where it drifts (experimental)   2 of 15 paragraphs drift, read in spans of at least 100 words
   examples/draft.md, line 9   a few LLM traits (1.21), close (Delta 1.22)
                               "But the store is more than a place to buy things — it's a…"
                               Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲

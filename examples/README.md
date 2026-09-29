@@ -3,7 +3,7 @@
 A small corpus for trying styleprofile end to end. Run `make demo` from the repository root:
 it scores `draft.md`, which slips into the LLM register in two paragraphs, first against the
 seven essays, then against a larger synthetic corpus remixed from them, which finds the two
-paragraphs under "Where it drifts".
+paragraphs under "Where it drifts" (experimental, shown with `--by-paragraph`).
 
 All text here is original, written for this repository, and released under the repository's
 MIT license. No third-party or public-domain text is included.
@@ -25,8 +25,8 @@ MIT license. No third-party or public-domain text is included.
 ## What `make demo` does
 
 1. `styleprofile build` makes `profiles/demo-essays.json` (ignored by version control) from
-   `writer/`, contrasted with `llm-drafts/`, and `styleprofile score` scores `draft.md`
-   against it. The whole draft reads "close", and "Where it drifts" says the reference is
+   `writer/`, contrasted with `llm-drafts/`, and `styleprofile score --by-paragraph` scores
+   `draft.md` against it. The whole draft reads "close", and "Where it drifts" says the reference is
    too small to set paragraph thresholds: seven essays (about 4,500 words, 55 paragraphs)
    are far fewer than the 10 documents and about 200 paragraphs they need.
 2. `python bench/gen.py --corpus demo --out profiles` writes `profiles/demo/`: 40 documents
