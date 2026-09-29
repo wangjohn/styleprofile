@@ -227,6 +227,28 @@ def test_edited_drafts_are_matched_to_originals_by_name(tmp_path: Path) -> None:
         )
 
 
+def test_an_edit_of_a_duplicate_draft_file_pairs_with_the_copy_kept(tmp_path: Path) -> None:
+    """``draft5.md`` repeats ``draft1.md``, so only ``draft1.md`` is kept: the edit of
+    ``draft5.md`` (every window of it) pairs with ``draft1.md`` rather than failing."""
+    import styleprofile as sp
+
+    author, drafts = _corpus(tmp_path)
+    (drafts / "draft5.md").write_text((drafts / "draft1.md").read_text(encoding="utf-8"))
+    edited = tmp_path / "edited"
+    _edit(drafts, edited, _strip_dashes)
+    (edited / "draft1.md").unlink()
+    settings = sp.Settings(window_words=60, syntax=False, min_words=1)
+    result = sp.evaluate(author, drafts, {"stripped": edited}, settings)
+    stripped = result.report["sets"]["stripped"]
+    assert stripped["missing"] == []
+    assert stripped["chunks"] == result.report["sets"]["original"]["chunks"]
+    assert "draft5.md" not in [draft["draft"] for draft in stripped["by_draft"]]
+    assert [n.message for n in result.notes if n.code == sp.NoteCode.DUPLICATES][1] == (
+        "stripped: the edit of 'draft5.md' is paired with 'draft1.md': the original of "
+        "'draft5.md' repeats 'draft1.md' word for word, so only 'draft1.md' was kept"
+    )
+
+
 def test_partial_sets_are_compared_with_the_drafts_they_cover(tmp_path: Path) -> None:
     """Unedited copies of the least dashed drafts must not look like dashes were removed."""
     author, drafts = _corpus(tmp_path)

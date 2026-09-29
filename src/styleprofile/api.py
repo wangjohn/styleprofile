@@ -66,6 +66,7 @@ from styleprofile.profile import (
     Chunk,
     Pooled,
     Records,
+    Repeat,
     SourceNames,
     bare_key,
     build_reference,
@@ -80,6 +81,7 @@ from styleprofile.profile import (
     literal_id,
     load_chunks,
     load_reference,
+    paired_as,
     pool,
     report_kind,
     score,
@@ -243,6 +245,8 @@ DEFAULTS = Settings()
 
 
 _R = TypeVar("_R", ReferenceReport, ScoreReport, EvaluationReport)
+_K = TypeVar("_K")
+_V = TypeVar("_V")
 
 
 class _Result(Generic[_R]):
@@ -864,6 +868,7 @@ def evaluate(
             group_field=settings.group_field,
         )
         records, contrast_records = Records(), Records()
+        repeats: list[Repeat] = []
         reference_chunks = read(
             items, seen=seen, role="<text>", names=names, known_texts=texts, records=records
         )
@@ -875,6 +880,7 @@ def evaluate(
             known_texts=texts,
             records=contrast_records,
             require_groups=False,
+            repeats=repeats,
         )
         edited_chunks: dict[str, list[Chunk]] = {}
         # Each edited set is named on its own: its files carry the originals' names.
@@ -887,6 +893,9 @@ def evaluate(
                 role=f"<{label}>",
                 names=edited_names[label],
                 require_groups=False,
+            )
+            edited_chunks[label] = _edits_of_repeats(
+                label, edited_chunks[label], contrast_chunks, repeats, notes
             )
             overlap = {chunk.path for chunk in edited_chunks[label] if chunk.path} & seen
             if overlap:
@@ -1182,6 +1191,7 @@ def _read(
     group_field: str | None = None,
     require_groups: bool = True,
     records: Records | None = None,
+    repeats: list[Repeat] | None = None,
 ) -> list[Chunk]:
     """Chunks from each input, in order, skipping files an earlier path (tracked in
     ``seen`` by real path) already gave. ``Text`` inputs get ``role`` as their source, so
@@ -1192,7 +1202,8 @@ def _read(
     before, here or in an earlier role, are dropped with a note: twins on both sides of
     held-out calibration would make it look too tight. That is a separate check from a file
     given twice, which is recognized by its path. Grouped JSONL records are compared one by
-    one, before they are pooled.
+    one, before they are pooled. ``repeats`` gathers the documents dropped, with the copies
+    kept (``drop_duplicates``).
 
     With ``group_field``, JSONL records without a value in it are noted. An input where no
     record has one is an error naming the fields the records do have (the field is likely
@@ -1262,7 +1273,7 @@ def _read(
             )
         )
     if known_texts is not None:
-        chunks, note = drop_duplicates(chunks, known_texts)
+        chunks, note = drop_duplicates(chunks, known_texts, repeats)
         if note:
             notes.append(note)
     return chunks
@@ -1484,6 +1495,137 @@ def _covered(originals: Sequence[Chunk], edited: Sequence[Chunk]) -> list[Chunk]
         return (key, record) in keys or (short is not None and (short, record) in keys)
 
     return [chunk for chunk in originals if covers(chunk)]
+
+
+def _cover_keys(chunk: Chunk) -> list[tuple[str, str | None]]:
+    """The ``cover_key`` of ``chunk``, then the same without its folder file (``bare_key``),
+    so a record read from a folder and one read from its file directly find each other."""
+    key, record = cover_key(chunk)
+    short = bare_key(key)
+    return [(key, record)] if short is None else [(key, record), (short, record)]
+
+
+def _shown(chunk: Chunk) -> str:
+    """A draft as edit notes name it: its id, and for a grouped record also its own id."""
+    key, record = cover_key(chunk)
+    return f"{record} in {key}" if record is not None else key
+
+
+def _unique(pairs: Iterable[tuple[_K, _V]]) -> dict[_K, _V | None]:
+    """``pairs`` as a mapping, with None for a key given different values."""
+    found: dict[_K, _V | None] = {}
+    for key, value in pairs:
+        found[key] = value if found.get(key, value) == value else None
+    return found
+
+
+def _edits_of_repeats(
+    label: str,
+    edited: Sequence[Chunk],
+    originals: Sequence[Chunk],
+    repeats: Sequence[Repeat],
+    notes: list[Note],
+) -> list[Chunk]:
+    """``edited`` with each edit of a draft dropped as a word-for-word repeat of another
+    (``drop_duplicates``) renamed to pair with the copy kept: they had the same text, so
+    the edit is an edit of that copy too. Each is noted.
+
+    Only one edit of a text is scored. When the kept copy is edited as well, its own edit
+    is used; otherwise the first edit in the set, and the others are left out with a note.
+    An edit of a draft dropped for repeating one of the writer's texts has no draft to pair
+    with, so it is left out with a note too.
+    """
+    if not repeats:
+        return list(edited)
+    # Cover keys (and their bare forms) of the drafts kept, and of those dropped. A bare key
+    # that stands for several drafts pairs with none of them.
+    kept = _unique((key, cover_key(chunk)) for chunk in originals for key in _cover_keys(chunk))
+    dropped = _unique((key, repeat) for repeat in repeats for key in _cover_keys(repeat.dropped))
+
+    def original(chunk: Chunk) -> tuple[str, str | None] | Repeat | None:
+        """The kept draft ``chunk`` is an edit of (its cover key), or the repeat it edits."""
+        for key in _cover_keys(chunk):
+            if kept.get(key) is not None:
+                return kept[key]
+            if dropped.get(key) is not None:
+                return dropped[key]
+        return None
+
+    used = {found for chunk in edited if isinstance(found := original(chunk), tuple)}
+    decided: dict[tuple[str, str | None], Chunk | None] = {}  # by the edit's cover key
+    paired: list[tuple[str, str]] = []
+    doubled: list[tuple[str, str]] = []
+    outside: list[tuple[str, str]] = []
+    as_is: set[tuple[str, str | None]] = set()
+    result: list[Chunk] = []
+    for chunk in edited:
+        found = original(chunk)
+        if not isinstance(found, Repeat):
+            result.append(chunk)
+            continue
+        own = cover_key(chunk)
+        if own not in decided:
+            if found.kept is None:
+                decided[own] = None
+                outside.append((_shown(chunk), found.label))
+            elif paired_as(chunk, found.kept) is None:  # grouped and ungrouped never pair
+                decided[own] = None
+                as_is.add(own)
+            elif cover_key(found.kept) in used:
+                decided[own] = None
+                doubled.append((_shown(chunk), _shown(found.kept)))
+            else:
+                decided[own] = found.kept
+                used.add(cover_key(found.kept))
+                paired.append((_shown(chunk), _shown(found.kept)))
+        like = decided[own]
+        if own in as_is:
+            result.append(chunk)
+        elif like is not None:
+            result.append(paired_as(chunk, like) or chunk)
+
+    def note(message: str) -> None:
+        notes.append(Note(f"{label}: {message}", NoteCode.DUPLICATES))
+
+    if len(paired) == 1:
+        ((edit, copy),) = paired
+        note(
+            f"the edit of {edit!r} is paired with {copy!r}: the original of {edit!r} "
+            f"repeats {copy!r} word for word, so only {copy!r} was kept"
+        )
+    elif paired:
+        edit, copy = paired[0]
+        note(
+            f"{len(paired):,} edits of drafts that repeat another word for word are paired "
+            f"with the copy kept (for example, {edit!r} with {copy!r})"
+        )
+    if len(doubled) == 1:
+        ((edit, copy),) = doubled
+        note(
+            f"left out the edit of {edit!r}: its original repeats {copy!r} word for word, "
+            f"and another edit of that text is already paired with {copy!r}"
+        )
+    elif doubled:
+        edit, copy = doubled[0]
+        note(
+            f"left out {len(doubled):,} edits of drafts that repeat another word for word, "
+            f"whose text another edit already pairs with (for example, {edit!r}, a copy of "
+            f"{copy!r})"
+        )
+    if len(outside) == 1:
+        ((edit, text),) = outside
+        note(
+            f"left out the edit of {edit!r}: its original repeats the writer's {text} word "
+            "for word, so it was dropped from the drafts and has no draft to pair with"
+        )
+    elif outside:
+        edit, text = outside[0]
+        note(
+            f"left out {len(outside):,} edits of drafts dropped for repeating the writer's "
+            f"texts word for word, which leaves them no draft to pair with (for example, "
+            f"{edit!r}, a copy of the writer's {text})"
+        )
+    return result
 
 
 def _pooling_mismatch(cut: _Cut, reference_pooled: bool) -> list[str]:

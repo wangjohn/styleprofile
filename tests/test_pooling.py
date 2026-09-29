@@ -1066,6 +1066,94 @@ def test_a_folder_of_drafts_pairs_with_edits_given_as_a_file(tmp_path: Path) -> 
         assert half["edits"]["word_ratio_median"] == pytest.approx(0.5, abs=0.05)
 
 
+UNPOOLED = sp.Settings(window_words=WINDOW, syntax=False, pool=False)
+
+
+def test_an_edit_of_a_deduplicated_draft_pairs_with_the_copy_kept(tmp_path: Path) -> None:
+    """Draft 7 repeats draft 3 word for word, so only 3 is kept; an edit of 7 pairs with 3,
+    pooled or not. When 3 is edited too, its own edit is used and 7's is left out."""
+    writer = _comments(tmp_path / "writer.jsonl")
+    originals = _llm_records(48)
+    originals[7] = {**originals[7], "text": originals[3]["text"]}
+    contrast = _write(tmp_path / "llm.jsonl", originals)
+    edits = [_halved(r) for r in originals]
+    without_3 = _write(tmp_path / "half.jsonl", edits[:3] + edits[4:])
+    both = _write(tmp_path / "both.jsonl", edits)
+    for settings in (SETTINGS, UNPOOLED):
+        result = sp.evaluate(writer, contrast, {"half": without_3, "both": both}, settings)
+        for label in ("half", "both"):
+            edited = result.report["sets"][label]
+            assert edited["missing"] == []
+            assert edited["drafts"] == result.report["sets"]["original"]["drafts"]
+            assert edited["edits"]["word_ratio_median"] == pytest.approx(0.5, abs=0.05)
+        notes = _coded(result.notes, sp.NoteCode.DUPLICATES)
+        assert notes[1:] == [
+            "half: the edit of '7' is paired with '3': the original of '7' repeats '3' word "
+            "for word, so only '3' was kept",
+            "both: left out the edit of '7': its original repeats '3' word for word, and "
+            "another edit of that text is already paired with '3'",
+        ]
+
+
+def test_a_deduplicated_draft_pairs_across_a_folder_and_a_file(tmp_path: Path) -> None:
+    """Originals read from a folder (``a.jsonl:7``) and edits given as a file (``7``)."""
+    writer = _comments(tmp_path / "writer.jsonl")
+    originals = _llm_records(48)
+    originals[7] = {**originals[7], "text": originals[3]["text"]}
+    contrast = _write(tmp_path / "llm" / "a.jsonl", originals).parent
+    edits = [_halved(r) for r in originals]
+    edited = _write(tmp_path / "half.jsonl", edits[:3] + edits[4:])
+    for settings in (SETTINGS, UNPOOLED):
+        result = sp.evaluate(writer, contrast, {"half": edited}, settings)
+        assert result.report["sets"]["half"]["missing"] == []
+        assert "half: the edit of '7' is paired with 'a.jsonl:3'" in " ".join(
+            _coded(result.notes, sp.NoteCode.DUPLICATES)
+        )
+
+
+def test_an_edit_of_a_deduplicated_grouped_draft_pairs_with_the_copy_kept(
+    tmp_path: Path,
+) -> None:
+    """Grouped drafts are deduplicated record by record: an edit of a dropped record pairs
+    with the record kept, in its thread, even when that empties the dropped record's
+    thread."""
+    writer = _comments(tmp_path / "writer.jsonl")
+    originals = [
+        {**record, "thread": "solo" if index == 7 else f"t{index // 6}"}
+        for index, record in enumerate(_llm_records(48))
+    ]
+    originals[7] = {**originals[7], "text": originals[3]["text"]}
+    originals[8] = {**originals[8], "text": originals[4]["text"]}
+    contrast = _write(tmp_path / "llm.jsonl", originals)
+    edits = [_halved(r) for r in originals]
+    edited = _write(tmp_path / "half.jsonl", edits[:3] + edits[5:])
+    result = sp.evaluate(writer, contrast, {"half": edited}, GROUPED)
+    half = result.report["sets"]["half"]
+    assert half["missing"] == []
+    assert "thread=solo" not in [draft["draft"] for draft in half["by_draft"]]
+    assert half["edits"]["word_ratio_median"] == pytest.approx(0.5, abs=0.05)
+    assert _coded(result.notes, sp.NoteCode.DUPLICATES)[1:] == [
+        "half: 2 edits of drafts that repeat another word for word are paired with the copy "
+        "kept (for example, '7 in thread=solo' with '3 in thread=t0')"
+    ]
+
+
+def test_an_edit_of_a_draft_that_repeats_the_writer_is_left_out(tmp_path: Path) -> None:
+    writer = _comments(tmp_path / "writer.jsonl")
+    originals = _llm_records(48)
+    originals[5] = {**originals[5], "text": _read(writer)[0]["text"]}
+    contrast = _write(tmp_path / "llm.jsonl", originals)
+    edited = _write(tmp_path / "half.jsonl", [_halved(r) for r in originals])
+    for settings in (SETTINGS, UNPOOLED):
+        result = sp.evaluate(writer, contrast, {"half": edited}, settings)
+        assert result.report["sets"]["half"]["missing"] == []
+        assert _coded(result.notes, sp.NoteCode.DUPLICATES)[1] == (
+            "half: left out the edit of '5': its original repeats the writer's record c000 in "
+            "writer.jsonl word for word, so it was dropped from the drafts and has no draft to "
+            "pair with"
+        )
+
+
 def test_an_ungrouped_contrast_note_does_not_claim_groups(tmp_path: Path) -> None:
     writer = _comments(tmp_path / "writer.jsonl")
     contrast = _write(tmp_path / "llm.jsonl", _llm_records(96))
