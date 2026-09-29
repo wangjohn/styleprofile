@@ -42,8 +42,10 @@ from styleprofile.schema import (
 from styleprofile.surface import Metrics, classify, plain_sentences
 from styleprofile.weighting import (
     DISTANCE_WORDS,
+    FLOOR_DOCUMENTS,
     LIKENESS_MIN_CEILING,
     MIN_CEILING,
+    SIMILARITY_FLOOR,
     TOO_SHORT,
     HeldDeltas,
     Key,
@@ -73,17 +75,6 @@ MIN_JUDGED_WORDS = 75
 # observed rather than set by the single largest piece.
 MIN_CALIBRATION_DOCUMENTS = 3
 MIN_CALIBRATION_PIECES = 20
-# With few documents the within-document similarity of pieces (their intraclass
-# correlation) is poorly estimated even pooled over the lengths, and an estimate that
-# happens to be low calls the pieces more independent than they are. Below FLOOR_DOCUMENTS
-# documents it is taken as at least SIMILARITY_FLOOR, a little above the 0.17 measured on
-# the synthetic corpus. In a simulation of 3 to 9 documents with true similarities of 0 to
-# 0.4, among references that pass as calibrated, the share whose bound is exceeded more
-# than 7.5% of the time falls from 7.5% with each length's own estimate to 2.6% (worst case
-# 49% to 12%); a floor of 0.3 would reach 0.9% but calibrate half as many small
-# references (see docs/method.md).
-FLOOR_DOCUMENTS = 10
-SIMILARITY_FLOOR = 0.2
 # The contrast's likeness range at a length is only its median, which needs fewer pieces.
 MIN_CONTRAST_PIECES = 5
 # At most this many words of pieces are measured per length, taken evenly across the corpus,
@@ -391,14 +382,15 @@ def _likeness_range(stored: Mapping[str, Any] | None) -> LikenessAtLength | None
 
 def _range(stats: Mapping[str, Any] | None) -> GroupRange | None:
     """A stored range as a verdict reads it: its median (what the output calls typical),
-    the centre a mean over many chunks settles on (``weighting.centre``), and its 95%
-    bound."""
+    the centre a mean over many chunks settles on (``weighting.centre``), its 95% bound,
+    and the share of their variation a run's chunks share (``weighting.run_similarity``)."""
     if not stats or stats.get("p95") is None:
         return None
     return {
         "median": stats.get("median", stats["p95"]),
         "mean": centre(stats),
         "p95": stats["p95"],
+        "similarity": stats["similarity"],
     }
 
 
@@ -498,10 +490,17 @@ class Lengths:
         median = self._value(words, lambda anchor: (stats(anchor) or {}).get("median"))
         mean = self._value(words, lambda anchor: (stats(anchor) or {}).get("mean"))
         p95 = self._value(words, lambda anchor: (stats(anchor) or {}).get("p95"))
-        if median is None or mean is None or p95 is None:
+        shared = self._value(words, lambda anchor: (stats(anchor) or {}).get("similarity"))
+        if median is None or mean is None or p95 is None or shared is None:
             return None
         widen = stretch(points[0].words, words)
-        return {"median": median * widen, "mean": mean * widen, "p95": p95 * widen}
+        # A share, which widening leaves as it is.
+        return {
+            "median": median * widen,
+            "mean": mean * widen,
+            "p95": p95 * widen,
+            "similarity": shared,
+        }
 
     def at(self, words: int) -> AtLength:
         """The calibration for a chunk of ``words`` prose words."""
@@ -604,6 +603,10 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> Sc
     and its numbers, over every chunk, are indicative. Each chunk is read against the range
     for its own length, and the mean of several against the pooled range of the means
     (``pooled_ceiling``), so a run mixing a long chunk and a short one is judged as both.
+
+    The mean of many chunks is what it judges: a few very different chunks among many close
+    ones move it little. So it also counts the judged chunks flagged on their own
+    (``chunk_flagged``), which every front end reports beside the headline.
     """
     judged = [row for row in rows if row["reference"]["calibration"]["judged"]]
     used = judged or list(rows)
@@ -650,6 +653,7 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> Sc
             if contrast_label is not None
             else None
         ),
+        "flagged": sum(chunk_flagged(row) for row in judged),
     }
 
 
@@ -702,6 +706,29 @@ def _likeness(
         "level": level,
         "verdict": str(TOO_SHORT) if level is None else likeness_words(level, label),
     }
+
+
+# A chunk is flagged on its own (``chunk_flagged``) at "clearly different" or worse, or at
+# "leans <contrast>" or more: levels the writer's own chunks almost never reach (at most
+# 0.3% at any length, see docs/method.md), unlike "somewhat different", which about one in
+# twenty of them reads by design.
+FLAGGED_DISTANCE = 2
+FLAGGED_LIKENESS = 2
+
+
+def chunk_flagged(row: Mapping[str, Any]) -> bool:
+    """Whether one chunk, judged at its own length, reads clearly different or worse, or
+    leans toward the contrast set or more (``FLAGGED_DISTANCE``, ``FLAGGED_LIKENESS``)."""
+    level = chunk_level(row)
+    if level is None:
+        return False
+    return level >= FLAGGED_DISTANCE or (chunk_likeness_level(row) or 0) >= FLAGGED_LIKENESS
+
+
+def flagged_text(flagged: int, judged: int, chunks: int, *, unit: str = "chunks") -> str:
+    """ "4 of 40 chunks", or "4 of 40 judged chunks" when some of ``chunks`` were not
+    judged: how many judged chunks (or documents, ``unit``) are flagged on their own."""
+    return f"{flagged} of {judged} {'judged ' if judged < chunks else ''}{unit}"
 
 
 def chunk_level(row: Mapping[str, Any]) -> int | None:

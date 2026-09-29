@@ -1044,18 +1044,18 @@ def _before_lengths(report: Mapping[str, Any]) -> bool:
 
 
 def _before_means(report: Mapping[str, Any]) -> bool:
-    """Whether a version-6 report is from before ranges stored their held-out mean, which
-    version 6 also gained before any release: a reference (or a score report's copy of it)
-    whose Delta range lacks ``mean``. Its pooled verdicts would close in on the median and
-    call the writer's own text different once enough of it is pooled. A part of the wrong
-    shape is left to ``check_report``."""
+    """Whether a version-6 report is from before ranges stored their held-out mean and run
+    similarity, which version 6 also gained before any release: a reference (or a score
+    report's copy of it) whose Delta range lacks ``mean`` or ``similarity``. Its pooled
+    verdicts would close in on the median and call the writer's own text different once
+    enough of it is pooled. A part of the wrong shape is left to ``check_report``."""
     calibration: Any = report.get("calibration")
     if report.get("kind") == SCORE:
         scored = report.get("reference")
         baseline = scored.get("baseline") if isinstance(scored, Mapping) else None
         calibration = baseline.get("calibration") if isinstance(baseline, Mapping) else None
     delta = calibration.get("delta") if isinstance(calibration, Mapping) else None
-    return isinstance(delta, Mapping) and "mean" not in delta
+    return isinstance(delta, Mapping) and not {"mean", "similarity"} <= delta.keys()
 
 
 def check_version(report: Mapping[str, Any], name: str = "the report") -> None:
@@ -1928,6 +1928,7 @@ def documents(rows: Sequence[ScoredChunk], reference: ReferenceReport) -> list[D
             "verdict": str(Verdict.NOT_COMPARABLE if mean_delta is None else judged["verdict"]),
             "likeness": likeness["value"] if likeness else None,
             "likeness_verdict": likeness_verdict,
+            "flagged": judged["flagged"],
             "differences": [
                 {"metric": f"{group}.{metric}", "z": z} for (group, metric), z in largest
             ],

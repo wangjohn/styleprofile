@@ -155,11 +155,14 @@ class ReportBase(TypedDict):
 
 class GroupRange(TypedDict):
     """A held-out Delta range: typical, the centre a mean over many chunks is read against
-    (an upper confidence bound on the mean, ``weighting.upper_mean``), and 95th percentile."""
+    (an upper confidence bound on the mean, ``weighting.upper_mean``), 95th percentile, and
+    the share of their variation the chunks of one run share (``weighting.run_similarity``,
+    from the windows' held-out values for this range)."""
 
     median: float
     mean: float
     p95: float
+    similarity: float
 
 
 class DeltaRange(GroupRange):
@@ -246,6 +249,8 @@ class LikenessRange(TypedDict):
     # An upper confidence bound on the mean (``weighting.upper_mean``).
     mean: float
     p95: float
+    # The share of their variation a run's chunks share (``weighting.run_similarity``).
+    similarity: float
     max: float
 
 
@@ -472,6 +477,9 @@ class ScoreVerdict(TypedDict):
     by_group: dict[str, VerdictArea]
     # None without a contrast set (or with no chunk scored for likeness).
     likeness: VerdictLikeness | None
+    # How many judged chunks are flagged on their own (``calibration.chunk_flagged``): the
+    # verdict judges their mean, which a few very different chunks move little.
+    flagged: int
 
 
 class ReferenceScore(TypedDict):
@@ -525,6 +533,8 @@ class DocumentEntry(TypedDict):
     # None without a contrast set.
     likeness: float | None
     likeness_verdict: str | None
+    # As ``ScoreVerdict.flagged``: its judged chunks flagged on their own.
+    flagged: int
     differences: list[DocumentDifference]
     # Only against a reference with a contrast set.
     signals: NotRequired[list[DocumentSignal]]

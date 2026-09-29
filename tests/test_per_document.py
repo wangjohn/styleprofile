@@ -497,6 +497,7 @@ def _document(name: str, verdict: str, delta: float) -> DocumentEntry:
         "verdict": verdict,
         "likeness": None,
         "likeness_verdict": None,
+        "flagged": 0,
         "differences": [],
     }
 
