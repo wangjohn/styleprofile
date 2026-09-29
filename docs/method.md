@@ -171,7 +171,9 @@ for that mean, built from each chunk's range at its own length:
   stored range (the windows', each length's, overall, per area and for likeness) therefore
   also stores `mean`: an upper confidence bound on its pieces' mean, the mean plus 1.28
   standard errors with n_eff as for the 95% bound, so a mean from few documents is set
-  higher rather than trusted as exact. A range stored without one is read at its median.
+  higher rather than trusted as exact. A reference built before ranges stored it (or a
+  score report made against one) is refused as outdated and must be rebuilt, since
+  reading its median instead would bring the bug back.
 - **Narrowing with n, but not to nothing.** Each chunk's spread is s = 95% bound − centre.
   The chunks of one run share whatever sets that text apart from the calibration pieces
   (its documents, its format, how it was cut), and that part does not average away. So they
@@ -196,6 +198,13 @@ sentences moves an area's mean by up to about a tenth of its spread, and whole c
 scored against pieces of joined comments sit 0.13 of a spread above the overall centre. r =
 0.05 (sqrt 0.22) covers such shifts with room for the noise of a mean over a few hundred
 chunks; the writer's held-out pieces are alike within a document by only about 0.01 there.
+r is **tuned, not measured**: it comes from the synthetic corpus and the seven sample
+essays, where documents differ far less than a real writer's topics do, so a real corpus
+may share more than 0.05 within a document and read a long run of one document too
+harshly. The planned refinement is to take r as the larger of 0.05 and the reference's own
+measured within-document similarity, once that measure is reliable (today it is floored
+at 0.2 below 10 documents and inflated by cutting each window twice, as paragraphs and
+as excerpts, which overlap).
 
 Batches drawn from the writer's own held-out chunks (80 documents, cut by the tests' own
 cutters to lengths drawn from 75 to 300 words), against a reference of 80 other documents:
