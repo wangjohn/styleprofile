@@ -563,15 +563,41 @@ def grouped(values: Values, *, syntax: bool) -> Grouped:
     Raises ValueError when the computed names and the registered ones differ, so a metric
     cannot be computed without a definition or defined without a computation.
     """
-    expected = [metric for metric in METRICS if metric.syntax == syntax]
-    missing = [metric.name for metric in expected if metric.name not in values]
-    extra = sorted(set(values) - {metric.name for metric in expected})
-    if missing or extra:
+    registry, names, layout = _layout(syntax)
+    if values.keys() != names:
+        expected = [metric for metric in registry if metric.syntax == syntax]
+        missing = [metric.name for metric in expected if metric.name not in values]
+        extra = sorted(set(values) - {metric.name for metric in expected})
         raise ValueError(f"metrics out of sync with the registry: {missing=} {extra=}")
-    nested: Grouped = {}
-    for metric in expected:
-        nested.setdefault(metric.group, {})[metric.name] = values[metric.name]
-    return nested
+    return {group: {name: values[name] for name in group_names} for group, group_names in layout}
+
+
+# ``grouped``'s names and layout for surface and syntax metrics, remade if METRICS changes.
+_LAYOUTS: dict[
+    bool, tuple[tuple[Metric, ...], frozenset[str], tuple[tuple[str, tuple[str, ...]], ...]]
+] = {}
+
+
+def _layout(
+    syntax: bool,
+) -> tuple[tuple[Metric, ...], frozenset[str], tuple[tuple[str, tuple[str, ...]], ...]]:
+    """The registered metrics of one computation, by name, and nested by group in registry
+    order (each group where its first metric is), as ``grouped`` lays them out."""
+    found = _LAYOUTS.get(syntax)
+    if found is not None and found[0] is METRICS:
+        return found
+    groups: dict[str, list[str]] = {}
+    for metric in METRICS:
+        if metric.syntax == syntax:
+            groups.setdefault(metric.group, []).append(metric.name)
+    names = frozenset(name for group_names in groups.values() for name in group_names)
+    found = (
+        METRICS,
+        names,
+        tuple((group, tuple(group_names)) for group, group_names in groups.items()),
+    )
+    _LAYOUTS[syntax] = found
+    return found
 
 
 class Description(NamedTuple):

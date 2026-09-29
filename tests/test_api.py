@@ -347,18 +347,41 @@ def test_repeated_inputs_are_read_once_with_a_note(examples: Path) -> None:
     assert error.value.code == "stdin_twice"
 
 
+def _phases(events: list[sp.Progress]) -> list[sp.Phase]:
+    """The phases in the order they started (each chunk measured repeats its phase)."""
+    return [
+        event.phase
+        for index, event in enumerate(events)
+        if not index or event.phase != events[index - 1].phase
+    ]
+
+
 def test_every_run_reports_phases_in_one_order(examples: Path) -> None:
-    phases: list[sp.Phase] = []
-    profile = sp.build(
-        WRITER, sp.Settings(syntax=False), progress=lambda event: phases.append(event.phase)
-    )
-    assert phases == [sp.Phase.READ, sp.Phase.BUILD, sp.Phase.DONE]
-    phases.clear()
-    profile.score(DRAFT, progress=lambda event: phases.append(event.phase))
-    assert phases == [sp.Phase.READ, sp.Phase.SCORE, sp.Phase.DONE]
-    phases.clear()
-    profile.score(DRAFT, syntax="auto", progress=lambda event: phases.append(event.phase))
-    assert phases == [sp.Phase.READ, sp.Phase.LOAD_PARSER, sp.Phase.SCORE, sp.Phase.DONE]
+    events: list[sp.Progress] = []
+    profile = sp.build(WRITER, sp.Settings(syntax=False), contrast=CONTRAST, progress=events.append)
+    P = sp.Phase
+    assert _phases(events) == [
+        P.READ,
+        P.BUILD,
+        P.MEASURE,
+        P.CALIBRATE,
+        P.MEASURE_CONTRAST,
+        P.CONTRAST,
+        P.DONE,
+    ]
+    # Measuring reports each chunk, with the words done so far.
+    measured = [event for event in events if event.phase == P.MEASURE]
+    assert measured[0].done == 0 and measured[-1].done == measured[-1].total
+    assert measured[-1].total == profile.report["chunk_count"]
+    assert measured[-1].words == profile.report["word_count"]
+    assert not any(event.parsing for event in events)
+    events.clear()
+    profile.score(DRAFT, progress=events.append)
+    assert _phases(events) == [P.READ, P.SCORE, P.MEASURE, P.DONE]
+    events.clear()
+    profile.score(DRAFT, syntax="auto", progress=events.append)
+    assert _phases(events)[:2] == [P.READ, P.LOAD_PARSER]
+    assert _phases(events)[2:] == [P.SCORE, P.MEASURE, P.DONE]
 
 
 def test_profiles_save_load_and_refuse_other_reports(examples: Path, tmp_path: Path) -> None:

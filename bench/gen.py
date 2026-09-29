@@ -15,8 +15,12 @@ Each corpus has a writer side (from ``examples/writer``) and a contrast side (fr
 
 Documents mix whole paragraphs from the samples with paragraphs recombined from their
 sentences, and vary in length, so windows differ from each other the way real texts do rather
-than repeating a handful of paragraphs. The same seed always gives byte-identical output, and a
-corpus that is already on disk with the same seed is not rewritten.
+than repeating a handful of paragraphs. Comments are runs of consecutive sentences or sentences
+recombined from across the samples, and no two comments on one side share their words: the
+samples hold only about 300 sentences, so runs repeat often, and ``build`` drops a document
+that repeats another word for word (a comments corpus of 20,000 records with repeats measured
+only about 11,000). The same seed always gives byte-identical output, and a corpus that is
+already on disk with the same seed is not rewritten.
 """
 
 from __future__ import annotations
@@ -37,7 +41,10 @@ SEED = 0
 # A sentence ends at . ! or ? (optionally closed by a quote or bracket) followed by a space.
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?][\"')\]])\s+")
 # Bump when the output of a given seed changes, so stale corpora on disk are regenerated.
-GENERATOR_VERSION = 1
+# 2: comments never repeat another comment's words.
+GENERATOR_VERSION = 2
+# Draws before a comment that keeps repeating earlier ones is accepted anyway.
+UNIQUE_TRIES = 50
 REMIX_SHARE = 0.5  # share of prose paragraphs recombined from sentences rather than copied
 
 
@@ -133,12 +140,24 @@ def _comment(rng: random.Random, pool: Pool, words: int) -> str:
     return " ".join(sentences)
 
 
+def _words(text: str) -> str:
+    """A comment's words, lowercased: what ``build`` compares to find repeated documents."""
+    return " ".join(re.findall(r"\w+", text.lower()))
+
+
 def _documents(rng: random.Random, pool: Pool, corpus: Corpus, count: int) -> Iterator[str]:
+    seen: set[str] = set()
     for _ in range(count):
-        if corpus.jsonl:
-            yield _comment(rng, pool, corpus.words)
-        else:
+        if not corpus.jsonl:
             yield _document(rng, pool, corpus.words)
+            continue
+        text = _comment(rng, pool, corpus.words)
+        for _ in range(UNIQUE_TRIES):
+            if _words(text) not in seen:
+                break
+            text = _comment(rng, pool, corpus.words)
+        seen.add(_words(text))
+        yield text
 
 
 def _write_side(folder: Path, texts: Iterator[str], jsonl: bool, author: str) -> int:

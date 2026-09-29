@@ -89,6 +89,35 @@ More commands:
   drafts (see [Stress-testing LLM-likeness](#stress-testing-llm-likeness)).
 - `styleprofile COMMAND --help` shows a command's options.
 
+### Speed
+
+On a terminal, `build`, `score` and `evaluate` keep one line on stderr up to date: the phase,
+chunks measured, words a second and time left. Nothing is printed when stderr is piped or
+redirected, or for `score --json` and `--quiet`. spaCy is most of the time a build takes; when
+it looks like taking over a minute, `build` says once that `--no-syntax` is about 10x faster.
+
+- **Worker processes.** Once there are 50,000 words to parse, spaCy runs in worker
+  processes, each with its own copy of the model (1-2 s and about 300 MB to start): one per
+  CPU, at most 4, and no more than fit in a quarter of the machine's memory (a 4 GB machine
+  gets 3). `build --jobs N` and `evaluate --jobs N` set how many; `--jobs 1` parses in one
+  process. From Python, workers start only when the call runs under an
+  `if __name__ == "__main__":` block of your script (or from a notebook), since each worker
+  imports your script again; otherwise everything is parsed in one process.
+- **The measurement cache.** `build` and `evaluate` keep what they measure in
+  `~/.cache/styleprofile` (`$XDG_CACHE_HOME/styleprofile` when that is set), under a key made
+  from each text and the exact code of the metrics, the package version and the spaCy
+  model. Rebuilding an unchanged corpus measures nothing; after adding a few documents it
+  measures the new ones, and with spaCy it also parses again the windows whose calibration
+  pieces the larger corpus samples differently. The profile is identical either way. The
+  cache holds derived measurements, not the texts themselves, but they include character-
+  and word-pattern counts from which much of the wording can be recovered: treat the file
+  (readable only by you) like the texts. `score` does not use it, so drafts leave nothing
+  behind. It holds about 512 MB at most, dropping the least recently used entries first.
+  `--no-cache`, or `STYLEPROFILE_NO_CACHE=1` for every run, measures without reading or
+  writing it; `styleprofile cache` shows where it is, how large, and whether it can be
+  used, and `styleprofile cache --clear` deletes it. When the cache cannot be used (a
+  read-only folder, a full disk), the run goes on without it and says so.
+
 ## Reading the output
 
 A score has two numbers:
@@ -460,7 +489,9 @@ result = profile.score(sp.Text("A draft to check against the writer."))
 print(result.verdict, result.delta, result.likeness_verdict.words(result.contrast_label))
 ```
 
-See [docs/library.md](docs/library.md) for inputs, settings, notes and saving.
+See [docs/library.md](docs/library.md) for inputs, settings, notes and saving. `build`,
+`Profile.score` and `evaluate` take `progress`, `jobs` and `cache` as the command line does
+(`score` uses the cache only with `cache=True`).
 
 ## Development
 
@@ -479,7 +510,9 @@ size for each case in `bench/targets.py`. It prints a table beside the plan's ta
 `bench/results.json`. Pick cases with `make bench BENCH="--case big --repeat 3"`. To compare
 with another revision as CI does, add `--against`:
 `make bench-quick BENCH="--against origin/main --repeat 5"` also benchmarks `src/` as of
-`origin/main`, alternating its runs with yours, and prints each metric's ratio to it.
+`origin/main`, alternating its runs with yours, and prints each metric's ratio to it. CPU time
+and peak memory include spaCy's worker processes. Every run gets an empty measurement cache,
+except the `medium-warm` case, which times a rebuild after an untimed build has filled it.
 
 ### The benchmark gate in CI
 

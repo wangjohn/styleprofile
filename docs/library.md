@@ -203,7 +203,24 @@ The library never prints.
 
 A `progress` callback, if given, is called with a `Progress` at the start of each `Phase`:
 `READ`, `LOAD_PARSER` (only when spaCy is used), then `BUILD`, `SCORE` or `EVALUATE`, then
-`DONE`.
+`DONE`. Within the work, `MEASURE` is reported again after each chunk (`done` of `total`
+chunks, `words` so far, and `parsing` when spaCy reads them), then a reference reports
+`CALIBRATE` and, with a contrast set, `MEASURE_CONTRAST` (per chunk) and `CONTRAST`.
+
+Two more options of `build`, `Profile.score` and `evaluate` change how fast a run goes, never
+its numbers, so they are not `Settings` and are never saved:
+
+- `jobs`: how many processes run the spaCy parser. The default, 0, uses one per CPU, at most
+  4 and no more than fit in a quarter of the machine's memory, once there are 50,000 words to
+  parse; 1 parses in the calling process. Workers are spawned, so each imports your main
+  script again: they start only when the call runs inside an `if __name__ == "__main__":`
+  block of the script (read from its syntax tree), or from a notebook or interactive
+  session. Otherwise everything is parsed in one process, whatever `jobs` says.
+- `cache`: with `True` (the default for `build` and `evaluate`), chunks measured by an
+  earlier run come from the measurement cache (see the README) and new ones are added to
+  it; `False` neither reads nor writes it. `Profile.score` uses it only with `cache=True`.
+  `STYLEPROFILE_NO_CACHE=1` turns it off everywhere. When it cannot be used, the run goes
+  on without it and adds a `NoteCode.CACHE_UNAVAILABLE` note.
 
 ## Saving, loading and evaluating
 
@@ -222,4 +239,7 @@ A `progress` callback, if given, is called with a `Progress` at the start of eac
 - `build_reference(chunks)` and `score(chunks, reference)` in `styleprofile.profile` are
   the lower-level steps. They measure chunks exactly as given: no windowing, no inherited
   settings, and no syntax metrics unless you pass `parser=load_parser()` (from
-  `styleprofile.syntax`).
+  `styleprofile.syntax`). They measure in the calling process without the cache unless you
+  pass `measurer=Measurer(cache=MeasurementCache(), jobs=0)` (from `styleprofile.measure`
+  and `styleprofile.cache`); close it, or use it in a `with` block, to stop its workers and
+  write the cache.

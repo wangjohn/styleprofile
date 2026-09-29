@@ -5,11 +5,13 @@
 Each case generates its corpus if needed (``bench/gen.py``), builds a reference from it with
 ``styleprofile build`` and scores ``examples/draft.md`` against that reference, each in a fresh
 Python process with its own empty cache and home directories, so no run is timed off a cache
-another run filled. For both steps it records wall time, CPU time (user + system) and peak
-resident memory, all from ``os.wait4`` (which works on macOS and Linux); for the build it also
-records the profile's size. Peak memory and CPU time cover the main process only, not any
-workers it starts: PR 13, which adds spaCy's ``n_process``, is responsible for measuring the
-whole process tree.
+another run filled (a ``warm`` case fills its fresh cache with one untimed build first). For
+both steps it records wall time, CPU time (user + system) and peak resident memory; for the
+build it also records the profile's size. Both cover the whole process tree, since a build
+with spaCy parses in worker processes: CPU time is the command's own plus that of every child
+it waited for (``bench/launch.py`` reads it with ``getrusage``), and peak memory is the larger
+of the main process's peak (``os.wait4``, exact) and the largest total of the tree's resident
+memory, sampled every ``SAMPLE_S`` seconds with ``ps``.
 
 ``--against REF`` also benchmarks the package as of git revision ``REF`` (its ``src/`` is
 exported to ``bench/work/base/``), with this checkout's harness, corpora and draft, in the same
@@ -34,7 +36,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -49,6 +53,8 @@ WORK = HERE / "work"  # git-ignored: profiles, reports and logs of the last run,
 RESULTS = HERE / "results.json"  # git-ignored
 MB = 1_000_000
 CHANGE, BASE = "change", "base"
+LAUNCH = HERE / "launch.py"
+SAMPLE_S = 0.1  # how often the process tree's memory is sampled
 
 
 class RunFailed(Exception):
@@ -77,26 +83,85 @@ def _env(fresh: Path, src: Path) -> dict[str, str]:
     }
 
 
-def measure(command: list[str], log: Path, src: Path) -> tuple[float, float, float]:
-    """Run ``command`` to completion with the package from ``src``; return its wall time (s),
-    CPU time (s) and peak memory (MB)."""
+def _tree_bytes(root: int) -> int:
+    """The resident memory of process ``root`` and all its descendants, from ``ps`` (0 if it
+    cannot be read)."""
+    try:
+        listing = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return 0
+    children: dict[int, list[int]] = defaultdict(list)
+    resident: dict[int, int] = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 3 and all(field.isdigit() for field in fields):
+            pid, parent, kib = map(int, fields)
+            children[parent].append(pid)
+            resident[pid] = kib * 1024
+    total, stack = 0, [root]
+    while stack:
+        pid = stack.pop()
+        total += resident.get(pid, 0)
+        stack.extend(children[pid])
+    return total
+
+
+class TreeMemory(threading.Thread):
+    """Samples the resident memory of a process tree until stopped; ``peak`` is the largest
+    total seen, in bytes."""
+
+    def __init__(self, root: int) -> None:
+        super().__init__(daemon=True)
+        self.root = root
+        self.peak = 0
+        self._stop_sampling = threading.Event()
+
+    def run(self) -> None:
+        while not self._stop_sampling.wait(SAMPLE_S):
+            self.peak = max(self.peak, _tree_bytes(self.root))
+
+    def stop(self) -> None:
+        self._stop_sampling.set()
+        self.join()
+
+
+def measure(
+    command: list[str], log: Path, src: Path, *, warm: bool = False
+) -> tuple[float, float, float]:
+    """Run ``styleprofile`` with the arguments ``command`` to completion with the package
+    from ``src``; return its wall time (s), CPU time (s) and peak memory (MB), each covering
+    the process tree. With ``warm``, first run it once, untimed, to fill the fresh cache."""
     with (
         tempfile.TemporaryDirectory(prefix="styleprofile-bench-") as fresh,
         log.open("w", encoding="utf-8") as out,
     ):
         env = _env(Path(fresh), src)
+        usage = Path(fresh) / "usage.json"
+        full = [sys.executable, str(LAUNCH), str(usage), *command]
+        if warm:
+            subprocess.run(full, stdout=out, stderr=subprocess.STDOUT, cwd=ROOT, env=env)
         start = time.perf_counter()
-        process = subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, cwd=ROOT, env=env)
+        process = subprocess.Popen(full, stdout=out, stderr=subprocess.STDOUT, cwd=ROOT, env=env)
+        sampler = TreeMemory(process.pid)
+        sampler.start()
         # wait4 reaps this one child and returns its own resource usage, where getrusage
         # would give the total or maximum over every child so far.
         _, status, rusage = os.wait4(process.pid, 0)
         elapsed = time.perf_counter() - start
+        sampler.stop()
+        try:
+            used = json.loads(usage.read_text(encoding="utf-8"))
+            cpu = used["self"]["cpu_s"] + used["children"]["cpu_s"]
+        except (OSError, ValueError, KeyError):
+            cpu = rusage.ru_utime + rusage.ru_stime
     process.returncode = os.waitstatus_to_exitcode(status)
     if process.returncode != 0:
         tail = log.read_text(encoding="utf-8").strip().splitlines()[-10:]
         raise RunFailed(f"{' '.join(command)} exited {process.returncode}:\n" + "\n".join(tail))
-    cpu = rusage.ru_utime + rusage.ru_stime
-    return elapsed, cpu, _peak_bytes(rusage.ru_maxrss) / MB
+    peak = max(_peak_bytes(rusage.ru_maxrss), sampler.peak)
+    return elapsed, cpu, peak / MB
 
 
 def _git(*args: str) -> str:
@@ -162,9 +227,7 @@ def run_case(case: Case, trees: dict[str, Path], repeat: int) -> dict[str, dict[
             folder = WORK / case.name / name
             folder.mkdir(parents=True, exist_ok=True)
             profile = folder / "reference.json"
-            styleprofile = [sys.executable, "-m", "styleprofile"]
             build = [
-                *styleprofile,
                 "build",
                 str(corpus / "writer"),
                 "--contrast",
@@ -174,8 +237,8 @@ def run_case(case: Case, trees: dict[str, Path], repeat: int) -> dict[str, dict[
             ]
             if not case.syntax:
                 build.append("--no-syntax")
+            build += case.flags
             score = [
-                *styleprofile,
                 "score",
                 str(DRAFT),
                 str(profile),
@@ -187,7 +250,7 @@ def run_case(case: Case, trees: dict[str, Path], repeat: int) -> dict[str, dict[
             try:
                 print(f"  {label}: build{suffix}", file=sys.stderr, flush=True)
                 build_s, build_cpu_s, build_mb = measure(
-                    build, folder / f"build{suffix}.log", trees[name]
+                    build, folder / f"build{suffix}.log", trees[name], warm=case.warm
                 )
                 print(f"  {label}: score{suffix}", file=sys.stderr, flush=True)
                 score_s, score_cpu_s, score_mb = measure(

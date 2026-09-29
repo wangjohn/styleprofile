@@ -25,9 +25,9 @@ change is worse than its base by more than ``MARGINS`` allow. Time is judged on 
 time is still measured and reported. A change that knowingly costs more declares it in
 ``bench/accepted.toml``. Values over ``BACKSTOP`` x their target only raise a warning.
 
-Peak memory is the main ``styleprofile`` process's alone (``ru_maxrss`` from ``os.wait4``),
-not its process tree. That is exact while styleprofile runs in one process; PR 13, which adds
-spaCy's ``n_process`` workers, is responsible for measuring the whole tree.
+CPU time and peak memory cover the whole process tree, since a build with spaCy parses in
+worker processes (see ``run.py``). A ``warm`` case measures a build whose measurement cache an
+untimed build of the same corpus has just filled: what rebuilding after a small change costs.
 """
 
 from __future__ import annotations
@@ -91,6 +91,8 @@ class Case:
     # The plan's targets, keyed by metric. Time targets are wall time, as the plan states them.
     targets: dict[str, float]
     ci: bool = False  # run by the CI benchmark job and `--quick`
+    warm: bool = False  # build once, untimed, to fill the measurement cache first
+    flags: tuple[str, ...] = ()  # more build options
 
 
 PROFILE_MB = 1.0  # "< 1 MB regardless of corpus size"
@@ -106,6 +108,15 @@ CASES = {
             syntax=True,
             about="build 200k words with spaCy; score one draft including spaCy load",
             targets={"build_s": 12.0, "profile_mb": PROFILE_MB, "score_s": SCORE_S},
+        ),
+        Case(
+            "medium-warm",
+            corpus="medium",
+            syntax=True,
+            about="build 200k words with spaCy again, from a warm measurement cache",
+            # Not in the plan: a rebuild after a small change should take seconds.
+            targets={"build_s": 3.0},
+            warm=True,
         ),
         Case(
             "medium-nosyntax",
@@ -146,10 +157,21 @@ CASES = {
                 "profile_mb": PROFILE_MB,
                 "score_s": SCORE_S,
             },
-            # PR 14 cut the build by about 35% on a laptop (bootstrap and calibration) and the
-            # profile from 105 MB to 0.05 MB. PR 13 owns the rest of the gap to build_s and
-            # build_mb: measurement, and the per-chunk distribution counters behind the 1.9 GB
-            # peak.
+            # Pooled into windows by default (plan PR 10).
+        ),
+        Case(
+            "comments-nopool",
+            corpus="comments",
+            syntax=False,
+            about="build 20k JSONL comments unpooled (20k documents) without spaCy",
+            # The same targets: 20,000 documents of one comment each must be fast and lean too.
+            targets={
+                "build_s": 10.0,
+                "build_mb": PEAK_MB_1M,
+                "profile_mb": PROFILE_MB,
+                "score_s": SCORE_S,
+            },
+            flags=("--no-pool",),
         ),
     )
 }
