@@ -578,10 +578,10 @@ def test_delta_weights_areas_equally_and_noisy_metrics_less() -> None:
     }
     scored = _score(metrics, {}, reference)
 
-    # Semicolons: z = 10 at weight 1/100; commas: z = 0 at weight 1 -> 0.1 / 1.01.
-    assert scored["delta_by_group"]["punctuation"] == pytest.approx(0.1 / 1.01)
+    # Semicolons: z = 10 capped at 5, at weight 1/100; commas: z = 0 at weight 1.
+    assert scored["delta_by_group"]["punctuation"] == pytest.approx(0.05 / 1.01)
     assert scored["delta_by_group"]["voice"] == pytest.approx(1.0)
-    assert scored["delta"] == pytest.approx((0.1 / 1.01 + 1.0) / 2)
+    assert scored["delta"] == pytest.approx((0.05 / 1.01 + 1.0) / 2)
     assert "likeness" not in scored
 
     assert score([Chunk("a", "s", AUTHOR)], reference, parser=None)["reference"]["delta_mean"]
@@ -633,7 +633,7 @@ def test_likeness_counts_only_the_contrast_direction_with_squared_weights() -> N
     assert likeness({("s", "length"): -2.0}, effects, {})[0] == pytest.approx(2.0)
     # A metric that swings in the reference's own writing counts in its held-out units.
     wild = likeness({("p", "em"): 400.0}, effects, {("p", "em"): 100.0})[0]
-    assert wild == pytest.approx(400 / 100)
+    assert wild == pytest.approx(5 / 100)
     assert delta_weights({("p", "em"): 0.5, ("p", "semi"): 4.0}) == {
         ("p", "em"): 1.0,
         ("p", "semi"): 1 / 16,

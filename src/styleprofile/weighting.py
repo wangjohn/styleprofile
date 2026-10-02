@@ -4,7 +4,8 @@ Delta answers "how far is this from the reference overall?". Every stylistic are
 equally, and within an area a metric counts less the more it swings in the reference's own
 writing, measured on held-out chunks (each document scored against a profile built from the
 other documents). That keeps a habit the writer uses only now and then, such as semicolons,
-from dominating, without capping it.
+from dominating. Each metric's |z| is also capped at 5 in both scores, so an extreme
+value cannot decide the verdict on its own.
 
 The likeness score answers "does this look like the contrast set (say, LLM drafts) rather
 than the reference?". Each metric's weight is its effect size squared: the gap between the
@@ -53,6 +54,7 @@ ZScores = dict[Key, float]
 # and so no true z-score: a chunk that differs scores this value (the "3+ sd" level) and
 # a matching chunk 0. Metrics without a measured reliability are capped at it in Delta.
 UNSEEN_Z = 3.0
+Z_CAP = 5.0
 SIGNALS_SHOWN = 5
 # The narrowest "close" band a calibrated Delta verdict uses, in mean |z|: half a standard
 # deviation per metric, half the uncalibrated close threshold of 1.0. Without it an area the
@@ -393,13 +395,13 @@ def delta_weights(rms: Mapping[Key, float]) -> dict[Key, float]:
 def delta(z_scores: ZScores, weights: Mapping[Key, float]) -> tuple[float | None, dict[str, float]]:
     """Weighted mean |z| per area, then the plain mean over areas (every area counts once).
 
-    A metric without a measured reliability counts with weight 1 and its |z| capped at
-    UNSEEN_Z, since nothing else would stop a tiny spread from dominating.
+    Every metric's |z| is capped at Z_CAP. A metric without a measured reliability counts
+    with weight 1 and the stricter UNSEEN_Z cap.
     """
     sums: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
     for (group, name), z in z_scores.items():
         weight = weights.get((group, name))
-        size = abs(z) if weight is not None else min(abs(z), UNSEEN_Z)
+        size = min(abs(z), Z_CAP if weight is not None else UNSEEN_Z)
         weight = 1.0 if weight is None else weight
         sums[group][0] += weight * size
         sums[group][1] += weight
@@ -553,8 +555,9 @@ def likeness(
 ) -> tuple[float, list[LikenessSignal]]:
     """Effect-size-squared weighted mean of each deviation in the contrast direction.
 
-    Each z is measured in the reference's held-out units (z / max(rms, 1)), so a metric that
-    swings wildly in the reference's own writing cannot dominate, and deviations away from
+    Each z is capped at Z_CAP in size, then measured in the reference's held-out units
+    (z / max(rms, 1)), so a metric that swings wildly in the reference's own writing cannot
+    dominate, and deviations away from
     the contrast direction count as 0. Only metrics the sample has count, so a sample without
     syntax metrics is judged on the rest. Returns the score and its largest contributors.
     """
@@ -565,7 +568,7 @@ def likeness(
     contributions: list[tuple[float, Key, float]] = []
     for key, effect in present.items():
         z = z_scores[key]
-        toward = max(0.0, math.copysign(1.0, effect) * z) / max(rms.get(key, 1.0), 1.0)
+        toward = min(Z_CAP, max(0.0, math.copysign(1.0, effect) * z)) / max(rms.get(key, 1.0), 1.0)
         if toward:
             contributions.append((effect * effect * toward / denominator, key, z))
     contributions.sort(reverse=True)
@@ -1076,7 +1079,7 @@ class _DeltaWithoutOwn:
                 group, n, squares = column
                 if n >= 1:
                     weight: float = 1.0 / max(sqrt((squares - (0.0 + z * z)) / n), 1.0) ** 2
-                    size = abs(z)
+                    size = min(abs(z), Z_CAP)
                 else:
                     weight, size = 1.0, min(abs(z), UNSEEN_Z)
                 entry = sums[group]
@@ -1088,7 +1091,7 @@ class _DeltaWithoutOwn:
                 n = counts[0] - 1.0
                 if n >= 1:
                     weight = 1.0 / max(sqrt((counts[2] - (0.0 + z * z)) / n), 1.0) ** 2
-                    size = abs(z)
+                    size = min(abs(z), Z_CAP)
                 else:
                     weight, size = 1.0, min(abs(z), UNSEEN_Z)
                 entry = sums[key[0]]
@@ -1330,7 +1333,7 @@ class _LikenessWithoutOwn:
         shares = []
         for effect, z, scale in present:
             signed = copysign(1.0, effect) * z
-            toward = (signed if signed > 0.0 else 0.0) / scale
+            toward = min(Z_CAP, max(0.0, signed)) / scale
             if toward:
                 shares.append(effect * effect * toward / denominator)
         shares.sort(reverse=True)

@@ -4,21 +4,21 @@ $ styleprofile show '<tmp>/draft.json'
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
 Overall: close   Delta 0.81
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.85 typically (95% under 1.08).
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.84 typically (95% under 1.05).
 
 LLM-likeness: like the reference   0.70
-  The reference's own writing at this length (542 words) scores 0.21 typically (95% under 1.06); the LLM drafts 13.58.
+  The reference's own writing at this length (542 words) scores 0.20 typically (95% under 1.02); the LLM drafts 4.12.
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.32x  █████░░░░░░░░░░░░░░░  somewhat different
+  Voice and stance             1.40x  █████░░░░░░░░░░░░░░░  somewhat different
+  Function words               0.73x  ███░░░░░░░░░░░░░░░░░  close
   Vocabulary                   0.72x  ███░░░░░░░░░░░░░░░░░  close
-  Function words               0.66x  ███░░░░░░░░░░░░░░░░░  close
-  Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
-  Sentence shape               0.49x  ██░░░░░░░░░░░░░░░░░░  close
-  Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
-  Syntax                       0.40x  ██░░░░░░░░░░░░░░░░░░  close
-  How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
+  Punctuation                  0.70x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.52x  ██░░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.50x  ██░░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.41x  ██░░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.30x  ██░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)

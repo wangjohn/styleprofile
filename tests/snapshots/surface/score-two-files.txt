@@ -14,12 +14,12 @@ Across 2 documents: close   Delta 0.49
   Pooled over every document from here on; the table above has each one's own.
 
 LLM-likeness: like the reference   0.10
-  The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.73); the LLM drafts 14.23.
+  The reference's own writing at these lengths (637-640 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.73); the LLM drafts 4.41.
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
   Vocabulary                   0.68x  ███░░░░░░░░░░░░░░░░░  close
-  Function words               0.62x  ███░░░░░░░░░░░░░░░░░  close
+  Function words               0.63x  ███░░░░░░░░░░░░░░░░░  close
   Voice and stance             0.62x  ███░░░░░░░░░░░░░░░░░  close
   Punctuation                  0.57x  ███░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.38x  ██░░░░░░░░░░░░░░░░░░  close

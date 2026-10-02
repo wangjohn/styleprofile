@@ -7,7 +7,7 @@ As a reference   held-out Delta 0.59 typically, 95% under 0.91 (40 documents)
   Shorter texts: calibrated at 75 words (393 pieces), 150 words (197 pieces), 300 words (85 pieces). Under 75 words, no verdict.
 
 Contrast: LLM drafts   13 chunks from 10 documents; separates them from the reference with AUC 1.00 (perfect separation on 40 reference and 10 contrast documents)
-  LLM-likeness on held-out text: reference 0.24 typically (95% under 0.59), LLM drafts 8.47
+  LLM-likeness on held-out text: reference 0.24 typically (95% under 0.59), LLM drafts 4.22
   Length alone: AUC 0.54 (reference 564 words per chunk, LLM drafts 571): not a length effect
   Compared with the reference, LLM drafts have: Nominalizations (-tion, -ment) ▲, Long words (7+ letters) ▲, List items ▲, Bold phrases ▲
 

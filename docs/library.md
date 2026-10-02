@@ -80,7 +80,7 @@ chunks, the same way, as a tuple of `DocumentResult` in input order:
 ```python
 >>> mixed = profile.score([Path("examples/writer/sharpening.md"), Path("examples/llm-drafts/old-maps.md")])
 >>> mixed.verdict
-<Verdict.VERY_DIFFERENT: 'very different'>
+<Verdict.CLEARLY_DIFFERENT: 'clearly different'>
 >>> for document in mixed.documents:
 ...     print(document.name, document.words, document.verdict, document.judged)
 sharpening.md 637 close True

@@ -1,7 +1,7 @@
 $ styleprofile score -q --fail-above clearly examples/writer/sharpening.md examples/llm-drafts/old-maps.md '<tmp>/writer.json'
 [exit 3]
 --- stdout
-examples/llm-drafts/old-maps.md: very different (Delta 4.65); LLM-likeness like the LLM drafts (14.62)
+examples/llm-drafts/old-maps.md: very different (Delta 2.77); LLM-likeness like the LLM drafts (4.41)
 examples/writer/sharpening.md: close (Delta 0.47); LLM-likeness like the reference (0.01)
 --- stderr
 failed: examples/llm-drafts/old-maps.md: delta very different
