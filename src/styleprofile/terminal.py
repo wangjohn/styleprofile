@@ -34,4 +34,15 @@ def prepare_output() -> None:
 
 def shell_join(command: Sequence[str]) -> str:
     """Quote command arguments for cmd.exe on Windows and the POSIX shell elsewhere."""
-    return subprocess.list2cmdline(command) if sys.platform == "win32" else shlex.join(command)
+    if sys.platform != "win32":
+        return shlex.join(command)
+    quoted = []
+    for argument in command:
+        text = subprocess.list2cmdline([argument])
+        # list2cmdline quotes whitespace for the program's argv parser, but cmd.exe
+        # also needs shell operators protected, even in paths with no spaces.
+        if any(symbol in argument for symbol in "&|<>^()") and not text.startswith('"'):
+            trailing = len(text) - len(text.rstrip("\\"))
+            text = '"' + text + "\\" * trailing + '"'
+        quoted.append(text)
+    return " ".join(quoted)

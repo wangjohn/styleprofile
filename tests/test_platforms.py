@@ -123,3 +123,30 @@ def test_cache_platform_paths_and_xdg_override(
 def test_missing_memory_probe_falls_back_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(measure.os, "sysconf", raising=False)
     assert measure.memory_jobs() is None
+
+
+@pytest.mark.parametrize("argument", ["writer&notes", "writer(notes)", "writer^notes", "a&b\\"])
+def test_windows_hints_quote_shell_operators(
+    argument: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal.sys, "platform", "win32")
+    text = terminal.shell_join(["styleprofile", "build", argument])
+    assert text.startswith('styleprofile build "')
+    assert text.endswith('"')
+    if argument.endswith("\\"):
+        assert text.endswith('\\\\"')
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires native cmd.exe")
+def test_windows_hint_preserves_metacharacter_path(tmp_path: Path) -> None:
+    script = tmp_path / "echo-argument.py"
+    script.write_text("import sys; print(sys.argv[1])", encoding="utf-8")
+    argument = str(tmp_path / "writer&notes")
+    result = subprocess.run(
+        terminal.shell_join([sys.executable, str(script), argument]),
+        shell=True,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == argument
