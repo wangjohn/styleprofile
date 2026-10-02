@@ -26,8 +26,8 @@ def test_glyphs_fit_the_output_encoding(encoding: str, expected: str) -> None:
 
 def test_output_replaces_unencodable_names_on_both_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     output, errors = io.BytesIO(), io.BytesIO()
-    stdout = io.TextIOWrapper(output, encoding="ascii")
-    stderr = io.TextIOWrapper(errors, encoding="cp1252")
+    stdout = io.TextIOWrapper(output, encoding="ascii", newline="\n")
+    stderr = io.TextIOWrapper(errors, encoding="cp1252", newline="\n")
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(sys, "stderr", stderr)
     terminal.prepare_output()
