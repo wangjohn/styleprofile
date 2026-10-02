@@ -693,7 +693,8 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> Sc
         )
     deltas = [score["delta"] for score in scored if score["delta"] is not None]
     delta = _mean(deltas)
-    if delta is None:
+    incomparable = bool(judged) and delta is None
+    if incomparable:
         judged = []
         reason = "no metrics could be compared with the reference"
     ranges = [score["calibration"]["delta"] for score in scored if score["delta"] is not None]
@@ -722,7 +723,7 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> Sc
         # Plain strings, as a saved report reads them back.
         "verdict": str(
             Verdict.NOT_COMPARABLE
-            if delta is None
+            if incomparable
             else TOO_SHORT
             if not judged or level is None
             else DISTANCE_WORDS[level]

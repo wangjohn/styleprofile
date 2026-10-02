@@ -578,3 +578,11 @@ def test_incomparable_old_reference_is_not_judged(examples: Path) -> None:
     assert not result.judged and result.reason
     assert all(not doc.judged and doc.reason for doc in result.documents)
     assert result.report["reference"]["verdict"]["judged"] is False
+
+
+def test_one_chunk_suggestion_respects_minimum_words(examples: Path) -> None:
+    with pytest.raises(sp.StyleProfileError) as error:
+        sp.build(f"{WRITER}/old-maps.md", sp.Settings(syntax=False, min_words=400), cache=False)
+    assert error.value.code == "reference_needs_chunks"
+    assert "add documents with at least 400 prose words each" in str(error.value)
+    assert "--window-words" not in str(error.value)

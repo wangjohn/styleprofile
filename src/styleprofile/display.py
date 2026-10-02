@@ -968,7 +968,12 @@ def _comparison_view(
     verdict = scored["verdict"]
     delta = verdict["delta"]["value"]
     if delta is None:
-        return ["", style.warn("No metrics could be compared with the reference.")]
+        message = (
+            too_short_text(verdict)
+            if verdict["verdict"] == str(Verdict.TOO_SHORT)
+            else "No metrics could be compared with the reference."
+        )
+        return ["", style.warn(message)]
     documents = report["documents"]
     lines = (
         _document_table(documents, reference, style, width=width, full=full, shown=shown)

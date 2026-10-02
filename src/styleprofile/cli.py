@@ -119,10 +119,10 @@ FAIL_LIKENESS = {
     "like": LikenessVerdict.LIKE_DRAFTS,
 }
 SCORE_EXIT_STATUS = f"""\
-exit status: 0 scored, 1 error, 2 usage error, {EXIT_FAILED} a document reached the
---fail-above, --fail-likeness or --fail-flagged level (named on stderr, in input order); a
-document with no verdict (not comparable, or too short to judge) never does. A few
-off-voice chunks move a whole document's verdict little: --fail-flagged catches them"""
+exit status: 0 scored, 1 error, 2 usage error, {EXIT_FAILED} a document reached a fail level
+or could not be compared with the reference when any --fail-* flag was given (named
+on stderr, in input order). Too short to judge never fails. A few off-voice chunks
+move a whole document's verdict little: --fail-flagged catches them"""
 # Library errors and notes name a setting (``setting``) as a whole word; the CLI prints the
 # flag that sets it instead.
 FLAGS = {
@@ -695,7 +695,7 @@ def _headline(
     """One line with the same verdict words as the full comparison view; ``too_short``
     replaces the verdict and figures of a text too short to judge, and ``flagged`` ("4 of 40
     chunks read clearly different or lean LLM") ends it in parentheses."""
-    if delta is None:
+    if delta is None and verdict is not Verdict.TOO_SHORT:
         return f"{name}: no metrics could be compared with the reference"
     if too_short:
         return f"{name}: {too_short}"
@@ -759,7 +759,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
         name = api.STDIN_SHOWN if samples[0] == "-" else samples[0]
     else:
         name = f"{len(samples)} inputs"
-    if result.delta is None:
+    if result.verdict is Verdict.NOT_COMPARABLE:
         return [f"{name}: no metrics could be compared with the reference"]
     if not result.judged:
         return [f"{name}: {too_short_text(result.report['reference']['verdict'])}"]
@@ -870,7 +870,7 @@ def _run_score(args: argparse.Namespace) -> int:
     if (
         args.fail_likeness
         and not profile.report.get("contrast")
-        and any(doc.verdict is not Verdict.NOT_COMPARABLE for doc in result.documents)
+        and any(doc.judged for doc in result.documents)
     ):
         raise StyleProfileError(
             f"--fail-likeness needs a reference built with --contrast, and {reference_arg} "

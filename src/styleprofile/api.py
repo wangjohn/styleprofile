@@ -116,7 +116,7 @@ from styleprofile.split import (
     plan_split,
     stand_in_groups,
 )
-from styleprofile.surface import words
+from styleprofile.surface import prose, words
 from styleprofile.syntax import DEFAULT_MODEL, Parser, SyntaxUnavailableError, load_parser
 from styleprofile.weighting import FLOOR_DOCUMENTS
 
@@ -603,7 +603,7 @@ class DocumentResult:
             chunks_judged=entry["chunks_judged"],
             reason=(
                 "no metrics could be compared with the reference"
-                if entry["delta"] is None
+                if entry["verdict"] == str(Verdict.NOT_COMPARABLE)
                 else entry["reason"]
             ),
             path=entry["path"],
@@ -710,7 +710,7 @@ class ScoreResult(_Result[ScoreReport]):
     def reason(self) -> str | None:
         """Why there is no verdict, such as "under 75 words, the writer's own text varies
         too much by chance to judge"; None when there is one."""
-        if self.delta is None:
+        if self.verdict is Verdict.NOT_COMPARABLE:
             return "no metrics could be compared with the reference"
         return self._verdict["reason"]
 
@@ -719,7 +719,9 @@ class ScoreResult(_Result[ScoreReport]):
         """Delta in words against the writer's held-out range at the text's length, as the
         CLI prints it; ``Verdict.TOO_SHORT`` when the text is too short to judge, or
         ``Verdict.NOT_COMPARABLE`` when no metric could be compared."""
-        if self.delta is None:
+        if self.delta is None and (
+            self._report["reference"].get("verdict", {}).get("verdict") != str(Verdict.TOO_SHORT)
+        ):
             return Verdict.NOT_COMPARABLE
         return Verdict(self._verdict["verdict"])
 
@@ -950,14 +952,23 @@ def build(
             ),
         )
         if report["chunk_count"] < 2:
+
+            def usable_windows(size: int) -> int:
+                return sum(
+                    len(words(" ".join(prose(chunk.text).blocks))) >= settings.min_words
+                    for chunk in window(cut.windows, size)
+                )
+
             suggested = max(1, report["word_count"] // 2)
-            while suggested > 1 and len(window(cut.windows, suggested)) < 2:
+            while suggested > 1 and usable_windows(suggested) < 2:
                 suggested //= 2
             fix = "add documents"
-            if len(window(cut.windows, suggested)) >= 2:
+            if usable_windows(suggested) >= 2:
                 fix += f", or pass a smaller --window-words ({suggested})"
-            else:
+            elif settings.min_words == 1 and report["word_count"] >= 2:
                 fix += ", or add paragraph breaks and pass a smaller --window-words (1)"
+            else:
+                fix += f" with at least {settings.min_words} prose words each"
             raise StyleProfileError(
                 "a reference needs at least 2 chunks to compare metrics; " + fix,
                 code="reference_needs_chunks",

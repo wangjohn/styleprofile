@@ -559,3 +559,35 @@ def test_build_cli_refuses_one_chunk_without_writing(
     )
     assert "at least 2 chunks" in capsys.readouterr().err
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "flag", [["--fail-above", "somewhat"], ["--fail-likeness", "leans"], ["--fail-flagged", "1"]]
+)
+def test_short_text_against_incomparable_reference_never_fails(
+    flag: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    profile = sp.Profile(
+        build_reference([Chunk("one", "old", (WRITER / "old-maps.md").read_text())])
+    )
+    reference = tmp_path / "old.json"
+    profile.save(reference)
+    draft = tmp_path / "short.md"
+    draft.write_text("A simple sentence with a few words.", encoding="utf-8")
+    result = profile.score(draft, syntax=False, cache=False)
+    assert result.verdict is sp.Verdict.TOO_SHORT
+    assert not result.judged and result.reason
+    assert result.documents[0].verdict is sp.Verdict.TOO_SHORT
+    assert result.documents[0].reason == result.reason
+    assert main(["score", "--json", "--no-syntax", *flag, str(draft), str(reference)]) == 0
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert find_problem(report, ScoreReport) is None
+    assert report["failed"] == []
+    assert "failed:" not in captured.err
+    assert report["documents"][0]["verdict"] == str(sp.Verdict.TOO_SHORT)
+
+    assert main(["score", "-q", "--no-syntax", *flag, str(draft), str(reference)]) == 0
+    captured = capsys.readouterr()
+    assert "too short to judge (7 words)" in captured.out
+    assert "failed:" not in captured.err
