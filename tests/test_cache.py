@@ -248,6 +248,7 @@ def test_an_unreadable_entry_is_measured_again(tmp_path: Path) -> None:
 
 
 def test_a_relative_xdg_cache_home_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(caching.sys, "platform", "linux")
     monkeypatch.setenv("XDG_CACHE_HOME", "relative/cache")
     assert caching.cache_dir() == Path.home() / ".cache" / "styleprofile"
     monkeypatch.delenv("XDG_CACHE_HOME")

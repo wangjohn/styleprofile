@@ -2,8 +2,8 @@
 
 Measuring is most of a build's time, and spaCy most of that, while a corpus mostly grows by a
 few documents at a time. So every measured chunk, and every calibration piece cut from it, is
-saved in a SQLite file in ``$XDG_CACHE_HOME/styleprofile`` (``~/.cache/styleprofile`` when that
-is unset), and a later run that meets the same text takes its numbers from there.
+saved in a SQLite file in the platform's cache directory (see ``cache_dir``), and a later
+run that meets the same text takes its numbers from there.
 
 An entry's key is a hash of the text together with a *fingerprint* of everything that decides
 its numbers (``fingerprint``): the code of the metric registry and of the modules that compute
@@ -79,11 +79,17 @@ MEASURING_MODULES = (
 
 
 def cache_dir() -> Path:
-    """Where the cache lives: ``$XDG_CACHE_HOME/styleprofile``, or ``~/.cache/styleprofile``
-    when that is unset or not an absolute path (as the XDG specification says)."""
+    """The platform's cache directory, with an absolute XDG_CACHE_HOME taking priority."""
     base = os.environ.get("XDG_CACHE_HOME", "")
-    root = Path(base) if base and os.path.isabs(base) else Path.home() / ".cache"
-    return root / "styleprofile"
+    if base and os.path.isabs(base):
+        return Path(base) / "styleprofile"
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "")
+        root = Path(local) if local and os.path.isabs(local) else Path.home() / "AppData" / "Local"
+        return root / "styleprofile" / "Cache"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "styleprofile"
+    return Path.home() / ".cache" / "styleprofile"
 
 
 def _source(module: ModuleType) -> bytes:
