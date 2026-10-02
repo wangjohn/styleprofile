@@ -30,6 +30,10 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **Windows and macOS support.** Output uses readable ASCII bars and arrows when the
+  stream cannot encode them, command hints use the platform shell, and the measurement
+  cache uses the platform cache directory. CI tests both systems, including syntax on macOS.
+
 - **Build a reference once, then score drafts against it**: the `build`, `score`, `show`
   and `metrics` commands. `score` reads the window size and every other setting from the
   reference, so a draft is always cut the way the reference was; `show` displays a saved

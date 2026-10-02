@@ -138,7 +138,9 @@ it looks like taking over a minute, `build` says once that `--no-syntax` is abou
   `if __name__ == "__main__":` block of your script (or from a notebook), since each worker
   imports your script again; otherwise everything is parsed in one process.
 - **The measurement cache.** `build` and `evaluate` keep what they measure in
-  `~/.cache/styleprofile` (`$XDG_CACHE_HOME/styleprofile` when that is set), under a key made
+  `~/Library/Caches/styleprofile` on macOS, `%LOCALAPPDATA%\styleprofile\Cache` on
+  Windows, and `~/.cache/styleprofile` elsewhere. An absolute `$XDG_CACHE_HOME` takes
+  priority on every platform. The cache stores measurements under a key made
   from each text and the exact code of the metrics, the package version and the spaCy
   model. Rebuilding an unchanged corpus measures nothing; after adding a few documents it
   measures the new ones, and with spaCy it also parses again the windows whose calibration
