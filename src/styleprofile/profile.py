@@ -44,7 +44,6 @@ from styleprofile.core import (
     Phase,
     Progress,
     StyleProfileError,
-    Verdict,
 )
 from styleprofile.formats import (
     AUTO,
@@ -2763,7 +2762,7 @@ def documents(rows: Sequence[ScoredChunk], reference: ReferenceReport) -> list[D
             "chunks_judged": judged["chunks_judged"],
             "reason": judged["reason"],
             "delta": mean_delta,
-            "verdict": str(Verdict.NOT_COMPARABLE if mean_delta is None else judged["verdict"]),
+            "verdict": judged["verdict"],
             "likeness": likeness["value"] if likeness else None,
             "likeness_verdict": likeness_verdict,
             "flagged": judged["flagged"],

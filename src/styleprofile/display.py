@@ -978,7 +978,12 @@ def _comparison_view(
     verdict = scored["verdict"]
     delta = verdict["delta"]["value"]
     if delta is None:
-        return ["", style.warn("No metrics could be compared with the reference.")]
+        message = (
+            too_short_text(verdict)
+            if verdict["verdict"] == str(Verdict.TOO_SHORT)
+            else "No metrics could be compared with the reference."
+        )
+        return ["", style.warn(message)]
     documents = report["documents"]
     lines = (
         _document_table(documents, reference, style, width=width, full=full, shown=shown)
@@ -1178,6 +1183,9 @@ def _document_table(
             if close_shown > CLOSE_ROWS:
                 continue
         name = shorten(names[doc["name"]], name_width)
+        if verdict == Verdict.NOT_COMPARABLE:
+            lines.append(f"  {name:{name_width}}  {doc['words']:>6,}  {verdict}")
+            continue
         if not doc["judged"]:
             # Its figures are indicative only, so the row gives none.
             lines.append(f"  {name:{name_width}}  {doc['words']:>6,}  {too_short_text(doc)}")

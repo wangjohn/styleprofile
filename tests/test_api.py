@@ -558,3 +558,31 @@ def test_lower_level_profiles_are_read_as_not_windowed() -> None:
     assert profile.settings.window_words == 0
     result = profile.score(sp.Text(POSTS[0] * 30))
     assert not any("window sizes differ" in warning for warning in result.warnings)
+
+
+def test_build_refuses_one_chunk_and_suggests_working_window(examples: Path) -> None:
+    with pytest.raises(sp.StyleProfileError, match="at least 2 chunks") as error:
+        sp.build(f"{WRITER}/old-maps.md", sp.Settings(syntax=False), cache=False)
+    assert error.value.code == "reference_needs_chunks"
+    assert "--window-words (320)" in str(error.value)
+    profile = sp.build(
+        f"{WRITER}/old-maps.md", sp.Settings(syntax=False, window_words=320), cache=False
+    )
+    assert profile.report["chunk_count"] >= 2
+
+
+def test_incomparable_old_reference_is_not_judged(examples: Path) -> None:
+    report = build_reference(load_chunks([f"{WRITER}/old-maps.md"]), parser=None)
+    result = sp.Profile(report).score(DRAFT, syntax=False, cache=False)
+    assert result.verdict is sp.Verdict.NOT_COMPARABLE
+    assert not result.judged and result.reason
+    assert all(not doc.judged and doc.reason for doc in result.documents)
+    assert result.report["reference"]["verdict"]["judged"] is False
+
+
+def test_one_chunk_suggestion_respects_minimum_words(examples: Path) -> None:
+    with pytest.raises(sp.StyleProfileError) as error:
+        sp.build(f"{WRITER}/old-maps.md", sp.Settings(syntax=False, min_words=400), cache=False)
+    assert error.value.code == "reference_needs_chunks"
+    assert "add documents with at least 400 prose words each" in str(error.value)
+    assert "--window-words" not in str(error.value)

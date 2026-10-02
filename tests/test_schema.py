@@ -220,6 +220,14 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     argv = ["score", "--fail-above", "clearly", "--fail-likeness", "few", "-o", str(failed)]
     assert main([*argv, str(CONTRAST / "old-maps.md"), str(DRAFT), str(reference)]) == 3
     made.append(("score with fail flags", json.loads(failed.read_text("utf-8")), ScoreReport))
+    old = tmp / "old.json"
+    sp.Profile(build_reference([Chunk("one", "old", (WRITER / "old-maps.md").read_text())])).save(
+        old
+    )
+    assert main(["score", "--fail-above", "somewhat", "-o", str(failed), str(DRAFT), str(old)]) == 3
+    made.append(
+        ("incomparable score with fail flags", json.loads(failed.read_text("utf-8")), ScoreReport)
+    )
     return made + [
         (f"{name}, saved", json.loads(dumps_report(report)), kind) for name, report, kind in made
     ]
@@ -518,3 +526,68 @@ def test_the_walker_catches_undeclared_keys_and_wrong_types() -> None:
         "chunks[0].reference.delta: 'far' fits none of float | None",
         "reference: 'documents' is not in ReferenceScore",
     ]
+
+
+@pytest.mark.parametrize(
+    "flag", [["--fail-above", "somewhat"], ["--fail-likeness", "leans"], ["--fail-flagged", "1"]]
+)
+def test_incomparable_reference_fails_cli_and_has_valid_json(
+    flag: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = tmp_path / "old.json"
+    # The lower-level builder can reproduce a reference saved before the build guard.
+    sp.Profile(build_reference([Chunk("one", "old", (WRITER / "old-maps.md").read_text())])).save(
+        reference
+    )
+    assert main(["score", "--json", "--no-syntax", *flag, str(DRAFT), str(reference)]) == 3
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert find_problem(report, ScoreReport) is None
+    assert report["failed"][0]["reason"] == "could not be compared with the reference"
+    assert report["failed"][0]["delta"] is None
+    assert f"failed: {DRAFT}: could not be compared with the reference" in captured.err
+    assert main(["score", "--no-syntax", str(DRAFT), str(reference)]) == 0
+
+
+def test_build_cli_refuses_one_chunk_without_writing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "one.json"
+    assert (
+        main(["build", str(WRITER / "old-maps.md"), "--no-syntax", "--no-cache", "-o", str(output)])
+        == 1
+    )
+    assert "at least 2 chunks" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "flag", [["--fail-above", "somewhat"], ["--fail-likeness", "leans"], ["--fail-flagged", "1"]]
+)
+def test_short_text_against_incomparable_reference_never_fails(
+    flag: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    profile = sp.Profile(
+        build_reference([Chunk("one", "old", (WRITER / "old-maps.md").read_text())])
+    )
+    reference = tmp_path / "old.json"
+    profile.save(reference)
+    draft = tmp_path / "short.md"
+    draft.write_text("A simple sentence with a few words.", encoding="utf-8")
+    result = profile.score(draft, syntax=False, cache=False)
+    assert result.verdict is sp.Verdict.TOO_SHORT
+    assert not result.judged and result.reason
+    assert result.documents[0].verdict is sp.Verdict.TOO_SHORT
+    assert result.documents[0].reason == result.reason
+    assert main(["score", "--json", "--no-syntax", *flag, str(draft), str(reference)]) == 0
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert find_problem(report, ScoreReport) is None
+    assert report["failed"] == []
+    assert "failed:" not in captured.err
+    assert report["documents"][0]["verdict"] == str(sp.Verdict.TOO_SHORT)
+
+    assert main(["score", "-q", "--no-syntax", *flag, str(draft), str(reference)]) == 0
+    captured = capsys.readouterr()
+    assert "too short to judge (7 words)" in captured.out
+    assert "failed:" not in captured.err

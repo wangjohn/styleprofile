@@ -956,7 +956,9 @@ def test_output_cannot_overwrite_the_reference(tmp_path: Path, capsys: Any) -> N
     source = tmp_path / "a.md"
     source.write_text(AUTHOR, encoding="utf-8")
     reference = tmp_path / "ref.json"
-    assert main(["build", str(source), "--no-syntax", "-o", str(reference)]) == 0
+    second = tmp_path / "b.md"
+    second.write_text(AUTHOR + " A different ending.", encoding="utf-8")
+    assert main(["build", str(source), str(second), "--no-syntax", "-o", str(reference)]) == 0
     saved = reference.read_text(encoding="utf-8")
     capsys.readouterr()
 
@@ -1324,7 +1326,7 @@ def test_repeatable_contrast_does_not_swallow_inputs(
 @pytest.mark.parametrize(
     ("documents", "repeats", "window", "expected"),
     [
-        (1, 1, "100", ["from 1 document", "aim for 15 or more", "words; aim for 20,000"]),
+        (1, 4, "100", ["from 1 document", "aim for 15 or more", "words; aim for 20,000"]),
         (4, 1, "0", ["by adding documents or using --window-words 500", "words; aim for"]),
         (16, 22, "0", []),
     ],

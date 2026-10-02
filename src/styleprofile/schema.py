@@ -606,9 +606,12 @@ class FailLevels(TypedDict):
 
 
 class FailedDocument(TypedDict):
-    """A document that reached a fail level, with the verdict that did (None for a check it
-    passed)."""
+    """A document that reached a fail level or could not be compared.
 
+    ``reason`` names an inability to compare; verdicts are None in that case.
+    """
+
+    reason: NotRequired[Literal["could not be compared with the reference"]]
     name: str
     path: str
     delta: str | None
