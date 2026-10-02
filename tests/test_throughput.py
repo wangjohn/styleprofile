@@ -209,6 +209,7 @@ def test_memory_jobs_follow_physical_memory(monkeypatch: pytest.MonkeyPatch) -> 
             measure.os,
             "sysconf",
             lambda name, memory=memory: 4096 if name == "SC_PAGE_SIZE" else memory // 4096,
+            raising=False,
         )
         assert measure.memory_jobs() == expected
 

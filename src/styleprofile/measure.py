@@ -76,8 +76,11 @@ Parsed = tuple[Metrics, dict[str, int], list[Metrics | None], Any]
 def memory_jobs() -> int | None:
     """How many parser workers fit in ``WORKER_MEMORY_SHARE`` of the machine's physical
     memory at ``WORKER_BYTES`` each (at least 1), or None when it cannot be read."""
+    sysconf = getattr(os, "sysconf", None)
+    if sysconf is None:
+        return None
     try:
-        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        total = sysconf("SC_PAGE_SIZE") * sysconf("SC_PHYS_PAGES")
     except (AttributeError, OSError, ValueError):
         return None
     if total <= 0:
