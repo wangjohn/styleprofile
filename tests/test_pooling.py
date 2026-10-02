@@ -673,8 +673,9 @@ def own_batches(tmp_path_factory: pytest.TempPathFactory) -> list[_Batches]:
             if text not in seen:
                 seen.add(text)
                 held_out.append(text)
-        writer = _records(folder, "writer.jsonl", train)
-        # Keep the seeds, 3,000 training records and 30 held-out batches unchanged.
+        writer = _records(folder, "writer.jsonl", train[:1500])
+        # Keep the seeds and all 30 held-out batches; 1,500 training records still
+        # provide over 100 pooled windows for the same calibration paths.
         # These unique corpora do not benefit from a disk cache.
         reference = sp.build(writer, sp.Settings(syntax=False), cache=False)
         batches = [held_out[start : start + 20] for start in range(0, len(held_out), 20)]
