@@ -150,7 +150,7 @@ from styleprofile.weighting import (
 # never as paths; the contrast AUC's ``bootstrap`` records its method and resamples.
 # 7 (0.2.0): nominalizations_per_1k no longer counts words such as fence, city or sentence
 # (see ``syntax.is_nominalization``), so a version 6 profile's values would not match.
-VERSION = 7
+VERSION = 8
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
 REFERENCE: Final = "reference"

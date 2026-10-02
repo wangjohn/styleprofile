@@ -10,12 +10,14 @@ The first release on PyPI: `pip install styleprofile`, or `pip install "stylepro
 then `styleprofile setup` for the parser-based metrics.
 
 > [!IMPORTANT]
-> **Rebuild your profiles.** Reports now carry report version 7, and styleprofile refuses
+> **Rebuild your profiles.** Reports now carry report version 8, and styleprofile refuses
 > any other version with a message saying to rebuild. Run `styleprofile build` again on the
 > writer's texts, and `styleprofile score` again for saved score reports. There is no
 > migration: several metrics, the calibration and the report layout all changed.
 
 ### Breaking changes
+
+- **Report version 8.** Rebuild profiles for the capped Delta and LLM-likeness calibration.
 
 - **Report version 7.** Profiles and score reports from earlier versions are refused with a
   "rebuild it" message rather than migrated (#9, #13).
@@ -129,6 +131,10 @@ then `styleprofile setup` for the parser-based metrics.
     without it and says so.
 
 ### Fixed
+
+- **Extreme metrics no longer decide a verdict alone.** Delta, area Deltas and
+  LLM-likeness cap each metric's z-score at 5, including held-out calibration. The reported
+  z-scores still show the full differences.
 
 - **Nominalizations** count nouns that name the action, state or quality of a different
   verb or adjective (decision, motion, darkness, distance), and no longer count fence,

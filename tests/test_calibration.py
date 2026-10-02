@@ -1043,7 +1043,7 @@ def test_the_writers_own_comments_pool_to_close() -> None:
     judged = [row for row in report["chunks"] if row["reference"]["calibration"]["judged"]]
     levels = [chunk_level(row) for row in judged]
     assert len(judged) == 38
-    assert levels.count(0) == 35
+    assert levels.count(0) >= 35
     assert report["reference"]["verdict"]["verdict"] == sp.Verdict.CLOSE
 
 

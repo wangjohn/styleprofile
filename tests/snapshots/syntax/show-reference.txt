@@ -37,11 +37,11 @@ Syntax
   Nominalizations (-tion, -ment)                     1.8 /1k   0.1 - 3.4 /1k
   Opener: pronoun (I, It, You)                           62%   53% - 71%
 
-As a reference   held-out Delta 0.82 typically, 95% under 0.97 (7 documents)
+As a reference   held-out Delta 0.81 typically, 95% under 0.97 (7 documents)
   Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7 documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75 words, no verdict.
 
 Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on 7 reference and 5 contrast documents)
-  LLM-likeness on held-out text: reference 0.20 typically (95% under 1.03), LLM drafts 13.72
+  LLM-likeness on held-out text: reference 0.20 typically (95% under 1.03), LLM drafts 4.32
   Length alone: AUC 0.73 (reference 640 words per chunk, LLM drafts 624): some length difference
   Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, Headings ▲
 

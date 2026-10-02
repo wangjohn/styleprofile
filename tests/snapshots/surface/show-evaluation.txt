@@ -5,8 +5,8 @@ REWORDING STRESS TEST   5 LLM drafts vs 7 reference documents
   Each draft is scored with LLM-likeness weights learned without it, and each edited draft with the weights that left out its original.
 
                       AUC (95% CI)   median likeness   drafts still flagged
-  original            1.00 (exact)             14.23   5 of 5
-  plain               1.00 (exact)              6.07   0 of 5
+  original            1.00 (exact)              4.41   5 of 5
+  plain               1.00 (exact)              1.92   0 of 5
   AUC 1.0 separates every draft from the reference, 0.5 is chance. The median is over chunks; flagged drafts read "leans LLM" or "like the LLM drafts".
 
 How much the edits changed

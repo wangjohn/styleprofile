@@ -74,7 +74,7 @@ def test_each_document_gets_its_own_verdict(profile: sp.Profile) -> None:
     assert own.likeness_verdict is sp.LikenessVerdict.LIKE_REFERENCE
     assert draft.likeness_verdict is sp.LikenessVerdict.LIKE_DRAFTS
     # The pooled figures hide the close essay.
-    assert result.verdict is sp.Verdict.VERY_DIFFERENT
+    assert result.verdict is sp.Verdict.CLEARLY_DIFFERENT
     assert own.delta is not None and draft.delta is not None
     assert result.delta == pytest.approx(
         (own.delta * own.chunks + draft.delta * draft.chunks) / (own.chunks + draft.chunks),
@@ -303,7 +303,7 @@ def test_the_table_and_quiet_lines_put_the_furthest_first(
     assert table[5].split()[0] == shorten(OWN_TYPED, len(table[5].split()[0]))
     assert " close " in table[5]
     assert all(len(line) <= 80 for line in table)
-    assert "Across 2 documents: very different" in out
+    assert "Across 2 documents: clearly different" in out
     assert "Overall:" not in out
 
     # show renders the same table from the saved report, with the saved names.
@@ -552,7 +552,7 @@ def test_a_document_judged_on_some_of_its_chunks_says_so(
 
     assert main([*argv, "-q"]) == 0
     quiet = capsys.readouterr().out.splitlines()
-    assert quiet[0].startswith(f"{DRAFT_TYPED}: very different (Delta ")
+    assert quiet[0].startswith(f"{DRAFT_TYPED}: clearly different (Delta ")
     assert f"; {note})" in quiet[0]
 
     assert main(argv) == 0

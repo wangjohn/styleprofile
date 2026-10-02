@@ -7,12 +7,12 @@ Overall: close   Delta 0.64
   Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.60 typically (95% under 0.92).
 
 LLM-likeness: a few LLM traits   0.82
-  The reference's own writing at this length (542 words) scores 0.24 typically (95% under 0.62); the LLM drafts 8.36.
+  The reference's own writing at this length (542 words) scores 0.24 typically (95% under 0.62); the LLM drafts 4.15.
   Strongest LLM signals: Nominalizations (-tion, -ment) ▲▲, "these" ▲
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.18x  ████░░░░░░░░░░░░░░░░  somewhat different
+  Voice and stance             1.19x  ████░░░░░░░░░░░░░░░░  somewhat different
   Punctuation                  0.78x  ███░░░░░░░░░░░░░░░░░  close
   Function words               0.76x  ███░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.58x  ███░░░░░░░░░░░░░░░░░  close
@@ -23,23 +23,23 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Formatting                   0.27x  █░░░░░░░░░░░░░░░░░░░  close
 
 Where it drifts (experimental)   2 of 8 paragraphs drift, read in spans of at least 100 words
-  Line 9          a few LLM traits (0.92), close (Delta 1.14)
+  Line 9          a few LLM traits (0.77), close (Delta 1.04)
                   "But the store is more than a place to buy things — it's a…"
-                  Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
-  Line 15         a few LLM traits (0.92), close (Delta 0.90)
+                  Long words (7+ letters) ▲▲▲, Em dashes ▲▲▲, Average word length (letters) ▲▲▲
+  Line 15         a few LLM traits (0.86), close (Delta 0.86)
                   "Ultimately, the future of the village hardware store depends…"
-                  "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲, Long words (7+ letters) ▲▲▲
+                  Long words (7+ letters) ▲▲▲, "these" ▲▲▲, Nominalizations (-tion, -ment) ▲▲▲
 
 By paragraph   examples/draft.md   spans of at least 100 words; * drifts, above 1.00x its range
      lines      words   x range  LLM-likeness
-     3             70     0.16x  like the reference      The hardware store in the village has…
-     5             85     0.23x  like the reference      It's a narrow building, long and dim…
-     7             84     0.23x  like the reference      I go in for one thing and come out an…
+     3             70     0.17x  like the reference      The hardware store in the village has…
+     5             85     0.26x  like the reference      It's a narrow building, long and dim…
+     7             84     0.26x  like the reference      I go in for one thing and come out an…
   *  9             60     1.18x  a few LLM traits        But the store is more than a place to…
-     11            86     0.40x  like the reference      The big store in the city is cheaper. I…
-     13            63     0.40x  like the reference      Walt is seventy-one. His daughter works…
-  *  15            33     1.02x  a few LLM traits        Ultimately, the future of the village…
-     17            61     0.63x  like the reference      I bought a pound of eightpenny nails…
+     11            86     0.47x  like the reference      The big store in the city is cheaper. I…
+     13            63     0.47x  like the reference      Walt is seventy-one. His daughter works…
+  *  15            33     1.06x  a few LLM traits        Ultimately, the future of the village…
+     17            61     0.65x  like the reference      I bought a pound of eightpenny nails…
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference

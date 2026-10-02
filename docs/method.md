@@ -251,6 +251,13 @@ Two scores answer two questions:
   range (each document scored with weights learned without it), which sets the verdict
   words. Rename the contrast set with `--contrast-label`.
 
+Each metric's |z| counts up to 5 in Delta, its area Deltas and LLM-likeness, before
+reliability weighting or held-out scaling. The same cap applies during held-out calibration,
+so the stored ranges and new drafts use the same rule. This keeps one extreme metric, such
+as paragraph length after removing blank lines, from deciding the whole verdict. Metrics
+without measured reliability retain Delta's stricter cap of 3. The report's per-metric z
+values and "Biggest differences" stay uncapped to show the full size of each difference.
+
 ### How reliable the contrast is
 
 - **How sure is the separation?** The profile reports the AUC (the chance a held-out

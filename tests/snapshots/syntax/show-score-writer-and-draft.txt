@@ -6,29 +6,29 @@ STYLE COMPARISON   2 documents, 2 chunks, 1,257 words   vs writer.json (7 chunks
 By document   furthest from the reference first
   2 documents: 1 very different, 1 close
   document        words  verdict             Delta  LLM-likeness
-  old-maps.md       620  very different       4.61  like drafts
+  old-maps.md       620  very different       2.74  like drafts
       most different in: Long words (7+ letters) ▲▲▲, List items ▲▲▲
   sharpening.md     637  close                0.56  like reference
 
-Across 2 documents: very different   Delta 2.59
+Across 2 documents: clearly different   Delta 1.65
   Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.82 typically (a mean over 2 chunks, up to 0.96).
   Pooled over every document from here on; the table above has each one's own.
 
-LLM-likeness: a few LLM traits   7.01
-  The reference's own writing at these lengths (620-637 words per chunk) scores 0.21 typically (a mean over 2 chunks, up to 0.91); the LLM drafts 13.70.
-  Strongest LLM signals: Long words (7+ letters) ▲▲▲, List items ▲▲▲, Bold phrases ▲▲▲
+LLM-likeness: a few LLM traits   2.20
+  The reference's own writing at these lengths (620-637 words per chunk) scores 0.20 typically (a mean over 2 chunks, up to 0.91); the LLM drafts 4.30.
+  Strongest LLM signals: List items ▲▲▲, Bold phrases ▲▲▲, Long words (7+ letters) ▲▲▲
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Formatting                  10.38x  ██████████████░░░░░░  very different
-  Vocabulary                   5.17x  ██████████░░░░░░░░░░  very different
-  Voice and stance             2.40x  ███████░░░░░░░░░░░░░  very different
-  How sentences open           1.69x  ██████░░░░░░░░░░░░░░  clearly different
-  Syntax                       1.47x  █████░░░░░░░░░░░░░░░  somewhat different
-  Punctuation                  1.39x  █████░░░░░░░░░░░░░░░  somewhat different
-  Rhythm                       1.19x  ████░░░░░░░░░░░░░░░░  somewhat different
-  Sentence shape               1.03x  ████░░░░░░░░░░░░░░░░  somewhat different
-  Function words               0.95x  ████░░░░░░░░░░░░░░░░  close
+  Formatting                   3.00x  ████████░░░░░░░░░░░░  very different
+  Vocabulary                   2.75x  ████████░░░░░░░░░░░░  very different
+  Voice and stance             2.03x  ██████░░░░░░░░░░░░░░  very different
+  Rhythm                       1.20x  █████░░░░░░░░░░░░░░░  somewhat different
+  Punctuation                  1.13x  ████░░░░░░░░░░░░░░░░  somewhat different
+  Syntax                       1.12x  ████░░░░░░░░░░░░░░░░  somewhat different
+  How sentences open           0.99x  ████░░░░░░░░░░░░░░░░  close
+  Function words               0.91x  ████░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.86x  ████░░░░░░░░░░░░░░░░  close
 
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference

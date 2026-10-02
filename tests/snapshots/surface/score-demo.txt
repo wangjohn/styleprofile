@@ -7,12 +7,12 @@ Overall: close   Delta 0.65
   Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.54 typically (95% under 0.84).
 
 LLM-likeness: a few LLM traits   0.75
-  The reference's own writing at this length (542 words) scores 0.16 typically (95% under 0.44); the LLM drafts 7.68.
+  The reference's own writing at this length (542 words) scores 0.16 typically (95% under 0.43); the LLM drafts 3.96.
   Strongest LLM signals: "these" ▲, Em dashes ▲
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.18x  ████░░░░░░░░░░░░░░░░  somewhat different
+  Voice and stance             1.19x  ████░░░░░░░░░░░░░░░░  somewhat different
   Punctuation                  0.78x  ███░░░░░░░░░░░░░░░░░  close
   Function words               0.76x  ███░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.58x  ███░░░░░░░░░░░░░░░░░  close
