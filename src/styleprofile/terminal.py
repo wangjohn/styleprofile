@@ -1,0 +1,48 @@
+"""Output symbols and command hints that fit the user's terminal and shell."""
+
+from __future__ import annotations
+
+import shlex
+import subprocess
+import sys
+from collections.abc import Sequence
+from typing import TextIO
+
+UNICODE_GLYPHS = {"bar": "█", "empty": "░", "up": "▲", "down": "▼", "divide": "÷"}
+ASCII_GLYPHS = {"bar": "#", "empty": ".", "up": "^", "down": "v", "divide": "/"}
+
+
+def glyphs(stream: TextIO | None = None) -> dict[str, str]:
+    """Choose one consistent symbol set for the stream's encoding."""
+    output = sys.stdout if stream is None else stream
+    encoding = getattr(output, "encoding", None) or "utf-8"
+    try:
+        "".join(UNICODE_GLYPHS.values()).encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return ASCII_GLYPHS
+    return UNICODE_GLYPHS
+
+
+def prepare_output() -> None:
+    """Keep arbitrary input names and excerpts printable on legacy encoded streams too."""
+    for stream in (sys.stdout, sys.stderr):
+        if glyphs(stream) is ASCII_GLYPHS:
+            reconfigure = getattr(stream, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(errors="replace")
+
+
+def shell_join(command: Sequence[str]) -> str:
+    """Quote command arguments for cmd.exe on Windows and the POSIX shell elsewhere."""
+    if sys.platform != "win32":
+        return shlex.join(command)
+    quoted = []
+    for argument in command:
+        text = subprocess.list2cmdline([argument])
+        # list2cmdline quotes whitespace for the program's argv parser, but cmd.exe
+        # also needs shell operators protected, even in paths with no spaces.
+        if any(symbol in argument for symbol in "&|<>^()") and not text.startswith('"'):
+            trailing = len(text) - len(text.rstrip("\\"))
+            text = '"' + text + "\\" * trailing + '"'
+        quoted.append(text)
+    return " ".join(quoted)

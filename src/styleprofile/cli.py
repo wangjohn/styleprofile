@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import shlex
 import shutil
 import sys
 import textwrap
@@ -67,6 +66,7 @@ from styleprofile.profile import (
 from styleprofile.schema import FailedDocument, FailLevels
 from styleprofile.split import SPLIT_ON
 from styleprofile.status import StatusLine
+from styleprofile.terminal import prepare_output, shell_join
 
 PROG = "styleprofile"
 # Advice for library errors, which name the problem but never a flag.
@@ -628,7 +628,7 @@ def _run_build(args: argparse.Namespace) -> int:
             reason = _flagged(note.message, note.setting)
             print(_warn(f"Thin reference: {reason}.", color_err), file=sys.stderr)
     print(f"\nwrote {args.output}")
-    print(f"Next, score a draft against it:\n  {PROG} score <draft> {shlex.quote(args.output)}")
+    print(f"Next, score a draft against it:\n  {PROG} score <draft> {shell_join([args.output])}")
     return 0
 
 
@@ -1032,7 +1032,7 @@ def _run_setup(args: argparse.Namespace) -> int:
     found = f", replacing {status.model_version}" if status.model_version else ""
     print(f"Installing {name}{found} from github.com/explosion/spacy-models ...", flush=True)
     command = spacy_model.install_model()
-    _note(f"ran: {shlex.join(command)}")
+    _note(f"ran: {shell_join(command)}")
     print(f"Installed {name}. Syntax metrics are on for new profiles and scores.")
     return 0
 
@@ -1074,7 +1074,7 @@ def _suggest_command(argv: Sequence[str]) -> str:
     except argparse.ArgumentError:
         found = None
     if found is None or not (found.reference or found.output):
-        rest = shlex.join(argv)
+        rest = shell_join(argv)
         return f"`{PROG} build {rest}` or `{PROG} score {rest}`"
     kept = ["text_field", "group_field", "window_words", "min_words", "input_format"]
     if found.reference:
@@ -1090,7 +1090,7 @@ def _suggest_command(argv: Sequence[str]) -> str:
         if getattr(found, name) is not None:
             command += ["--" + name.replace("_", "-"), getattr(found, name)]
     command += ["--no-syntax"] * found.no_syntax + ["--all"] * found.all
-    return f"`{PROG} {shlex.join(command)}`"
+    return f"`{PROG} {shell_join(command)}`"
 
 
 def _dispatch(argv: Sequence[str]) -> int:
@@ -1115,6 +1115,7 @@ def _dispatch(argv: Sequence[str]) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    prepare_output()
     try:
         return _dispatch(sys.argv[1:] if argv is None else list(argv))
     except (StyleProfileError, OSError) as error:

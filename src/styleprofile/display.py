@@ -61,6 +61,7 @@ from styleprofile.schema import (
     VerdictDelta,
     VerdictLikeness,
 )
+from styleprofile.terminal import glyphs
 from styleprofile.weighting import (
     DISTANCE_WORDS,
     LENGTH_AUC_WARNING,
@@ -181,7 +182,7 @@ def _arrow(z: float | None) -> str:
         return ""
     size = abs(z)
     count = 0 if size < 1 else 1 if size < 2 else 2 if size < 3 else 3
-    return ("▲" if z > 0 else "▼") * count
+    return (glyphs()["up"] if z > 0 else glyphs()["down"]) * count
 
 
 def _bar(amount: float, style: _Style, level: int) -> str:
@@ -189,7 +190,9 @@ def _bar(amount: float, style: _Style, level: int) -> str:
     is colored."""
     share = math.log1p(max(amount, 0.0)) / math.log1p(BAR_MAX)
     filled = max(0, min(BAR_WIDTH, round(share * BAR_WIDTH)))
-    return style.distance("█" * filled, level) + style.dim("░" * (BAR_WIDTH - filled))
+    return style.distance(glyphs()["bar"] * filled, level) + style.dim(
+        glyphs()["empty"] * (BAR_WIDTH - filled)
+    )
 
 
 def describe_delta(delta: float, ceiling: float | None = None) -> Verdict:
@@ -324,7 +327,10 @@ def _contrast_summary(contrast: Contrast, style: _Style) -> list[str]:
             f"{name} drafts {calibration['contrast']['median']:.2f}"
         ),
         f"  Compared with the reference, {name} drafts have: "
-        + ", ".join(f"{label(metric)[0]} {'▲' if effect > 0 else '▼'}" for effect, metric in top),
+        + ", ".join(
+            f"{label(metric)[0]} {glyphs()['up'] if effect > 0 else glyphs()['down']}"
+            for effect, metric in top
+        ),
     ]
     length = calibration["length_baseline"]
     if length:
@@ -420,7 +426,10 @@ def _differences(
     indicative = "" if judged else "; indicative only"
     lines = [
         style.bold("Biggest differences")
-        + style.dim(f"   (each ▲ or ▼ is one standard deviation, up to 3{indicative})"),
+        + style.dim(
+            f"   (each {glyphs()['up']} or {glyphs()['down']} is one standard deviation, "
+            f"up to 3{indicative})"
+        ),
     ]
     if not ranked:
         return [*lines, f"  No metric differs by {NOTABLE_Z:.0f} sd or more on average."]
@@ -657,7 +666,8 @@ def _area_lines(areas: list[_Area], style: _Style, *, judged: bool = True) -> li
     gets the numbers without verdict words."""
     calibrated = any(area.relative is not None for area in areas)
     about = (
-        "   Delta ÷ the top of the reference's usual range in each area; bars on a log scale"
+        f"   Delta {glyphs()['divide']} the top of the reference's usual range in each area; "
+        "bars on a log scale"
         if calibrated
         else "   Delta in each area"
     )
