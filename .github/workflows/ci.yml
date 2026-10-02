@@ -5,14 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: check (Python ${{ matrix.python-version }}, with spaCy)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
@@ -30,6 +35,7 @@ jobs:
   no-syntax:
     name: test (Python 3.11, without spaCy)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # uv installs the spacy-model group by default (it's inert without spaCy); leave it
       # out, here and in every `uv run`, so nothing of spaCy's is installed.
@@ -54,6 +60,7 @@ jobs:
     # would. See scripts/check_dist.py; the same `make dist-check` runs it locally.
     name: package (build, install the wheel on Python 3.11, smoke test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UV_NO_GROUP: spacy-model
     steps:
@@ -74,6 +81,7 @@ jobs:
     # a report. The tables go to the job summary.
     name: benchmark (medium corpus, without spaCy)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

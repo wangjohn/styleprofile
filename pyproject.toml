@@ -32,6 +32,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Information Analysis",
   "Topic :: Text Processing :: Linguistic",
   "Typing :: Typed",
@@ -60,6 +61,7 @@ styleprofile = "styleprofile.cli:main"
 dev = [
   "pyright>=1.1.400,<2",
   "pytest>=8.3,<9",
+  "pytest-xdist>=3.6,<4",
   "ruff>=0.11,<1",
 ]
 # Development only: the model the package is tested with, so `uv sync --extra syntax` gives

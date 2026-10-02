@@ -30,6 +30,10 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **Faster CI and safer tests.** Test runs use up to four parallel workers, Python 3.14
+  joins the syntax matrix, and permission tests skip under root. Release smoke tests also
+  install syntax and run setup; Dependabot checks Python dependencies.
+
 - **Build a reference once, then score drafts against it**: the `build`, `score`, `show`
   and `metrics` commands. `score` reads the window size and every other setting from the
   reference, so a draft is always cut the way the reference was; `show` displays a saved

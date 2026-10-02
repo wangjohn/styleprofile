@@ -202,7 +202,7 @@ def sdist_tests(sdist: Path, version: str, work: Path) -> None:
         env=env,
     )
     print(_run([cli, "setup"], cwd=source, env=env).strip().splitlines()[-1])
-    out = _run([python, "-m", "pytest", "-p", "no:cacheprovider"], cwd=source, env=env)
+    out = _run([python, "-m", "pytest", "-n", "auto", "-p", "no:cacheprovider"], cwd=source, env=env)
     summary = out.strip().splitlines()[-1]
     if " failed" in summary or " error" in summary or " passed" not in summary:
         _fail(f"the sdist's tests: {summary}")

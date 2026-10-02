@@ -6,7 +6,7 @@ sync:
 	$(UV) sync --extra syntax
 
 test:
-	$(UV) run pytest
+	$(UV) run pytest -n auto
 
 lint:
 	$(UV) run ruff check .

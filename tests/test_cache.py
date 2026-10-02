@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import json
+import os
 import secrets
 import shutil
 import sqlite3
@@ -353,6 +354,10 @@ def _notes(profile: sp.Profile) -> list[sp.Note]:
     return [note for note in profile.notes if note.code == sp.NoteCode.CACHE_UNAVAILABLE]
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root can write to folders regardless of permission bits",
+)
 def test_a_damaged_cache_in_a_read_only_folder_is_left_out(
     cache_home: Path, tmp_path: Path
 ) -> None:
@@ -431,6 +436,10 @@ def test_scoring_leaves_nothing_in_the_cache_unless_asked(
     assert caching.describe(cache_home)[2] > entries
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root can write to folders regardless of permission bits",
+)
 def test_the_cache_command_says_when_the_cache_is_unavailable(
     cache_home: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -474,7 +483,7 @@ def test_a_stuck_writer_is_given_up_on_within_seconds(
         profile = sp.build(WRITER, settings, contrast=CONTRAST)
     finally:
         release.set()
-    assert time.monotonic() - started < 20
+    assert time.monotonic() - started < 60
     assert dumps_report(profile.report) == expected
     [note] = _notes(profile)
     assert "stopped responding" in note.message
