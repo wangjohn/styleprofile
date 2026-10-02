@@ -550,9 +550,9 @@ class DocumentResult:
     (``chunks_judged`` of them), and ``verdict`` and ``likeness_verdict`` put them in words
     against the writer's range at each chunk's own length, by the same function as
     ``ScoreResult.verdict`` for a whole score. When none of its chunks is long enough,
-    ``judged`` is False, the verdicts are ``TOO_SHORT``, ``reason`` says why, and the
-    figures cover every chunk as an indication only; ``verdict`` is ``NOT_COMPARABLE`` when
-    no metric could be compared. A document that is not judged, or not comparable, never
+    ``judged`` is False, ``reason`` says why, and the figures cover every chunk as an
+    indication only; ``verdict`` is ``TOO_SHORT`` for short texts and ``NOT_COMPARABLE``
+    when no metric could be compared. A document that is not judged, or not comparable, never
     fails a threshold (``ScoreResult.failing``).
 
     ``differences`` are the metrics (``"group.name"``) furthest from the reference, as
@@ -599,9 +599,13 @@ class DocumentResult:
                 (item["metric"], item["z"], item["contribution"])
                 for item in entry.get("signals", [])
             ),
-            judged=entry["judged"],
+            judged=entry["judged"] and entry["delta"] is not None,
             chunks_judged=entry["chunks_judged"],
-            reason=entry["reason"],
+            reason=(
+                "no metrics could be compared with the reference"
+                if entry["delta"] is None
+                else entry["reason"]
+            ),
             path=entry["path"],
             flagged=entry["flagged"],
             location=location,
@@ -689,9 +693,9 @@ class ScoreResult(_Result[ScoreReport]):
 
     @property
     def judged(self) -> bool:
-        """Whether any chunk is long enough to judge; if not, the verdicts are
-        ``TOO_SHORT`` and ``reason`` says why."""
-        return self._verdict["judged"]
+        """Whether any chunk could be compared and is long enough to judge;
+        ``reason`` says why when none could be judged."""
+        return self.delta is not None and self._verdict["judged"]
 
     @property
     def flagged(self) -> int:
@@ -706,6 +710,8 @@ class ScoreResult(_Result[ScoreReport]):
     def reason(self) -> str | None:
         """Why there is no verdict, such as "under 75 words, the writer's own text varies
         too much by chance to judge"; None when there is one."""
+        if self.delta is None:
+            return "no metrics could be compared with the reference"
         return self._verdict["reason"]
 
     @property
@@ -943,6 +949,19 @@ def build(
                 measurer=measurer,
             ),
         )
+        if report["chunk_count"] < 2:
+            suggested = max(1, report["word_count"] // 2)
+            while suggested > 1 and len(window(cut.windows, suggested)) < 2:
+                suggested //= 2
+            fix = "add documents"
+            if len(window(cut.windows, suggested)) >= 2:
+                fix += f", or pass a smaller --window-words ({suggested})"
+            else:
+                fix += ", or add paragraph breaks and pass a smaller --window-words (1)"
+            raise StyleProfileError(
+                "a reference needs at least 2 chunks to compare metrics; " + fix,
+                code="reference_needs_chunks",
+            )
         # Saved, so ``show`` repeats them: what stand-in documents mean for this reference.
         report["warnings"] += [*cut.warnings, *(contrast_cut.warnings if contrast_cut else ())]
         notes += _thin_reference(report, settings, cut.windows)

@@ -799,7 +799,11 @@ def _failed(
         delta_failed, likeness_failed, flagged_failed = api.fails(
             doc, above, likeness, args.fail_flagged
         )
-        if not (delta_failed or likeness_failed or flagged_failed):
+        incomparable = (
+            bool(args.fail_above or args.fail_likeness or args.fail_flagged)
+            and doc.verdict is Verdict.NOT_COMPARABLE
+        )
+        if not (delta_failed or likeness_failed or flagged_failed or incomparable):
             continue
         entry: FailedDocument = {
             "name": doc.name,
@@ -813,6 +817,8 @@ def _failed(
             "flagged": doc.flagged,
             "chunks_judged": doc.chunks_judged,
         }
+        if incomparable:
+            entry["reason"] = "could not be compared with the reference"
         entries.append((doc, entry))
     return entries
 
@@ -823,6 +829,9 @@ def _failed_line(doc: DocumentResult, entry: FailedDocument, label: str | None) 
     of chunks flagged on their own is there whenever it has some, whichever check failed;
     for a document of one judged chunk only when nothing else is, since its verdict is that
     chunk's own (the JSON entry always has it)."""
+    reason = entry.get("reason")
+    if reason:
+        return f"failed: {doc.shown}: {reason}"
     parts = [f"delta {entry['delta']}"] if entry["delta"] else []
     parts += [f"likeness {entry['likeness']}"] if entry["likeness"] else []
     if entry["flagged"] and (entry["chunks_judged"] > 1 or not parts):
@@ -838,11 +847,6 @@ def _run_score(args: argparse.Namespace) -> int:
     if args.output:
         _refuse_overwrite(args.output, samples)
     profile = _load_score_reference(reference_arg, flagged=args.reference is not None)
-    if args.fail_likeness and not profile.report.get("contrast"):
-        raise StyleProfileError(
-            f"--fail-likeness needs a reference built with --contrast, and {reference_arg} "
-            "has none; rebuild it with --contrast, or use --fail-above"
-        )
     # Flags left out are inherited from the profile.
     overrides: SettingsOverrides = {}
     if args.window_words is not None:
@@ -863,6 +867,15 @@ def _run_score(args: argparse.Namespace) -> int:
         overrides["split_on"] = args.split_on
     with _status(not (args.json or args.quiet)) as progress:
         result = profile.score(samples, progress=progress, passages=args.by_paragraph, **overrides)
+    if (
+        args.fail_likeness
+        and not profile.report.get("contrast")
+        and any(doc.verdict is not Verdict.NOT_COMPARABLE for doc in result.documents)
+    ):
+        raise StyleProfileError(
+            f"--fail-likeness needs a reference built with --contrast, and {reference_arg} "
+            "has none; rebuild it with --contrast, or use --fail-above"
+        )
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes)
     failed = _failed(args, result)

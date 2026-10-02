@@ -1168,6 +1168,9 @@ def _document_table(
             if close_shown > CLOSE_ROWS:
                 continue
         name = shorten(names[doc["name"]], name_width)
+        if verdict == Verdict.NOT_COMPARABLE:
+            lines.append(f"  {name:{name_width}}  {doc['words']:>6,}  {verdict}")
+            continue
         if not doc["judged"]:
             # Its figures are indicative only, so the row gives none.
             lines.append(f"  {name:{name_width}}  {doc['words']:>6,}  {too_short_text(doc)}")

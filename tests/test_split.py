@@ -361,7 +361,7 @@ def test_stand_ins_are_consecutive_windows(bare_file: Path) -> None:
 def test_a_short_file_is_not_split(tmp_path: Path) -> None:
     path = tmp_path / "short.md"
     path.write_text(f"{_prose(300)}\n\n---\n\n{_prose(300, 2)}", encoding="utf-8")
-    profile = sp.build(path, SURFACE)
+    profile = sp.build(path, sp.Settings(syntax=False, window_words=300))
     assert profile.report["document_count"] == 1 and profile.report["settings"]["split_used"] == []
     assert not _coded(profile.notes, sp.NoteCode.SPLIT)
     assert not _coded(profile.notes, sp.NoteCode.STAND_INS)

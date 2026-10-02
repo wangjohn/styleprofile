@@ -130,6 +130,11 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Fixed
 
+- **References need at least two chunks.** Build refuses smaller references and suggests
+  adding documents or reducing the window size. Incomparable library results are not
+  judged, and any CLI fail flag rejects them with exit status 3. Too-short texts still
+  never fail a run.
+
 - **Nominalizations** count nouns that name the action, state or quality of a different
   verb or adjective (decision, motion, darkness, distance), and no longer count fence,
   city, sentence, science, moment and similar words: a word needs two or more letters
