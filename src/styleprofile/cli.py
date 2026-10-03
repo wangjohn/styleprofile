@@ -639,7 +639,11 @@ def _default_output(inputs: Sequence[str]) -> str:
     if "-" in inputs:
         raise StyleProfileError("build from stdin requires -o; give a path to save the profile")
     first = expand_path(inputs[0])
-    name = first.name if first.is_dir() else first.stem
+    name = (
+        (first.resolve().name if first.name in ("", "..") else first.name)
+        if first.is_dir()
+        else first.stem
+    )
     return f"{name or first.resolve().name}.profile.json"
 
 
@@ -886,8 +890,18 @@ def _failed_line(doc: DocumentResult, entry: FailedDocument, label: str | None) 
     return f"failed: {doc.shown}: " + "; ".join(parts)
 
 
+def _is_saved_report(value: str) -> bool:
+    if value == "-":
+        return False
+    try:
+        load_report(expand_path(value), value)
+    except StyleProfileError as error:
+        return error.code == "outdated"
+    return True
+
+
 def _against_reference(args: argparse.Namespace) -> tuple[Profile, str]:
-    if args.reference is not None or any(path.lower().endswith(".json") for path in args.paths):
+    if args.reference is not None or any(_is_saved_report(path) for path in args.paths):
         raise StyleProfileError(
             "--against cannot be combined with a reference profile or -r; "
             "give only drafts before --against"

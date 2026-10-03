@@ -60,10 +60,35 @@ def test_against_matches_two_step_json(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "writer.profile.json").exists()
 
 
-@pytest.mark.parametrize("extra", [["-r", "ref.json"], ["ref.json"]])
-def test_against_excludes_saved_reference(extra, capsys):
+@pytest.mark.parametrize("flag", [True, False])
+@pytest.mark.parametrize("name", ["ref.json", "ref.data"])
+def test_against_excludes_saved_reference(flag, name, tmp_path, capsys):
+    reference = tmp_path / name
+    api.build(WRITER, Settings(syntax=False), cache=False).save(reference)
+    extra = ["-r", str(reference)] if flag else [str(reference)]
     assert main(["score", DRAFT, *extra, "--against", WRITER, "--no-syntax"]) == 1
     assert "--against cannot be combined" in capsys.readouterr().err
+
+
+def test_against_accepts_draft_folder_named_json(tmp_path, capsys):
+    drafts = tmp_path / "drafts.json"
+    drafts.mkdir()
+    (drafts / "draft.md").write_text(Path(DRAFT).read_text(encoding="utf-8"), encoding="utf-8")
+    assert main(["score", str(drafts), "--against", WRITER, "--no-syntax", "-q"]) == 0
+    assert "close (Delta 0.85)" in capsys.readouterr().out
+
+
+def test_default_parent_folder_output(tmp_path, monkeypatch, capsys):
+    corpus = tmp_path / "posts"
+    corpus.mkdir()
+    for source in Path(WRITER).glob("*.md"):
+        (corpus / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    working = corpus / "work"
+    working.mkdir()
+    monkeypatch.chdir(working)
+    assert main(["build", "..", "--no-syntax"]) == 0
+    assert (working / "posts.profile.json").is_file()
+    assert "wrote posts.profile.json" in capsys.readouterr().out
 
 
 def test_against_cache_warnings_and_reuse_settings(tmp_path, monkeypatch, capsys):
