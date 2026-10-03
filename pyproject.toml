@@ -79,6 +79,9 @@ en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/dow
 [tool.hatch.build.targets.wheel]
 packages = ["src/styleprofile"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"examples" = "styleprofile/_examples"
+
 # The sdist holds what it takes to run the test suite (the tests read examples/, docs/ and
 # bench/) and nothing else: no CI config, lock file, generated corpora, profiles or local
 # files. pyproject.toml, README.md and LICENSE are always included.
