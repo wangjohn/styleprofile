@@ -22,6 +22,7 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from styleprofile.cache import MeasurementCache
 from styleprofile.cli import main
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
@@ -142,7 +144,15 @@ def _plain(text: str) -> str:
 def _run(argv: list[str], tmp: Path) -> str:
     """Run one command; return its exit code, stdout and stderr with local paths normalized."""
     stdout, stderr = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+    with (
+        pytest.MonkeyPatch.context() as patch,
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(stderr),
+    ):
+        if argv[0] == "demo":
+            # Snapshot the verdict, independent of the disk cache's availability. The
+            # cache-enabled demo's warning and identical verdict are tested in test_demo.
+            patch.setenv("STYLEPROFILE_NO_CACHE", "1")
         code = main([arg.replace(TMP, str(tmp)) for arg in argv])
     text = f"$ styleprofile {shlex.join(argv)}\n[exit {code}]\n"
     text += f"--- stdout\n{stdout.getvalue()}"
@@ -197,6 +207,23 @@ def outputs(
 
 def _snapshot(mode: str, name: str) -> Path:
     return SNAPSHOTS / mode / f"{name}.txt"
+
+
+def test_demo_snapshot_is_independent_of_disk_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(self: MeasurementCache) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.delenv("STYLEPROFILE_NO_CACHE", raising=False)
+    monkeypatch.setenv("COLUMNS", "100")
+    monkeypatch.setattr(MeasurementCache, "_open", unavailable)
+    actual = _run(["demo", "--dir", f"{TMP}/bundled-demo", "--no-syntax"], tmp_path)
+    assert actual == _snapshot("surface", "demo").read_text(encoding="utf-8")
+    assert "STYLEPROFILE_NO_CACHE" not in os.environ
 
 
 @pytest.mark.parametrize("name", sorted({name for cases in MODES.values() for name, _ in cases}))

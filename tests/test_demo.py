@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from styleprofile import api, demo
+from styleprofile.cache import MeasurementCache
 from styleprofile.cli import build_parser, main
 
 
@@ -97,6 +99,30 @@ def test_demo_resource_fallback_and_empty_directory(
 
 def test_demo_is_in_root_help() -> None:
     assert "Try the bundled samples: styleprofile demo" in build_parser().format_help()
+
+
+def test_demo_continues_when_the_cache_has_a_disk_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("STYLEPROFILE_NO_CACHE", "1")
+    assert main(["demo", "--no-syntax"]) == 0
+    measured = capsys.readouterr()
+    attempts = []
+
+    def unavailable(self: MeasurementCache) -> sqlite3.Connection:
+        attempts.append(self.path)
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.delenv("STYLEPROFILE_NO_CACHE")
+    monkeypatch.setattr(MeasurementCache, "_open", unavailable)
+    assert main(["demo", "--no-syntax"]) == 0
+    fallback = capsys.readouterr()
+    assert attempts
+    assert fallback.out == measured.out
+    assert "Overall: close" in fallback.out
+    assert "could not be used (disk I/O error)" in fallback.err
+    assert "so this run went on without it" in fallback.err
 
 
 def test_demo_accepts_a_directory_starting_with_a_dash(
