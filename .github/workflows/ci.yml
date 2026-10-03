@@ -100,7 +100,7 @@ jobs:
       - run: uv sync --locked
       - name: Confirm spaCy is absent
         run: uv run python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('spacy') is not None)"
-      - run: uv run pytest -n auto tests/test_platforms.py tests/test_input_robustness.py tests/test_demo.py tests/test_library_start.py tests/test_cache.py::test_a_relative_xdg_cache_home_is_ignored tests/test_throughput.py::test_memory_jobs_follow_physical_memory
+      - run: uv run pytest -n auto tests/test_platforms.py tests/test_cli_onboarding.py tests/test_input_robustness.py tests/test_demo.py tests/test_library_start.py tests/test_cache.py::test_a_relative_xdg_cache_home_is_ignored tests/test_throughput.py::test_memory_jobs_follow_physical_memory
       - run: uv run pytest 'tests/test_snapshots.py::test_snapshot[surface-demo]' tests/test_snapshots.py::test_demo_snapshot_is_independent_of_disk_cache
 
   package:

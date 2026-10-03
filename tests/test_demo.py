@@ -28,7 +28,12 @@ def test_demo_builds_scores_and_can_be_repeated(
     for _ in range(2):
         assert main(["demo", "--no-syntax"]) == 0
         output = capsys.readouterr().out
-        assert "Delta" in output and "Next: try it on your own texts" in output
+        assert "Delta" in output
+        assert output.split("Next: try it on your own texts\n", 1)[1].splitlines() == [
+            "  styleprofile build posts/ --contrast llm-drafts/ -o writer.json",
+            "  styleprofile score draft.md writer.json",
+            "  styleprofile score draft.md --against posts/",
+        ]
     directory = tmp_path / "styleprofile-demo"
     profile = json.loads((directory / demo.PROFILE).read_text(encoding="utf-8"))
     assert profile["settings"]["syntax_used"] is None

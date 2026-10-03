@@ -1237,13 +1237,20 @@ def test_json_output_is_the_only_thing_on_stdout(
     assert printed == json.loads(output.read_text(encoding="utf-8"))
     assert printed["kind"] == "score" and printed["reference"]["delta_mean"] > 0
     assert any("window sizes differ" in warning for warning in printed["warnings"])
-    assert captured.err == f"note: wrote {output}\n"
+    assert captured.err == (
+        "note: styleprofile judges 75 words or more; "
+        "score several short texts together with --pool\n"
+        f"note: wrote {output}\n"
+    )
 
     assert main(["score", sample, str(reference), "--quiet", "--window-words", "50"]) == 0
     quiet = capsys.readouterr()
-    assert quiet.out.count("\n") == 1 and quiet.out.startswith(f"{sample}: ")
+    assert quiet.out.splitlines() == [
+        f"{sample}: too short to judge (34 words)",
+        "styleprofile judges 75 words or more; score several short texts together with --pool",
+    ]
     # Its 50-word windows are too short to judge, and -q says so.
-    assert quiet.out.endswith(": too short to judge (34 words)\n")
+    assert quiet.out.startswith(f"{sample}: too short to judge (34 words)\n")
     # The caveats stay out of stdout, but -q still says they exist.
     assert quiet.err.endswith("; run without -q to see them\n")
 

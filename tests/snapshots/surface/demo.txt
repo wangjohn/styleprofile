@@ -50,6 +50,7 @@ Pass --all to see every metric.
 Next: try it on your own texts
   styleprofile build posts/ --contrast llm-drafts/ -o writer.json
   styleprofile score draft.md writer.json
+  styleprofile score draft.md --against posts/
 --- stderr
 Thin reference: it has 7 chunks; aim for 15 or more by adding documents or using a smaller --window-words.
 Thin reference: it has 4,496 words; aim for 20,000 or more of the writer's text, in one genre.

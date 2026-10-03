@@ -38,6 +38,11 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **One-command draft checks.** `score draft.md --against posts/` builds a cached reference
+  in memory, with optional contrast texts and a command to save it for reuse. `build`
+  defaults to the first input’s name plus `.profile.json`; stdin still needs `-o`.
+  Short-only scoring runs explain the reference’s actual minimum length and suggest `--pool`.
+
 - **Try the bundled samples.** `styleprofile demo` copies the sample corpus, builds a
   profile and scores a draft. The samples ship in the wheel; `--dir` chooses the folder.
 

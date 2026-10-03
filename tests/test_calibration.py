@@ -505,7 +505,10 @@ def test_the_review_paragraph_abstains(tmp_path: Path, capsys: pytest.CaptureFix
     sample = tmp_path / "fence.md"
     sample.write_text(FENCE, encoding="utf-8")
     assert main(["score", "-q", str(sample), str(reference)]) == 0
-    assert capsys.readouterr().out == f"{sample}: too short to judge (36 words)\n"
+    assert capsys.readouterr().out == (
+        f"{sample}: too short to judge (36 words)\n"
+        "styleprofile judges 75 words or more; score several short texts together with --pool\n"
+    )
 
     assert main(["score", str(sample), str(reference), "--no-syntax"]) == 0
     text = capsys.readouterr().out
