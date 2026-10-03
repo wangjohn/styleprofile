@@ -66,6 +66,7 @@ _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK = re.compile(r"(?<!!)\[([^\]]+)\]\([^)]*\)")
 _BOLD = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1")
+_ITALIC = re.compile(r"(?<!\w)([*_])(?=\S)(.+?)(?<=\S)\1(?!\w)")
 _INLINE_CODE = re.compile(r"(`+)(?!`)[^\n]+?(?<!`)\1(?!`)")
 _HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
 _URL = re.compile(r"https?://\S+")
@@ -402,7 +403,8 @@ def plain_sentences(block: Block) -> list[str] | None:
     """A plain paragraph's sentences, as raw Markdown, or None for any other block.
 
     Only running text can be cut between sentences without changing what it is: code,
-    headings, lists, list continuations, quotes and tables stay whole.
+    headings, lists, list continuations, quotes and tables stay whole. Inline markup
+    also stays whole, so a cut never turns its contents into different prose.
     """
     if block.code or block.continues_list:
         return None
@@ -410,7 +412,30 @@ def plain_sentences(block: Block) -> list[str] | None:
     for line in lines:
         if _HEADING.match(line) or _LIST_ITEM.match(line) or line.lstrip().startswith(("|", ">")):
             return None
-    return sentences(" ".join(line.strip() for line in lines))
+    text = " ".join(line.strip() for line in lines)
+    protected = sorted(
+        match.span()
+        for pattern in (_INLINE_CODE, _LINK, _IMAGE, _BOLD, _ITALIC, _HTML_TAG)
+        for match in pattern.finditer(text)
+    )
+    parts: list[str] = []
+    start = protected_index = 0
+    for boundary in _SENTENCE_BREAK.finditer(text):
+        position = boundary.start()
+        while protected_index < len(protected) and protected[protected_index][1] <= position:
+            protected_index += 1
+        if protected_index < len(protected) and protected[protected_index][0] <= position:
+            continue
+        piece = text[start:position]
+        following = text[boundary.end() : boundary.end() + 1]
+        if _ABBREVIATION.search(piece) or (
+            _NUMBER_ABBREVIATION.search(piece) and following[:1].isdigit()
+        ):
+            continue
+        parts.append(piece)
+        start = boundary.end()
+    parts.append(text[start:])
+    return [part for part in parts if WORD.search(part)]
 
 
 def words(text: str) -> list[str]:

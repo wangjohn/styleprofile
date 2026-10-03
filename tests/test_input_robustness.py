@@ -112,9 +112,13 @@ def test_no_chunks_explains_cause_and_action(text: str, cause: str) -> None:
     assert "Add readable prose" in str(error.value)
 
 
-def test_long_draft_is_scored_in_window_sized_chunks() -> None:
+@pytest.mark.parametrize("word_count", [4000, 4200])
+def test_long_draft_is_scored_in_window_sized_chunks(word_count: int) -> None:
     profile = sp.build(ROOT / "examples/writer", sp.Settings(syntax=False), cache=False)
-    result = profile.score(sp.Text(" ".join([SENTENCE] * 300)), cache=False)
+    text = " ".join([SENTENCE] * (word_count // 14))
+    text += " I" * (word_count % 14)
+    assert len(words(prose(text).text)) == word_count
+    result = profile.score(sp.Text(text), cache=False)
     assert result.report["chunk_count"] >= 8
     for chunk in result.report["chunks"]:
         size = chunk["metrics"]["size"]["words"]
@@ -138,3 +142,27 @@ def test_language_notes_are_printed_by_build_and_score(
     assert "may not be English" in capsys.readouterr().err
     assert main(["score", str(sample), str(reference)]) == 0
     assert "may not be English" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "inline",
+    [
+        "`" + "code " * 50 + ". Capital " + "code " * 50 + "`",
+        "[" + "label " * 50 + ". Capital " + "label " * 50 + "](https://example.com)",
+        "**" + "bold " * 50 + ". Capital " + ("bold " * 50).rstrip() + "**",
+        "*" + "italic " * 50 + ". Capital " + ("italic " * 50).rstrip() + "*",
+    ],
+)
+def test_long_block_keeps_inline_markup_whole(inline: str) -> None:
+    text = " ".join([SENTENCE] * 35) + " Use " + inline + " here. "
+    text += " ".join([SENTENCE] * 40)
+    chunks = window([Chunk("long", "long", text)], 500)
+    assert len(chunks) > 1
+    assert " ".join(chunk.text for chunk in chunks) == text
+    assert sum(len(words(prose(chunk.text).text)) for chunk in chunks) == len(
+        words(prose(text).text)
+    )
+    assert sum(prose(chunk.text).code_spans for chunk in chunks) == prose(text).code_spans
+    assert sum(prose(chunk.text).links for chunk in chunks) == prose(text).links
+    assert sum(prose(chunk.text).bold for chunk in chunks) == prose(text).bold
+    assert any(inline in chunk.text for chunk in chunks)

@@ -728,8 +728,9 @@ reference summaries, per-metric z-scores, Delta and held-out calibration; the re
 metrics supply the comparison. A note explains the omitted evidence.
 
 Prose blocks longer than 1.5 windows are split at sentence boundaries before packing.
-Sentences from the same block retain a single paragraph; code and other Markdown structures
-without safe boundaries stay whole. A note identifies windows over twice the requested
+Sentences from the same block retain a single paragraph; inline code, links and emphasis
+are never cut across windows. Code and other Markdown structures without safe boundaries
+stay whole. A note identifies windows over twice the requested
 size and suggests adding breaks or increasing the window size.
 
 The English check warns when fewer than half of letters are ASCII, or at least 50 tokens
