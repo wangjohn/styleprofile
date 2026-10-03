@@ -109,7 +109,7 @@ def test_a_cache_hit_gives_a_byte_identical_report(
     cache_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     settings = sp.Settings(syntax=False)
-    cold = sp.build(WRITER, settings, contrast=CONTRAST)
+    cold = sp.build(WRITER, settings, contrast=CONTRAST, cache=True)
     assert cache_home.exists()
     counting = Counting(monkeypatch)
     spans: list[int] = []
@@ -120,7 +120,7 @@ def test_a_cache_hit_gives_a_byte_identical_report(
         return measure_spans(parts, whole)
 
     monkeypatch.setattr(measure, "measure_spans", counting_spans)
-    warm = sp.build(WRITER, settings, contrast=CONTRAST)
+    warm = sp.build(WRITER, settings, contrast=CONTRAST, cache=True)
     assert counting.texts == []  # every chunk and piece came from the cache
     assert spans == []  # and every document read in parts for drift calibration
     assert "drift" in (warm.report.get("calibration") or {})
@@ -190,11 +190,11 @@ def test_adding_a_document_measures_only_the_new_one(
     corpus = tmp_path / "writer"
     shutil.copytree(WRITER, corpus)
     settings = sp.Settings(syntax=False)
-    sp.build(corpus, settings)
+    sp.build(corpus, settings, cache=True)
     new = corpus / "zz-new.md"
     new.write_text((ROOT / "examples/draft.md").read_text(encoding="utf-8"), encoding="utf-8")
     counting = Counting(monkeypatch)
-    grown = sp.build(corpus, settings)
+    grown = sp.build(corpus, settings, cache=True)
     new_windows = window(load_chunks([str(new)]), settings.window_words)
     assert len(counting.texts) == len(new_windows)
     # And the profile is the one a build without the cache gives.
@@ -208,7 +208,7 @@ def test_no_cache_neither_reads_nor_writes(
     settings = sp.Settings(syntax=False)
     sp.build(WRITER, settings, cache=False)
     assert not cache_home.exists()
-    sp.build(WRITER, settings)
+    sp.build(WRITER, settings, cache=True)
     size = cache_home.stat().st_size
     counting = Counting(monkeypatch)
     sp.build(WRITER, settings, cache=False)
@@ -226,13 +226,13 @@ def test_an_unusable_cache_is_left_out(tmp_path: Path, monkeypatch: pytest.Monke
     blocked = tmp_path / "blocked"
     blocked.write_text("not a directory", encoding="utf-8")
     monkeypatch.setenv("XDG_CACHE_HOME", str(blocked))
-    assert dumps_report(sp.build(WRITER, settings).report) == expected
+    assert dumps_report(sp.build(WRITER, settings, cache=True).report) == expected
     # The cache file is not a database.
     home = tmp_path / "garbage"
     (home / "styleprofile").mkdir(parents=True)
     (home / "styleprofile" / caching.FILENAME).write_bytes(b"\x00garbage" * 1000)
     monkeypatch.setenv("XDG_CACHE_HOME", str(home))
-    assert dumps_report(sp.build(WRITER, settings).report) == expected
+    assert dumps_report(sp.build(WRITER, settings, cache=True).report) == expected
 
 
 def test_an_unreadable_entry_is_measured_again(tmp_path: Path) -> None:
@@ -256,7 +256,7 @@ def test_a_relative_xdg_cache_home_is_ignored(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_the_cache_file_is_private(cache_home: Path) -> None:
-    sp.build(WRITER, sp.Settings(syntax=False))
+    sp.build(WRITER, sp.Settings(syntax=False), cache=True)
     assert cache_home.stat().st_mode & 0o077 == 0
     assert cache_home.parent.stat().st_mode & 0o077 == 0
 
@@ -326,7 +326,7 @@ def test_the_cache_command_shows_and_clears_it(
 ) -> None:
     assert main(["cache"]) == 0
     assert "empty" in capsys.readouterr().out
-    sp.build(WRITER, sp.Settings(syntax=False))
+    sp.build(WRITER, sp.Settings(syntax=False), cache=True)
     assert main(["cache"]) == 0
     out = capsys.readouterr().out
     assert str(cache_home) in out and "entries" in out
@@ -368,7 +368,7 @@ def test_a_damaged_cache_in_a_read_only_folder_is_left_out(
     cache_home.write_bytes(b"\x00garbage" * 1000)  # not a database, and cannot be replaced
     cache_home.parent.chmod(0o500)
     try:
-        profile = sp.build(WRITER, settings)
+        profile = sp.build(WRITER, settings, cache=True)
     finally:
         cache_home.parent.chmod(0o700)
     assert dumps_report(profile.report) == expected
@@ -390,7 +390,7 @@ def test_a_writer_that_fails_never_holds_up_the_run(
 
     monkeypatch.setattr(MeasurementCache, "_open", failing)
     monkeypatch.setattr(caching, "WRITE_BATCH", 1)  # a batch per entry: the queue fills up
-    profile = sp.build(WRITER, settings, contrast=CONTRAST)
+    profile = sp.build(WRITER, settings, contrast=CONTRAST, cache=True)
     assert dumps_report(profile.report) == expected
     [note] = _notes(profile)
     assert "permission denied" in note.message
@@ -404,7 +404,7 @@ def test_a_writer_that_stops_never_holds_up_the_run(
     monkeypatch.setattr(caching, "WRITE_BATCH", 1)
     done: list[sp.Profile] = []
     runner = threading.Thread(
-        target=lambda: done.append(sp.build(WRITER, sp.Settings(syntax=False)))
+        target=lambda: done.append(sp.build(WRITER, sp.Settings(syntax=False), cache=True))
     )
     runner.start()
     runner.join(60)
@@ -417,19 +417,19 @@ def test_the_environment_can_turn_the_cache_off(
     cache_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("STYLEPROFILE_NO_CACHE", "1")
-    sp.build(WRITER, sp.Settings(syntax=False))
+    sp.build(WRITER, sp.Settings(syntax=False), cache=True)
     assert not cache_home.exists()
     assert main(["cache"]) == 0
     assert "off: STYLEPROFILE_NO_CACHE is set" in capsys.readouterr().out
     monkeypatch.setenv("STYLEPROFILE_NO_CACHE", "0")
-    sp.build(WRITER, sp.Settings(syntax=False))
+    sp.build(WRITER, sp.Settings(syntax=False), cache=True)
     assert cache_home.exists()
 
 
 def test_scoring_leaves_nothing_in_the_cache_unless_asked(
     cache_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    profile = sp.build(WRITER, sp.Settings(syntax=False))
+    profile = sp.build(WRITER, sp.Settings(syntax=False), cache=True)
     entries = caching.describe(cache_home)[2]
     profile.score(DRAFT)
     assert caching.describe(cache_home)[2] == entries
@@ -481,7 +481,7 @@ def test_a_stuck_writer_is_given_up_on_within_seconds(
     expected = dumps_report(sp.build(WRITER, settings, contrast=CONTRAST, cache=False).report)
     started = time.monotonic()
     try:
-        profile = sp.build(WRITER, settings, contrast=CONTRAST)
+        profile = sp.build(WRITER, settings, contrast=CONTRAST, cache=True)
     finally:
         release.set()
     assert time.monotonic() - started < 60

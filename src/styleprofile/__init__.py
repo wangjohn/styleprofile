@@ -20,7 +20,9 @@ from styleprofile.api import (
     Settings,
     Text,
     build,
+    build_texts,
     evaluate,
+    load,
 )
 from styleprofile.core import (
     LikenessVerdict,
@@ -60,5 +62,7 @@ __all__ = [
     "Verdict",
     "__version__",
     "build",
+    "build_texts",
     "evaluate",
+    "load",
 ]

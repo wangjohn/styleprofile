@@ -17,6 +17,11 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Breaking changes
 
+- **The library leaves the measurement cache off by default.** `build` and `evaluate`
+  now require `cache=True` to store or reuse text pattern counts. CLI caching is unchanged.
+- **Settings objects on `Profile.score` are deprecated.** They still replace every
+  inherited setting; use keyword overrides to change only the fields you choose.
+
 - **Report version 8.** Rebuild profiles for paragraph metrics omitted on long single
   paragraphs and sentence-boundary windowing of long prose blocks.
 
@@ -32,6 +37,10 @@ then `styleprofile setup` for the parser-based metrics.
   save each input by its name, never as a path (#14).
 
 ### Added
+
+- **Start the Python library with strings.** `build_texts` and `Profile.score_text` accept
+  raw text, `load` reads a saved profile, and `build` accepts individual setting keywords.
+  Path strings keep their meaning and missing text-like paths point to the new functions.
 
 - **Faster CI and safer tests.** Test runs use up to four parallel workers, Python 3.14
   joins the syntax matrix, and permission tests skip under root. Release smoke tests also
