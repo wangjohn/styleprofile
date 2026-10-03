@@ -110,6 +110,7 @@ class ReportSettings(InputSettings):
     contrast: NotRequired[list[str] | None]
     # How a reference's contrast set was split, as ``split_used`` (empty without one).
     contrast_split_used: NotRequired[list[str]]
+    generic_contrast: NotRequired[bool]
 
 
 class EvaluationSettings(InputSettings):

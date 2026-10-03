@@ -13,6 +13,12 @@ doctest (`tests/test_api.py`) with the sample texts in `examples/` supplied as t
 
 ```
 
+The experimental `generic_contrast=True` build option adds bundled assistant-style drafts
+when you do not have your own. It also works with `build_texts` and can be combined with
+`contrast`. The report labels the combined set "generic LLM drafts". Drafts made from your
+own briefs are a stronger comparison; see [the recipe](contrast.md). This candidate set
+currently fails its held-out acceptance checks, documented in [Method](method.md#generic-contrast-candidate).
+
 For files and folders, use `Path`:
 
 ```python

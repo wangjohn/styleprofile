@@ -150,6 +150,8 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     made: list[tuple[str, Any, type]] = []
     # With spaCy when it is installed, so ``syntax_used`` is a parser as well as None.
     contrast = sp.build(WRITER, contrast=CONTRAST)
+    generic = sp.build(WRITER, generic_contrast=True, syntax=False)
+    made.append(("reference with generic contrast", generic.report, ReferenceReport))
     made += [
         ("reference with contrast", contrast.report, ReferenceReport),
         ("score with contrast", contrast.score(DRAFT, passages=True).report, ScoreReport),

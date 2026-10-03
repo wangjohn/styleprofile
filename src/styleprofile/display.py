@@ -1232,14 +1232,25 @@ def format_reference_summary(
     """The short view ``build`` prints: size, held-out range, contrast and warnings; ``full``
     adds every metric (``format_summary`` shows the key ones)."""
     if full:
-        return format_summary(report, color=color, full=True)
+        return format_summary(report, color=color, full=True) + _contrast_advice(report)
     style = _Style(color, truecolor=False)
     lines = [style.bold("STYLE PROFILE") + style.dim(f"   {_size(report)}")]
     lines += _reference_lines(report, style)
     lines += ["", style.dim("Pass --all, or run `styleprofile show` on it, to see the metrics.")]
     if report["warnings"]:
         lines += ["", *(style.warn(f"Note: {warning}") for warning in report["warnings"])]
-    return "\n".join(lines)
+    return "\n".join(lines) + _contrast_advice(report)
+
+
+def _contrast_advice(report: ReferenceReport) -> str:
+    if report["settings"].get("generic_contrast"):
+        return (
+            "\n\nGeneric contrast is a weaker comparison; drafts from your own briefs are better: "
+            "https://github.com/wangjohn/styleprofile/blob/main/docs/contrast.md"
+        )
+    if report.get("contrast") is None:
+        return "\n\nFor LLM-likeness, build with --generic-contrast, or add drafts with --contrast."
+    return ""
 
 
 def _size(report: ReportBase) -> str:

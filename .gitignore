@@ -16,6 +16,10 @@ dist/
 profiles/
 corpora/
 data/
+# Original bundled contrast resources are package data, not personal corpora.
+!src/styleprofile/data/
+!src/styleprofile/data/generic-contrast/
+!src/styleprofile/data/generic-contrast/*.md
 
 .DS_Store
 
