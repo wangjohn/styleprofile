@@ -51,6 +51,8 @@ DEMO_REPORT = f"{TMP}/demo-draft.json"
 # (name, arguments) in the order they run; later commands read what earlier ones wrote.
 # `build` gains --no-syntax in surface mode, and `score` and `show` inherit it from the profile.
 COMMANDS: list[tuple[str, list[str]]] = [
+    ("build-default", ["build", f"{TMP}/writer"]),
+    ("score-against", ["score", DRAFT, "--against", WRITER, "--contrast", CONTRAST]),
     ("build", ["build", WRITER, "--contrast", CONTRAST, "-o", REFERENCE]),
     ("score", ["score", DRAFT, REFERENCE, "-o", REPORT]),
     ("score-quiet", ["score", "-q", DRAFT, REFERENCE]),
@@ -147,6 +149,7 @@ def _run(argv: list[str], tmp: Path) -> str:
     text += f"--- stdout\n{stdout.getvalue()}"
     if stderr.getvalue():
         text += f"--- stderr\n{stderr.getvalue()}"
+    text = re.sub(r"in [0-9.]+ s, not saved", "in <time> s, not saved", text)
     # Longest first: the temporary directory may sit inside the repository or vice versa.
     for path, name in sorted(
         [(str(tmp), TMP), (str(tmp.resolve()), TMP), (str(ROOT), "<repo>")],
@@ -170,6 +173,7 @@ def outputs(
         pytest.skip("spaCy is not installed")
     tmp = tmp_path_factory.mktemp(mode)
     gen.generate("demo", out=tmp)
+    shutil.copytree(ROOT / WRITER, tmp / "writer")
     plain = tmp / "plain"
     plain.mkdir()
     for draft in sorted((ROOT / CONTRAST).glob("*.md")):
@@ -181,9 +185,14 @@ def outputs(
         patch.delenv("FORCE_COLOR", raising=False)
         patch.setenv("COLUMNS", "100")
         for name, args in MODES[mode]:
-            if mode == "surface" and args[0] == "build":
+            if mode == "surface" and (args[0] == "build" or "--against" in args):
                 args = [*args, "--no-syntax"]
-            results[name] = _run(args, tmp)
+            if name == "build-default":
+                with pytest.MonkeyPatch.context() as cwd:
+                    cwd.chdir(tmp)
+                    results[name] = _run(args, tmp)
+            else:
+                results[name] = _run(args, tmp)
     yield mode, results
 
 

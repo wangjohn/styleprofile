@@ -33,6 +33,11 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **One-command draft checks.** `score draft.md --against posts/` builds a cached reference
+  in memory, with optional contrast texts and a command to save it for reuse. `build`
+  defaults to the first input’s name plus `.profile.json`; stdin still needs `-o`.
+  Short-only scoring runs explain the reference’s actual minimum length and suggest `--pool`.
+
 - **Faster CI and safer tests.** Test runs use up to four parallel workers, Python 3.14
   joins the syntax matrix, and permission tests skip under root. Release smoke tests also
   install syntax and run setup; Dependabot checks Python dependencies.

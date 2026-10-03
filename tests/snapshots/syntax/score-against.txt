@@ -1,0 +1,39 @@
+$ styleprofile score examples/draft.md --against examples/writer --contrast examples/llm-drafts
+[exit 0]
+--- stdout
+Reference: built from 7 documents (4,496 words) in <time> s, not saved. To reuse it: styleprofile build examples/writer --contrast examples/llm-drafts -o writer.profile.json
+STYLE COMPARISON   1 chunk, 542 words   vs reference (7 chunks)
+
+Overall: close   Delta 0.81
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.85 typically (95% under 1.08).
+
+LLM-likeness: like the reference   0.70
+  The reference's own writing at this length (542 words) scores 0.21 typically (95% under 1.06); the LLM drafts 13.58.
+
+By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
+  close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
+  Voice and stance             1.32x  █████░░░░░░░░░░░░░░░  somewhat different
+  Vocabulary                   0.72x  ███░░░░░░░░░░░░░░░░░  close
+  Function words               0.66x  ███░░░░░░░░░░░░░░░░░  close
+  Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.49x  ██░░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.40x  ██░░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
+  Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
+
+Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
+                                                   this text   reference
+  Sentences per paragraph                               4.38        6.15   ▼▼▼
+  "more"                                             5.5 /1k     1.5 /1k   ▲▲
+  "but"                                              5.5 /1k     2.0 /1k   ▲▲
+  Sentences starting However / Moreover                 2.9%        0.0%   ▲▲  reference never varies
+  Em dashes                                          1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  "these"                                            1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  Words per paragraph                             67.8 words  86.9 words   ▼▼
+
+Pass --all to see every metric.
+--- stderr
+Thin reference: it has 7 chunks; aim for 15 or more by adding documents or using a smaller --window-words.
+Thin reference: it has 4,496 words; aim for 20,000 or more of the writer's text, in one genre.
