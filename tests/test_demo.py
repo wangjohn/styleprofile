@@ -97,3 +97,12 @@ def test_demo_resource_fallback_and_empty_directory(
 
 def test_demo_is_in_root_help() -> None:
     assert "Try the bundled samples: styleprofile demo" in build_parser().format_help()
+
+
+def test_demo_accepts_a_directory_starting_with_a_dash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["demo", "--dir=-samples", "--no-syntax"]) == 0
+    assert "Overall: close" in capsys.readouterr().out
+    assert (tmp_path / "-samples" / demo.PROFILE).is_file()

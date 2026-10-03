@@ -1060,22 +1060,25 @@ def _run_setup(args: argparse.Namespace) -> int:
 def _run_demo(args: argparse.Namespace) -> int:
     directory, samples = demo.prepare(args.dir)
     # Keep the ordinary build/score output and explicit CLI build cache behavior.
-    root = str(Path(args.dir).expanduser())
-    profile = str(Path(root) / demo.PROFILE)
+    root = Path(args.dir).expanduser()
+    # A relative folder starting with '-' would be parsed as a build/score option.
+    if str(root).startswith("-"):
+        root = directory
+    profile = (root / demo.PROFILE).as_posix()
     syntax = ["--no-syntax"] if args.no_syntax else []
     _dispatch(
         [
             "build",
-            str(Path(root) / "writer"),
+            (root / "writer").as_posix(),
             "--contrast",
-            str(Path(root) / "llm-drafts"),
+            (root / "llm-drafts").as_posix(),
             "-o",
             profile,
             *syntax,
         ]
     )
     demo.record(directory, samples)
-    code = _dispatch(["score", str(Path(root) / "draft.md"), profile])
+    code = _dispatch(["score", (root / "draft.md").as_posix(), profile])
     print("\nNext: try it on your own texts")
     print(f"  {PROG} build posts/ --contrast llm-drafts/ -o writer.json")
     print(f"  {PROG} score draft.md writer.json")

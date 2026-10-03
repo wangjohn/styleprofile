@@ -150,7 +150,14 @@ def _run(argv: list[str], tmp: Path) -> str:
         text += f"--- stderr\n{stderr.getvalue()}"
     # Longest first: the temporary directory may sit inside the repository or vice versa.
     for path, name in sorted(
-        [(str(tmp), TMP), (str(tmp.resolve()), TMP), (str(ROOT), "<repo>")],
+        [
+            (str(tmp), TMP),
+            (str(tmp.resolve()), TMP),
+            (tmp.as_posix(), TMP),
+            (tmp.resolve().as_posix(), TMP),
+            (str(ROOT), "<repo>"),
+            (ROOT.as_posix(), "<repo>"),
+        ],
         key=lambda item: -len(item[0]),
     ):
         text = text.replace(path, name)
