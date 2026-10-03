@@ -101,6 +101,7 @@ from styleprofile.surface import (
     block_word_count,
     classify,
     jensen_shannon,
+    plain_sentences,
     strip_front_matter,
     words,
 )
@@ -149,7 +150,8 @@ from styleprofile.weighting import (
 # never as paths; the contrast AUC's ``bootstrap`` records its method and resamples.
 # 7 (0.2.0): nominalizations_per_1k no longer counts words such as fence, city or sentence
 # (see ``syntax.is_nominalization``), so a version 6 profile's values would not match.
-VERSION = 7
+# 8 (0.2.0): long plain blocks split at sentences; long single paragraphs omit structure.
+VERSION = 8
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
 REFERENCE: Final = "reference"
@@ -970,17 +972,36 @@ def _pack(counts: Sequence[int], window_words: int, glued: Sequence[bool]) -> li
 def _pieces(text: str, window_words: int) -> list[tuple[str, int]]:
     """``text`` cut into windows (see ``window``), each with its prose word count."""
     blocks = classify(text)
-    counts = [block_word_count(block) for block in blocks]
-    groups = _pack(counts, window_words, [block.continues_list for block in blocks])
-    return [
-        ("\n\n".join(blocks[index].raw for index in group), sum(counts[index] for index in group))
-        for group in groups
-    ]
+    pieces: list[tuple[str, int, bool, int]] = []
+    for index, block in enumerate(blocks):
+        count = block_word_count(block)
+        split = plain_sentences(block) if count > window_words * 1.5 else None
+        if split and len(split) > 1:
+            for sentence in split:
+                size = block_word_count(replace(block, raw=sentence))
+                pieces.append((sentence, size, False, index))
+        else:
+            pieces.append((block.raw, count, block.continues_list, index))
+    counts = [piece[1] for piece in pieces]
+    groups = _pack(counts, window_words, [piece[2] for piece in pieces])
+    result: list[tuple[str, int]] = []
+    for group in groups:
+        text_parts: list[str] = []
+        previous = None
+        for index in group:
+            raw, _, _, block_index = pieces[index]
+            if text_parts:
+                text_parts.append(" " if previous == block_index else "\n\n")
+            text_parts.append(raw)
+            previous = block_index
+        result.append(("".join(text_parts), sum(counts[index] for index in group)))
+    return result
 
 
 def window(chunks: Sequence[Chunk], window_words: int) -> list[Chunk]:
-    """Split chunks into roughly ``window_words``-word pieces at Markdown block boundaries.
+    """Split chunks into roughly ``window_words``-word pieces at blocks or sentence boundaries.
 
+    Plain prose blocks over one and a half windows split at sentence boundaries first.
     Sizes count prose words only (code, URLs and markup excluded). Fenced code stays whole
     and a list's indented continuation stays with its list. A window closes early rather
     than grow past one and a half windows. A remainder under half a window joins the

@@ -10,12 +10,15 @@ The first release on PyPI: `pip install styleprofile`, or `pip install "stylepro
 then `styleprofile setup` for the parser-based metrics.
 
 > [!IMPORTANT]
-> **Rebuild your profiles.** Reports now carry report version 7, and styleprofile refuses
+> **Rebuild your profiles.** Reports now carry report version 8, and styleprofile refuses
 > any other version with a message saying to rebuild. Run `styleprofile build` again on the
 > writer's texts, and `styleprofile score` again for saved score reports. There is no
 > migration: several metrics, the calibration and the report layout all changed.
 
 ### Breaking changes
+
+- **Report version 8.** Rebuild profiles for paragraph metrics omitted on long single
+  paragraphs and sentence-boundary windowing of long prose blocks.
 
 - **Report version 7.** Profiles and score reports from earlier versions are refused with a
   "rebuild it" message rather than migrated (#9, #13).
@@ -141,6 +144,10 @@ then `styleprofile setup` for the parser-based metrics.
   adding documents or reducing the window size. Incomparable library results are not
   judged, and any CLI fail flag rejects them with exit status 3. Too-short texts still
   never fail a run.
+
+- **Robust text input.** Long prose blocks split at sentence boundaries. Paragraph
+  structure is omitted on long single paragraphs, with notes for missing breaks, oversized
+  windows and text unlikely to be English. Empty-input errors explain what was removed.
 
 - **Nominalizations** count nouns that name the action, state or quality of a different
   verb or adjective (decision, motion, darkness, distance), and no longer count fence,
