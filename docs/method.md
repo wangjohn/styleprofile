@@ -717,3 +717,23 @@ never narrows below 0.5 for Delta and its areas (half a standard deviation per m
 an area the writer never varies in, like Markdown in plain essays, cannot turn a trace into
 "very different". Likeness counts only the part of each z toward the contrast drafts, about
 half of |z| for noise, so its band never narrows below 0.25.
+
+
+### Input structure and language
+
+A chunk with at least 300 prose words in one paragraph has no useful paragraph-structure
+evidence. Its `paragraph_sentences_mean`, `paragraph_words_mean` and
+`one_sentence_paragraphs_pct` are missing, rather than zero. Missing values are left out of
+reference summaries, per-metric z-scores, Delta and held-out calibration; the remaining
+metrics supply the comparison. A note explains the omitted evidence.
+
+Prose blocks longer than 1.5 windows are split at sentence boundaries before packing.
+Sentences from the same block retain a single paragraph; code and other Markdown structures
+without safe boundaries stay whole. A note identifies windows over twice the requested
+size and suggests adding breaks or increasing the window size.
+
+The English check warns when fewer than half of letters are ASCII, or at least 50 tokens
+contain fewer than 5% of fifty common English function words. It is deliberately
+conservative: it does not identify a language or refuse text. Names, specialist vocabulary
+and mixed languages can confuse it. English metrics and the optional English parser can
+be unreliable on other languages. The check runs on original inputs for build and score.

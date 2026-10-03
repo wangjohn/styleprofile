@@ -37,6 +37,7 @@ from styleprofile.surface import (
     Metrics,
     Prose,
     char_trigrams,
+    classify,
     masked_bigrams,
     prose,
     surface_metrics,
@@ -558,10 +559,28 @@ def measure(
     if not kept:
         if allow_empty:
             return Measured([], [], [], {}, empty, below, [])
+        causes: set[str] = set()
+        for chunk in chunks:
+            blocks = classify(chunk.text)
+            parsed = prose(chunk.text)
+            if not chunk.text.strip():
+                causes.add("empty after reading or conversion")
+            elif blocks and all(block.code for block in blocks):
+                causes.add("only code")
+            elif parsed.headings and not parsed.text:
+                causes.add("only headings")
+            elif not parsed.text:
+                causes.add("no readable prose after removing markup, URLs and code")
+        cause = "; ".join(sorted(causes))
+        advice = "Add readable prose"
+        if below:
+            advice += ", add longer texts or lower min_words"
         raise StyleProfileError(
             f"no chunks with at least {max(min_words, 1)} prose word(s) to profile "
-            f"({empty} had no prose, {below} were shorter)",
+            f"({empty} had no prose, {below} were shorter)"
+            f"{': ' + cause if cause else ''}. {advice}.",
             code="no_chunks",
+            setting="min_words" if below else None,
         )
 
     # The calibration pieces.

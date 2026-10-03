@@ -116,7 +116,7 @@ from styleprofile.split import (
     plan_split,
     stand_in_groups,
 )
-from styleprofile.surface import prose, words
+from styleprofile.surface import paragraph_metrics_missing, prose, unlikely_english, words
 from styleprofile.syntax import DEFAULT_MODEL, Parser, SyntaxUnavailableError, load_parser
 from styleprofile.weighting import FLOOR_DOCUMENTS
 
@@ -1615,7 +1615,39 @@ def _chunked(
         like=like,
         records=records,
     )
+    for chunk in chunks:
+        parsed = prose(chunk.text)
+        if unlikely_english(parsed):
+            notes.append(
+                Note(
+                    f"{_label(chunk)} may not be English; English-based measurements may be "
+                    "unreliable. Use English texts for a dependable comparison.",
+                    NoteCode.NON_ENGLISH,
+                )
+            )
     windows, warnings = cut.windows, ()
+    for chunk in windows:
+        parsed = prose(chunk.text)
+        size = len(words(parsed.text))
+        if paragraph_metrics_missing(parsed, size):
+            notes.append(
+                Note(
+                    f"{chunk.id}: paragraph metrics were left out because the text has no "
+                    "paragraph breaks. Keep the original paragraph breaks when available.",
+                    NoteCode.NO_PARAGRAPH_BREAKS,
+                )
+            )
+        if settings.window_words and size > 2 * settings.window_words:
+            notes.append(
+                Note(
+                    f"{chunk.id}: {size:,} prose words exceed twice window_words "
+                    f"({settings.window_words:,}); no safe sentence boundary could split this "
+                    "block further. Add sentence or paragraph breaks, or use a larger "
+                    "window_words.",
+                    NoteCode.OVERSIZE_CHUNK,
+                    setting="window_words",
+                )
+            )
     if stand_ins:
         windows, warnings = _stand_ins(windows, stand_ins, notes, role)
         if warnings:

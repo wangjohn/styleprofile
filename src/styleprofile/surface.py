@@ -82,6 +82,87 @@ _NUMBER_ABBREVIATION = re.compile(r"\b(?:No|Nos|[Vv]ol|pp|[Cc]h)\.$")
 _EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
 _ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
 _FUNCTION_SET = frozenset(FUNCTION_WORDS)
+PARAGRAPH_METRICS = (
+    "paragraph_sentences_mean",
+    "paragraph_words_mean",
+    "one_sentence_paragraphs_pct",
+)
+# Fifty common English function words; a low share is only a warning, not a language label.
+_ENGLISH_WORDS = frozenset(
+    [
+        "the",
+        "of",
+        "and",
+        "to",
+        "a",
+        "in",
+        "is",
+        "it",
+        "you",
+        "that",
+        "he",
+        "was",
+        "for",
+        "on",
+        "are",
+        "with",
+        "as",
+        "i",
+        "his",
+        "they",
+        "be",
+        "at",
+        "been",
+        "have",
+        "this",
+        "from",
+        "or",
+        "had",
+        "by",
+        "not",
+        "but",
+        "what",
+        "all",
+        "were",
+        "we",
+        "when",
+        "your",
+        "can",
+        "there",
+        "would",
+        "an",
+        "each",
+        "which",
+        "she",
+        "do",
+        "how",
+        "their",
+        "if",
+        "will",
+        "up",
+    ]
+)
+
+
+def paragraph_metrics_missing(parsed: Prose, word_count: int) -> bool:
+    """A long single paragraph provides no useful paragraph-structure evidence."""
+    return word_count >= 300 and len(parsed.paragraphs) == 1
+
+
+def unlikely_english(parsed: Prose) -> bool:
+    """Flag only strong evidence: few English function words or mostly non-ASCII letters.
+
+    Very short texts have too little evidence for the function-word check.
+    """
+    tokens = words(parsed.text)
+    letters = [character for character in parsed.text if character.isalpha()]
+    if not tokens or not letters:
+        return False
+    ascii_share = sum(character.isascii() for character in letters) / len(letters)
+    function_share = sum(token in _ENGLISH_WORDS for token in tokens) / len(tokens)
+    return ascii_share < 0.5 or (len(tokens) >= 50 and function_share < 0.05)
+
+
 MASK = "\N{MIDDLE DOT}"
 
 
@@ -507,6 +588,8 @@ def surface_metrics(
         "code_spans_per_1k": rate(parsed.code_spans),
         **{f"fw_{word}_per_1k": rate(function_counts[word]) for word in FUNCTION_WORDS},
     }
+    if paragraph_metrics_missing(parsed, word_count):
+        values.update(dict.fromkeys(PARAGRAPH_METRICS))
     return grouped(values, syntax=False)
 
 

@@ -30,6 +30,12 @@ class StyleProfileError(ValueError):
 class NoteCode(StrEnum):
     """The kinds of ``Note``. Front ends dispatch on these, so every note has one."""
 
+    NO_PARAGRAPH_BREAKS = "no_paragraph_breaks"
+    """Paragraph structure is omitted for a long single paragraph."""
+    OVERSIZE_CHUNK = "oversize_chunk"
+    """A chunk is still longer than twice the requested window."""
+    NON_ENGLISH = "non_english"
+    """Text has little evidence of English; English-based metrics may be unreliable."""
     NO_SYNTAX = "no_syntax"
     """spaCy or its English model is not installed, so syntax metrics are left out."""
     REPEATED_INPUT = "repeated_input"
