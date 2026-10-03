@@ -12,7 +12,7 @@ from styleprofile import measure
 from styleprofile.cli import main
 from styleprofile.core import NoteCode
 from styleprofile.measure import Measurer
-from styleprofile.profile import build_reference, drop_duplicates, load_chunks, window
+from styleprofile.profile import build_reference, drop_duplicates, dumps_report, load_chunks, window
 
 ROOT = Path(__file__).resolve().parent.parent
 WRITER = ROOT / "examples" / "writer"
@@ -253,6 +253,7 @@ def test_one_shot_paragraph_scoring_builds_the_requested_calibration(
     output = capsys.readouterr()
     report = json.loads(output.out)
     assert report["passages"]
-    assert report["reference"]["delta_mean"] == expected.report["reference"]["delta_mean"]
+    encoded_expected = json.loads(dumps_report(expected.report))
+    assert report["reference"]["delta_mean"] == encoded_expected["reference"]["delta_mean"]
     assert "Paragraph checks need" not in output.err
     assert "To reuse it:" in output.err and "--by-paragraph" in output.err
