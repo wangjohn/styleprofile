@@ -412,7 +412,9 @@ def test_auto_leaves_a_handful_of_short_texts_alone_and_says_so(tmp_path: Path) 
         "1 window, too few to calibrate, so each is kept on its own; use pool to join them "
         "anyway"
     )
-    forced = sp.build(folder, sp.Settings(window_words=WINDOW, syntax=False, pool=True))
+    with pytest.raises(sp.StyleProfileError, match="at least 2 chunks"):
+        sp.build(folder, sp.Settings(window_words=WINDOW, syntax=False, pool=True))
+    forced = sp.build(folder, sp.Settings(window_words=WINDOW // 2, syntax=False, pool=True))
     assert _pooled(forced.notes)[0].startswith("joined 8 files")
     assert forced.report["chunk_count"] < 8
 

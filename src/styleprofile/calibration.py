@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any, cast
 
+from styleprofile.core import Verdict
 from styleprofile.schema import (
     ChunkCalibration,
     GroupRange,
@@ -692,6 +693,10 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> Sc
         )
     deltas = [score["delta"] for score in scored if score["delta"] is not None]
     delta = _mean(deltas)
+    incomparable = bool(judged) and delta is None
+    if incomparable:
+        judged = []
+        reason = "no metrics could be compared with the reference"
     ranges = [score["calibration"]["delta"] for score in scored if score["delta"] is not None]
     ceiling = pooled_ceiling(ranges, MIN_CEILING) if all(ranges) else None
     widen = _mean([score["calibration"].get("stretch", 1.0) for score in scored]) or 1.0
@@ -716,7 +721,13 @@ def verdict(rows: Sequence[Mapping[str, Any]], contrast_label: str | None) -> Sc
         "setting": "window_words" if reason and "window_words" in reason else None,
         "delta": overall,
         # Plain strings, as a saved report reads them back.
-        "verdict": str(TOO_SHORT if not judged or level is None else DISTANCE_WORDS[level]),
+        "verdict": str(
+            Verdict.NOT_COMPARABLE
+            if incomparable
+            else TOO_SHORT
+            if not judged or level is None
+            else DISTANCE_WORDS[level]
+        ),
         "by_group": _by_group(scored, judged=bool(judged), widen=widen),
         "likeness": (
             _likeness(scored, contrast_label, judged=bool(judged))

@@ -473,13 +473,13 @@ def test_a_short_document_is_too_short_to_judge_and_never_fails(
     ]
 
 
-def test_a_document_that_is_not_comparable_never_fails(profile: sp.Profile) -> None:
+def test_a_document_that_is_not_comparable_is_not_judged(profile: sp.Profile) -> None:
     result = profile.score([OWN, DRAFT])
     for entry in result.report["documents"]:
         # Judged on length, but with no metric in common: no Delta verdict.
         entry["delta"] = None
         entry["verdict"] = str(sp.Verdict.NOT_COMPARABLE)
-    assert all(document.judged for document in result.documents)
+    assert all(not document.judged and document.reason for document in result.documents)
     assert result.failing(sp.Verdict.SOMEWHAT_DIFFERENT, sp.LikenessVerdict.FEW_TRAITS) == ()
 
 

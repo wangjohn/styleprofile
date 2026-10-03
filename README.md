@@ -327,15 +327,17 @@ failed: posts/long-essay.md: 2 of 17 chunks read clearly different or lean LLM
 | 0 | scored; no document reached a `--fail-above`, `--fail-likeness` or `--fail-flagged` level |
 | 1 | an error, such as a missing file or an unreadable profile |
 | 2 | invalid command-line usage |
-| 3 | a document reached the `--fail-above`, `--fail-likeness` or `--fail-flagged` level |
+| 3 | a document reached a `--fail-*` level, or could not be compared when a fail flag was given |
 
 Each document is named as you typed it, and a JSONL record by its file and id
-(`exports/comments.jsonl:17`); standard input is `<stdin>`. A document with no verdict,
-because it is too short to judge (its line says `too short to judge (36 words)`) or has no
-metric in common with the reference, never fails a run. With a fail flag, the JSON report (`--json` or `-o`)
+(`exports/comments.jsonl:17`); standard input is `<stdin>`. A document that could not be compared with the reference fails a run when any
+`--fail-*` flag is given. A document that is too short to judge (its line says
+`too short to judge (36 words)`) still never fails a run. With a fail flag, the JSON report (`--json` or `-o`)
 records the levels asked for under `fail`, and under `failed` each document that reached
 one, with the Delta and likeness verdicts that did and how many of its judged chunks are
-flagged on their own (`flagged` of `chunks_judged`); that is the form for scripts to read.
+flagged on their own (`flagged` of `chunks_judged`). An incomparable document instead has
+`reason: "could not be compared with the reference"` and null verdicts; that is the form
+for scripts to read.
 
 ## Getting useful results
 
