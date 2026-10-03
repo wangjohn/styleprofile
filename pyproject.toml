@@ -60,7 +60,7 @@ styleprofile = "styleprofile.cli:main"
 [dependency-groups]
 dev = [
   "pyright>=1.1.400,<2",
-  "pytest>=8.3,<9",
+  "pytest>=8.3,<10",
   "pytest-xdist>=3.6,<4",
   "ruff>=0.11,<1",
 ]
