@@ -225,3 +225,34 @@ def test_surface_failure_cancels_queued_syntax_and_retries_remaining_chunks(
             next(surface)
             next(syntax)
     assert retried == texts[measure.TASK_TEXTS :]
+
+
+def test_one_shot_paragraph_scoring_builds_the_requested_calibration(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = sp.build(WRITER, contrast=CONTRAST, syntax=False, passages=True).score(
+        DRAFT, passages=True
+    )
+    assert (
+        main(
+            [
+                "score",
+                str(DRAFT),
+                "--against",
+                str(WRITER),
+                "--contrast",
+                str(CONTRAST),
+                "--by-paragraph",
+                "--no-syntax",
+                "--no-cache",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr()
+    report = json.loads(output.out)
+    assert report["passages"]
+    assert report["reference"]["delta_mean"] == expected.report["reference"]["delta_mean"]
+    assert "Paragraph checks need" not in output.err
+    assert "To reuse it:" in output.err and "--by-paragraph" in output.err

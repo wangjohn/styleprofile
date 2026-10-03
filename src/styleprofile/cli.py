@@ -14,17 +14,19 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import shutil
 import sys
 import textwrap
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
-from styleprofile import __version__, api, spacy_model
+from styleprofile import __version__, api, demo, spacy_model
 from styleprofile import cache as caching
 from styleprofile.api import (
     AUTO,
@@ -37,7 +39,7 @@ from styleprofile.api import (
     Settings,
     SettingsOverrides,
 )
-from styleprofile.calibration import flagged_text, too_short_text
+from styleprofile.calibration import MIN_JUDGED_WORDS, Lengths, flagged_text, too_short_text
 from styleprofile.core import (
     LikenessVerdict,
     Note,
@@ -274,9 +276,12 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         prog=PROG,
         description="Measure a writer's style, then see how far a draft drifts from it.",
         epilog=(
+            f"Try the bundled samples: {PROG} demo\n\n"
             "Build a reference from the writer's texts once, then score drafts against it:\n"
             f"  {PROG} build posts/ --contrast llm-drafts/ -o writer.json\n"
-            f"  {PROG} score draft.md writer.json\n\n"
+            f"  {PROG} score draft.md writer.json\n"
+            f"Or build and score in one command: {PROG} score draft.md --against posts/\n"
+            "Short drafts need at least 75 words; use --pool to judge several together.\n\n"
             f"Run `{PROG} COMMAND --help` for a command's options."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -294,8 +299,11 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         **_help_parser(
             "Build a reference profile from a writer's texts.",
             f"{PROG} build posts/ --contrast llm-drafts/ -o writer.json",
-            usage=f"{PROG} build [options] INPUT [INPUT ...] -o PROFILE.json",
+            usage=f"{PROG} build [options] INPUT [INPUT ...] [-o PROFILE.json]",
         ),
+    )
+    build.formatter_class = lambda prog: argparse.RawDescriptionHelpFormatter(
+        prog, width=100, max_help_position=32
     )
     build.add_argument(
         "inputs",
@@ -304,7 +312,10 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         help="the writer's Markdown, text, HTML or JSONL files, folders of them, or - for stdin",
     )
     build.add_argument(
-        "-o", "--output", required=True, metavar="PROFILE.json", help="where to save the profile"
+        "-o",
+        "--output",
+        metavar="PROFILE.json",
+        help="default: first input name.profile.json; stdin needs -o",
     )
     build.add_argument(
         "--contrast",
@@ -343,14 +354,19 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     score_parser = commands.add_parser(
         "score",
         **_help_parser(
-            "Score drafts against a reference profile. Window size, minimum words, text field, "
-            "group field and syntax come from the reference unless overridden.",
+            "Score drafts against a saved profile, or build one with --against. Settings come "
+            "from the reference unless overridden. Below its shortest calibrated length "
+            "(at least 75 words), use --pool to judge short texts together.",
             f"{PROG} score draft.md writer.json\n  "
+            f"{PROG} score draft.md --against posts/ --contrast llm-drafts/\n  "
             f"{PROG} score -q --fail-above clearly --fail-flagged 1 -r writer.json a.md b.md"
             "   # a hook or CI",
             usage=f"{PROG} score [options] [-r REFERENCE.json] SAMPLE [SAMPLE ...] "
-            "[REFERENCE.json]",
+            "[REFERENCE.json] [--against CORPUS [CORPUS ...]]",
         ),
+    )
+    score_parser.formatter_class = lambda prog: argparse.RawDescriptionHelpFormatter(
+        prog, width=120, max_help_position=44
     )
     score_parser.add_argument(
         "paths",
@@ -365,6 +381,26 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         metavar="REFERENCE.json",
         help="the reference profile, if not last (for pre-commit)",
     )
+    score_parser.add_argument(
+        "--against",
+        nargs="+",
+        metavar="CORPUS",
+        help="build in memory; put drafts first; excludes a saved profile or -r",
+    )
+    score_parser.add_argument(
+        "--contrast",
+        action="extend",
+        nargs="+",
+        metavar="PATH",
+        help="contrast texts for --against; repeat for more paths",
+    )
+    score_parser.add_argument(
+        "--contrast-label",
+        default="LLM",
+        metavar="NAME",
+        help="name of the --against contrast set (default: LLM)",
+    )
+    _add_run_flags(score_parser)
     score_parser.add_argument(
         "-o", "--output", metavar="REPORT.json", help="also save the full report as JSON"
     )
@@ -517,6 +553,25 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
             f"{PROG} setup",
         ),
     )
+    demo_parser = commands.add_parser(
+        "demo",
+        **_help_parser(
+            "Try the bundled sample texts: copy them to a folder, build a reference and "
+            "score a draft. An unchanged previous demo folder can be reused.",
+            f"{PROG} demo --dir styleprofile-demo",
+        ),
+    )
+    demo_parser.add_argument(
+        "--dir",
+        default="styleprofile-demo",
+        metavar="DIR",
+        help="where to put the samples and profile (default: ./styleprofile-demo)",
+    )
+    demo_parser.add_argument(
+        "--no-syntax",
+        action="store_true",
+        help="skip the spaCy parser and its metrics",
+    )
     return parser, dict(commands.choices)
 
 
@@ -605,7 +660,27 @@ def _status(shown: bool = True) -> Iterator[Callable[[Progress], None] | None]:
         line.clear()
 
 
+def _default_output(inputs: Sequence[str]) -> str:
+    if "-" in inputs:
+        raise StyleProfileError("build from stdin requires -o; give a path to save the profile")
+    first = expand_path(inputs[0])
+    name = (
+        (first.resolve().name if first.name in ("", "..") else first.name)
+        if first.is_dir()
+        else first.stem
+    )
+    return f"{name or first.resolve().name}.profile.json"
+
+
+def _thin_warnings(profile: Profile) -> None:
+    for note in profile.notes:
+        if note.code == NoteCode.THIN_REFERENCE:
+            reason = _flagged(note.message, note.setting)
+            print(_warn(f"Thin reference: {reason}.", _color(sys.stderr)), file=sys.stderr)
+
+
 def _run_build(args: argparse.Namespace) -> int:
+    args.output = args.output or _default_output(args.inputs)
     settings = _settings(args)
     typed = [*args.inputs, *(args.contrast or [])]
     _inputs_exist(typed)
@@ -628,11 +703,7 @@ def _run_build(args: argparse.Namespace) -> int:
     profile.save(args.output)
     print(profile.to_text(color=_color(), full=args.all))
     sys.stdout.flush()  # keep the warnings after the summary when both go to one pipe
-    color_err = _color(sys.stderr)
-    for note in profile.notes:
-        if note.code == NoteCode.THIN_REFERENCE:
-            reason = _flagged(note.message, note.setting)
-            print(_warn(f"Thin reference: {reason}.", color_err), file=sys.stderr)
+    _thin_warnings(profile)
     print(f"\nwrote {args.output}")
     print(f"Next, score a draft against it:\n  {PROG} score <draft> {shell_join([args.output])}")
     return 0
@@ -845,14 +916,111 @@ def _failed_line(doc: DocumentResult, entry: FailedDocument, label: str | None) 
     return f"failed: {doc.shown}: " + "; ".join(parts)
 
 
+def _is_saved_report(value: str) -> bool:
+    if value == "-":
+        return False
+    try:
+        load_report(expand_path(value), value)
+    except StyleProfileError as error:
+        return error.code == "outdated"
+    return True
+
+
+def _against_reference(args: argparse.Namespace) -> tuple[Profile, str]:
+    if args.reference is not None or any(_is_saved_report(path) for path in args.paths):
+        raise StyleProfileError(
+            "--against cannot be combined with a reference profile or -r; "
+            "give only drafts before --against"
+        )
+    typed = [*args.paths, *args.against, *(args.contrast or [])]
+    if typed.count("-") > 1:
+        raise StyleProfileError("stdin can be read only once; give files for the other inputs")
+    _inputs_exist(typed)
+    if args.output:
+        _refuse_overwrite(args.output, typed)
+    build_args = argparse.Namespace(**vars(args))
+    defaults = Settings()
+    for name in ("window_words", "min_words", "split_on", "top_k"):
+        if getattr(build_args, name) is None:
+            setattr(build_args, name, getattr(defaults, name))
+    started = time.perf_counter()
+    with _status(not (args.json or args.quiet)) as progress:
+        profile = api.build(
+            args.against,
+            _settings(build_args),
+            contrast=args.contrast,
+            contrast_label=args.contrast_label,
+            passages=args.by_paragraph,
+            progress=progress,
+            jobs=args.jobs,
+            cache=not args.no_cache,
+        )
+    elapsed = time.perf_counter() - started
+    if args.output:
+        _refuse_overwrite(args.output, typed, profile.sources)
+    command = [PROG, "build", *args.against]
+    if args.by_paragraph:
+        command += ["--by-paragraph"]
+    for path in args.contrast or []:
+        command += ["--contrast", path]
+    if args.contrast_label != "LLM":
+        command += ["--contrast-label", args.contrast_label]
+    for name in ("window_words", "min_words", "text_field", "group_field", "split_on"):
+        value = getattr(args, name)
+        if value is not None:
+            command += ["--" + name.replace("_", "-"), str(value)]
+    if args.input_format != AUTO:
+        command += ["--input-format", args.input_format]
+    if args.no_syntax:
+        command += ["--no-syntax"]
+    if args.pool is not None:
+        command += ["--pool" if args.pool else "--no-pool"]
+    output = "reference.profile.json" if "-" in args.against else _default_output(args.against)
+    command += ["-o", output]
+    report = profile.report
+    summary = (
+        f"Reference: built from {_plural(report['document_count'], 'document')} "
+        f"({report['word_count']:,} words) in {elapsed:.1f} s, not saved. "
+        f"To reuse it: {shell_join(command)}"
+    )
+    _notes(profile.notes)
+    _thin_warnings(profile)
+    return profile, summary
+
+
+def _short_text_help(profile: Profile, result: ScoreResult) -> str | None:
+    lengths = Lengths(profile.report)
+    floor = (
+        min(anchor.covers for anchor in lengths.anchors)
+        if lengths.calibrated
+        else lengths.uncalibrated_words / 2
+    )
+    shortest = max(MIN_JUDGED_WORDS, math.ceil(floor))
+    if result.documents and all(doc.words < shortest for doc in result.documents):
+        return (
+            f"styleprofile judges {shortest:,} words or more; "
+            "score several short texts together with --pool"
+        )
+    return None
+
+
 def _run_score(args: argparse.Namespace) -> int:
-    samples, reference_arg = _split_score_paths(args)
-    if args.output and _path(args.output) == _path(reference_arg):
+    summary = None
+    if args.against:
+        profile, summary = _against_reference(args)
+        samples, reference_arg = list(args.paths), "the in-memory reference"
+    else:
+        if args.contrast:
+            raise StyleProfileError(
+                "--contrast needs --against; rebuild the saved reference with --contrast instead"
+            )
+        samples, reference_arg = _split_score_paths(args)
+        profile = _load_score_reference(reference_arg, flagged=args.reference is not None)
+    if args.output and not args.against and _path(args.output) == _path(reference_arg):
         raise StyleProfileError("--output is the reference file; choose another output path")
     _inputs_exist(samples)
     if args.output:
         _refuse_overwrite(args.output, samples)
-    profile = _load_score_reference(reference_arg, flagged=args.reference is not None)
     if args.by_paragraph and not (profile.report.get("calibration") or {}).get("drift"):
         command = [
             PROG,
@@ -892,7 +1060,9 @@ def _run_score(args: argparse.Namespace) -> int:
     if args.split_on is not None:
         overrides["split_on"] = args.split_on
     with _status(not (args.json or args.quiet)) as progress:
-        result = profile.score(samples, progress=progress, passages=args.by_paragraph, **overrides)
+        result = profile.score(
+            samples, progress=progress, passages=args.by_paragraph, jobs=args.jobs, **overrides
+        )
     if (
         args.fail_likeness
         and not profile.report.get("contrast")
@@ -918,7 +1088,12 @@ def _run_score(args: argparse.Namespace) -> int:
     if args.output:
         _refuse_overwrite(args.output, samples, result.sources)
         result.save(args.output)
+    help_short = _short_text_help(profile, result)
+    if summary:
+        print(summary, file=sys.stderr if args.json else sys.stdout)
     if args.json:
+        if help_short:
+            _note(help_short)
         sys.stdout.write(dumps_report(result.report))
         if args.output:
             _note(f"wrote {args.output}")
@@ -934,6 +1109,8 @@ def _run_score(args: argparse.Namespace) -> int:
         print(_flagged(text, setting))
         if args.output:
             print(f"\nwrote {args.output}")
+    if help_short and not args.json:
+        print(help_short)
     if failed:
         sys.stdout.flush()  # keep these after the report when both go to one pipe
         for doc, entry in failed:
@@ -1063,6 +1240,35 @@ def _run_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_demo(args: argparse.Namespace) -> int:
+    directory, samples = demo.prepare(args.dir)
+    # Keep the ordinary build/score output and explicit CLI build cache behavior.
+    root = Path(args.dir).expanduser()
+    # A relative folder starting with '-' would be parsed as a build/score option.
+    if str(root).startswith("-"):
+        root = directory
+    profile = (root / demo.PROFILE).as_posix()
+    syntax = ["--no-syntax"] if args.no_syntax else []
+    _dispatch(
+        [
+            "build",
+            (root / "writer").as_posix(),
+            "--contrast",
+            (root / "llm-drafts").as_posix(),
+            "-o",
+            profile,
+            *syntax,
+        ]
+    )
+    demo.record(directory, samples)
+    code = _dispatch(["score", (root / "draft.md").as_posix(), profile])
+    print("\nNext: try it on your own texts")
+    print(f"  {PROG} build posts/ --contrast llm-drafts/ -o writer.json")
+    print(f"  {PROG} score draft.md writer.json")
+    print(f"  {PROG} score draft.md --against posts/")
+    return code
+
+
 RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "build": _run_build,
     "score": _run_score,
@@ -1071,6 +1277,7 @@ RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "evaluate": _run_evaluate,
     "cache": _run_cache,
     "setup": _run_setup,
+    "demo": _run_demo,
 }
 
 
