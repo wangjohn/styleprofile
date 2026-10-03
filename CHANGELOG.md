@@ -38,6 +38,12 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **Experimental generic contrast drafts.** `build --generic-contrast` and the library's
+  `generic_contrast=True` add 24 bundled assistant-style texts, alone or alongside supplied
+  drafts. Drafts from the writer's own briefs remain the better comparison; a new recipe
+  explains how to make them. This candidate set has not passed its held-out acceptance
+  checks; see the generic contrast evaluation in `docs/method.md`.
+
 - **Start the Python library with strings.** `build_texts` and `Profile.score_text` accept
   raw text, `load` reads a saved profile, and `build` accepts individual setting keywords.
   Path strings keep their meaning and missing text-like paths point to the new functions.

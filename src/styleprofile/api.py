@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import cache
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Generic, Literal, TypedDict, TypeVar, Unpack, cast
 
@@ -878,6 +879,7 @@ def build_texts(
     *,
     contrast: Iterable[str] | None = None,
     contrast_label: str = "LLM",
+    generic_contrast: bool = False,
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
     jobs: int = AUTO_JOBS,
@@ -893,12 +895,23 @@ def build_texts(
         _strings(texts),
         contrast=_strings(contrast) if contrast is not None else None,
         contrast_label=contrast_label,
+        generic_contrast=generic_contrast,
         progress=progress,
         keep_chunks=keep_chunks,
         jobs=jobs,
         cache=cache,
         **overrides,
     )
+
+
+def _generic_texts() -> list[Text]:
+    """Read only the numbered drafts; the provenance README is not a contrast document."""
+    folder = files("styleprofile").joinpath("data", "generic-contrast")
+    drafts = sorted(
+        (p for p in folder.iterdir() if p.name.endswith(".md") and p.name[:2].isdigit()),
+        key=lambda p: p.name,
+    )
+    return [Text(p.read_text(encoding="utf-8"), p.name) for p in drafts]
 
 
 def _overridden(settings: Settings, overrides: SettingsOverrides) -> Settings:
@@ -914,6 +927,7 @@ def build(
     *,
     contrast: Inputs | None = None,
     contrast_label: str = "LLM",
+    generic_contrast: bool = False,
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
     jobs: int = AUTO_JOBS,
@@ -924,7 +938,10 @@ def build(
 
     Given ``contrast`` texts (LLM drafts of the same briefs, say), the profile also learns
     what separates the writer from them and scores likeness to them. A file or folder given
-    twice, in ``inputs`` or ``contrast``, is read once, with a note. A reference too small
+    twice, in ``inputs`` or ``contrast``, is read once, with a note. ``generic_contrast``
+    adds the bundled generic assistant drafts, alone or alongside explicit contrast inputs.
+    These are labelled "generic LLM drafts"; drafts from the writer's own briefs are better
+    (see ``docs/contrast.md``). A reference too small
     to trust gets one ``NoteCode.THIN_REFERENCE`` note per reason.
 
     The profile keeps summaries only; ``keep_chunks`` also saves every chunk's metrics, for
@@ -950,6 +967,9 @@ def build(
         step(Phase.READ)
         items = _items(inputs)
         contrast_items = _items(contrast) if contrast is not None else None
+        if generic_contrast:
+            contrast_items = [*(contrast_items or []), *_generic_texts()]
+            contrast_label = "generic LLM drafts"
         _stdin_once([*items, *(contrast_items or [])])
         seen: set[str] = set()
         names = SourceNames()
@@ -1026,6 +1046,7 @@ def build(
                     "pool_used": cut.pooled is not None,
                     "split_used": list(cut.split),
                     "contrast_split_used": list(contrast_cut.split) if contrast_cut else [],
+                    **({"generic_contrast": True} if generic_contrast else {}),
                 },
                 keep_chunks=keep_chunks,
                 measurer=measurer,

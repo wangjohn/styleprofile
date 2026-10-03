@@ -135,6 +135,10 @@ def check_wheel(wheel: Path, version: str) -> None:
         _fail(f"wheel has files outside the package: {stray}")
     if "styleprofile/py.typed" not in names:
         _fail("wheel lacks styleprofile/py.typed")
+    prefix = "styleprofile/data/generic-contrast/"
+    drafts = [name for name in names if name.startswith(prefix) and Path(name).name[:2].isdigit()]
+    if len(drafts) != 24 or prefix + "README.md" not in names:
+        _fail("wheel lacks the 24 generic contrast drafts or their provenance README")
     requires = [line for line in metadata.splitlines() if line.startswith("Requires-Dist:")]
     if any("@" in line or "://" in line for line in requires):
         _fail(f"a requirement names a URL, which PyPI refuses: {requires}")
@@ -254,6 +258,21 @@ def smoke_test(wheel: Path, work: Path, *, syntax: bool) -> None:
     _run([cli, "show", "draft.json"], cwd=run, env=env)
     out = _run([python, "-c", _readme_example()], cwd=run, env=env)
     print(f"README library example: {out.strip()}")
+    out = _run(
+        [
+            python,
+            "-c",
+            "import styleprofile as sp; "
+            "p = sp.build('examples/writer', generic_contrast=True, syntax=False); "
+            "assert p.report['contrast']['label'] == 'generic LLM drafts'; "
+            "assert p.report['contrast']['sources'] == 24; "
+            "assert 'drafts from your own briefs are better' in p.to_text(); "
+            "print('installed generic contrast: 24 drafts')",
+        ],
+        cwd=run,
+        env=env,
+    )
+    print(out.strip())
 
     if not syntax:
         return

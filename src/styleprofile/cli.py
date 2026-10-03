@@ -310,8 +310,12 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         "--contrast",
         action="append",
         metavar="PATH",
-        help="text to contrast the writer with, such as LLM drafts of the same briefs; "
-        "repeat for more paths",
+        help="LLM drafts of your briefs; repeat for more paths",
+    )
+    build.add_argument(
+        "--generic-contrast",
+        action="store_true",
+        help="add bundled generic LLM drafts",
     )
     build.add_argument(
         "--contrast-label",
@@ -611,6 +615,7 @@ def _run_build(args: argparse.Namespace) -> int:
             settings,
             contrast=args.contrast,
             contrast_label=args.contrast_label,
+            generic_contrast=args.generic_contrast,
             keep_chunks=args.keep_chunks,
             progress=progress,
             jobs=args.jobs,
