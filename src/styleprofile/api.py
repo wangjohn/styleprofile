@@ -1600,6 +1600,16 @@ def _chunked(
     """The chunks to measure: split into documents as ``split`` says (``_split``; None
     splits nothing), then windowed or pooled (``_pooled``), and last, texts left whole that
     ``_split`` marked are cut into stand-in documents (``_stand_ins``)."""
+    for chunk in chunks:
+        parsed = prose(chunk.text)
+        if unlikely_english(parsed):
+            notes.append(
+                Note(
+                    f"{_label(chunk)} may not be English; English-based measurements may be "
+                    "unreliable. Use English texts for a dependable comparison.",
+                    NoteCode.NON_ENGLISH,
+                )
+            )
     stand_ins: set[str] = set()
     used: set[str] = set()
     if split is not None and settings.split_on != NONE:
@@ -1615,16 +1625,6 @@ def _chunked(
         like=like,
         records=records,
     )
-    for chunk in chunks:
-        parsed = prose(chunk.text)
-        if unlikely_english(parsed):
-            notes.append(
-                Note(
-                    f"{_label(chunk)} may not be English; English-based measurements may be "
-                    "unreliable. Use English texts for a dependable comparison.",
-                    NoteCode.NON_ENGLISH,
-                )
-            )
     windows, warnings = cut.windows, ()
     for chunk in windows:
         parsed = prose(chunk.text)

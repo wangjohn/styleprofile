@@ -166,3 +166,22 @@ def test_long_block_keeps_inline_markup_whole(inline: str) -> None:
     assert sum(prose(chunk.text).links for chunk in chunks) == prose(text).links
     assert sum(prose(chunk.text).bold for chunk in chunks) == prose(text).bold
     assert any(inline in chunk.text for chunk in chunks)
+
+
+def test_language_warning_uses_original_text_before_heading_split() -> None:
+    section = (
+        "Das kleine Haus steht neben einem Garten. Jeden Morgen gehe ich durch die Stadt "
+        "und sehe Menschen auf ihrem Weg zur Arbeit. Heute scheint dort helles Sonnenlicht."
+    )
+    text = "\n\n".join(f"# Kapitel {index}\n\n{section} {index}" for index in range(1, 4))
+    assert unlikely_english(prose(text))
+    assert not unlikely_english(prose(section))
+    settings = sp.Settings(
+        syntax=False, min_words=1, window_words=50, split_on="heading", pool=False
+    )
+    built = sp.build(sp.Text(text, name="german"), settings, cache=False)
+    assert built.report["chunk_count"] == 3
+    assert sum(note.code == sp.NoteCode.NON_ENGLISH for note in built.notes) == 1
+    result = built.score(sp.Text(text, name="german"), split_on="heading", cache=False)
+    assert result.report["chunk_count"] == 3
+    assert sum(note.code == sp.NoteCode.NON_ENGLISH for note in result.notes) == 1
