@@ -38,6 +38,9 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **Try the bundled samples.** `styleprofile demo` copies the sample corpus, builds a
+  profile and scores a draft. The samples ship in the wheel; `--dir` chooses the folder.
+
 - **Start the Python library with strings.** `build_texts` and `Profile.score_text` accept
   raw text, `load` reads a saved profile, and `build` accepts individual setting keywords.
   Path strings keep their meaning and missing text-like paths point to the new functions.
