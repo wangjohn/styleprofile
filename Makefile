@@ -26,14 +26,14 @@ check: test lint typecheck
 # so), then against a larger corpus in the same voice, remixed from them by bench/gen.py (see
 # examples/README.md), which finds the two paragraphs. Outputs go to profiles/ (git-ignored).
 demo:
-	$(UV) run styleprofile build examples/writer --contrast examples/llm-drafts \
+	$(UV) run styleprofile build --by-paragraph examples/writer --contrast examples/llm-drafts \
 		-o profiles/demo-essays.json
 	$(UV) run styleprofile score --by-paragraph examples/draft.md profiles/demo-essays.json
 	@echo
 	@echo "Next, against a synthetic reference remixed from the seven essays (bench/gen.py):"
 	@echo "an optimistic stand-in for a real writer's larger archive, for illustration only."
 	$(UV) run python bench/gen.py --corpus demo --out profiles
-	$(UV) run styleprofile build profiles/demo/writer --contrast profiles/demo/contrast \
+	$(UV) run styleprofile build --by-paragraph profiles/demo/writer --contrast profiles/demo/contrast \
 		-o profiles/demo-writer.json
 	$(UV) run styleprofile score --by-paragraph examples/draft.md profiles/demo-writer.json \
 		-o profiles/demo-draft.json

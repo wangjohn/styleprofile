@@ -51,7 +51,8 @@ and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdic
 
 ```
 
-**Experimental:** `passages=True` also reads each document in spans of 100 words or more to
+**Experimental:** Build with `passages=True` to calibrate paragraph checks; ordinary
+builds skip this work. On scoring, `passages=True` also reads each document in spans of 100 words or more to
 show where it drifts (see [Where it drifts](../README.md#where-it-drifts-experimental)). It is
 off by default: on writer text of topics the reference never saw, it found a paragraph
 drifting in up to about a third of the writer's own documents (see
@@ -65,6 +66,7 @@ paragraph thresholds (`report["passages"][0]["sensitive"]` is False), though the
 paragraph reads highest.
 
 ```python
+>>> profile = sp.build(Path("examples/writer"), contrast=Path("examples/llm-drafts"), passages=True)
 >>> result = profile.score(sp.Text(draft), passages=True)
 >>> passage = result.passages[3]
 >>> passage.lines, passage.words, passage.excerpt[:32], passage.drifts
@@ -222,9 +224,10 @@ chunks, `words` so far, and `parsing` when spaCy reads them), then a reference r
 Two more options of `build`, `Profile.score` and `evaluate` change how fast a run goes, never
 its numbers, so they are not `Settings` and are never saved:
 
-- `jobs`: how many processes run the spaCy parser. The default, 0, uses one per CPU, at most
-  4 and no more than fit in a quarter of the machine's memory, once there are 50,000 words to
-  parse; 1 parses in the calling process. Workers are spawned, so each imports your main
+- `jobs`: how many measurement processes run. The default, 0, uses one per CPU, at most
+  4 and no more than fit in a quarter of the machine's memory, from 50,000 syntax words or
+  500,000 surface words; explicit counts are capped by that memory allowance too, with a
+  note when lowered. One measures in the calling process. Workers are spawned, so each imports your main
   script again: they start only when the call runs inside an `if __name__ == "__main__":`
   block of the script (read from its syntax tree), or from a notebook or interactive
   session. Otherwise everything is parsed in one process, whatever `jobs` says.

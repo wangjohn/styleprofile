@@ -616,7 +616,7 @@ def test_duplicate_documents_are_dropped(tmp_path: Path) -> None:
         Chunk("a", "records.jsonl", "Thanks!"),
         Chunk("b", "records.jsonl", "Thanks!"),
     ]
-    seen: dict[str, str] = {}
+    seen: dict[bytes, str] = {}
     kept, note = drop_duplicates(chunks, seen)
     assert [chunk.id for chunk in kept] == ["sharpening.md", "old-maps.md", "a", "b"]
     assert note == Note(

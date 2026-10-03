@@ -21,20 +21,6 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
 
-Where it drifts (experimental): the reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.
-
-By paragraph   examples/draft.md   spans of at least 100 words
-  The reference is too small to set paragraph thresholds (they need 10 or more documents and about 200 paragraphs); add more of the writer's documents.
-     lines      words   x range  LLM-likeness
-     3             70     0.17x  like the reference      The hardware store in the village has…
-     5             85     0.16x  like the reference      It's a narrow building, long and dim…
-     7             84     0.16x  like the reference      I go in for one thing and come out an…
-     9             60     0.73x  like the reference      But the store is more than a place to…
-     11            86     0.11x  like the reference      The big store in the city is cheaper. I…
-     13            63     0.11x  like the reference      Walt is seventy-one. His daughter works…
-     15            33     0.48x  like the reference      Ultimately, the future of the village…
-     17            61     0.39x  like the reference      I bought a pound of eightpenny nails…
-
 Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
                                                    this text   reference
   Sentences per paragraph                               4.38        6.15   ▼▼▼
@@ -47,3 +33,5 @@ Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
   Words per paragraph                             67.8 words  86.9 words   ▼▼
 
 Pass --all to see every metric.
+--- stderr
+note: Paragraph checks need a profile built with --by-paragraph; use your original inputs in: styleprofile build WRITER_TEXTS --by-paragraph -o <tmp>/writer.json --contrast CONTRAST_TEXTS

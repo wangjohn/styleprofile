@@ -36,6 +36,8 @@ class NoteCode(StrEnum):
     """A chunk is still longer than twice the requested window."""
     NON_ENGLISH = "non_english"
     """Text has little evidence of English; English-based metrics may be unreliable."""
+    WORKERS_LIMITED = "workers_limited"
+    """An explicit worker count was reduced to fit the memory allowance."""
     NO_SYNTAX = "no_syntax"
     """spaCy or its English model is not installed, so syntax metrics are left out."""
     REPEATED_INPUT = "repeated_input"

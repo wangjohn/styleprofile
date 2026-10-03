@@ -880,6 +880,7 @@ def build_texts(
     contrast_label: str = "LLM",
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
+    passages: bool = False,
     jobs: int = AUTO_JOBS,
     cache: bool = False,
     **overrides: Unpack[SettingsOverrides],
@@ -895,6 +896,7 @@ def build_texts(
         contrast_label=contrast_label,
         progress=progress,
         keep_chunks=keep_chunks,
+        passages=passages,
         jobs=jobs,
         cache=cache,
         **overrides,
@@ -916,6 +918,7 @@ def build(
     contrast_label: str = "LLM",
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
+    passages: bool = False,
     jobs: int = AUTO_JOBS,
     cache: bool = False,
     **overrides: Unpack[SettingsOverrides],
@@ -931,9 +934,13 @@ def build(
     debugging. It is an option of this build rather than a ``Settings`` field: it changes
     what is saved, not how texts are read or cut, and scoring has nothing to inherit from it.
 
+    ``passages=True`` also calibrates experimental paragraph checks; by default this
+    calibration is omitted.
+
     ``jobs`` and ``cache`` are options of the run too, since they change how fast it goes and
-    never a number in the profile. ``jobs`` is how many processes run the spaCy parser: 0
-    (the default) picks one per CPU, up to 4, once there are 50,000 words to parse, and only
+    never a number in the profile. ``jobs`` is how many measurement processes run: 0
+    (the default) picks one per CPU, up to 4, from 50,000 syntax words or 500,000 surface
+    words. Explicit counts are capped by the memory allowance. Workers start only
     where worker processes can start (see ``measure.workers_can_start``: a script needs an
     ``if __name__ == "__main__":`` guard); 1 parses in this process. With ``cache=True``,
     chunks measured by an earlier run are read from the measurement cache and new ones are
@@ -953,7 +960,7 @@ def build(
         _stdin_once([*items, *(contrast_items or [])])
         seen: set[str] = set()
         names = SourceNames()
-        texts: dict[str, str] = {}
+        texts: dict[bytes, str] = {}
         read = functools.partial(
             _read,
             text_field=settings.text_field,
@@ -1028,6 +1035,7 @@ def build(
                     "contrast_split_used": list(contrast_cut.split) if contrast_cut else [],
                 },
                 keep_chunks=keep_chunks,
+                passages=passages,
                 measurer=measurer,
             ),
         )
@@ -1093,7 +1101,7 @@ def evaluate(
         _stdin_once(every)
         seen: set[str] = set()
         names = SourceNames()
-        texts: dict[str, str] = {}
+        texts: dict[bytes, str] = {}
         read = functools.partial(
             _read,
             text_field=settings.text_field,
@@ -1334,6 +1342,15 @@ def _finish(measurer: Measurer, notes: list[Note]) -> None:
     """Stop the run's workers and write its cache, noting when the cache could not be used:
     otherwise the only sign would be that rebuilding stays slow."""
     measurer.close()
+    if measurer.requested_jobs > measurer.jobs:
+        notes.append(
+            Note(
+                f"jobs reduced from {measurer.requested_jobs} to {measurer.jobs} "
+                "to fit available memory",
+                NoteCode.WORKERS_LIMITED,
+                setting="jobs",
+            )
+        )
     store = measurer.cache
     if store is not None and store.problem is not None:
         notes.append(
@@ -1481,7 +1498,7 @@ def _read(
     role: str,
     names: SourceNames,
     input_format: str = AUTO,
-    known_texts: dict[str, str] | None = None,
+    known_texts: dict[bytes, str] | None = None,
     group_field: str | None = None,
     require_groups: bool = True,
     records: Records | None = None,
@@ -1531,10 +1548,12 @@ def _read(
         if group_field is not None and _check_groups(
             value, found, group_field, notes, require_groups
         ):
-            found = Records()
-            loaded = load_chunks(
-                [value], text_field, names=names, input_format=input_format, records=found
-            )
+            loaded = [
+                found.ungrouped.get((chunk.path or chunk.source, chunk.id), chunk)
+                for chunk in loaded
+            ]
+            found.missing = 0
+            found.group_field = None
         elif group_field is not None:
             inputs_with.update(found.values.get(group_field, set()))
         if records is not None:

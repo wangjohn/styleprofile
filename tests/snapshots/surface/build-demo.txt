@@ -1,4 +1,4 @@
-$ styleprofile build '<tmp>/demo/writer' --contrast '<tmp>/demo/contrast' -o '<tmp>/demo-writer.json' --no-syntax
+$ styleprofile build --by-paragraph '<tmp>/demo/writer' --contrast '<tmp>/demo/contrast' -o '<tmp>/demo-writer.json' --no-syntax
 [exit 0]
 --- stdout
 STYLE PROFILE   55 chunks, 29,312 words

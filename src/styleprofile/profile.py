@@ -10,6 +10,7 @@ contrast-likeness score is in ``weighting``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -276,6 +277,7 @@ class Records:
     count: int = 0
     missing: int = 0
     values: dict[str, set[str]] = field(default_factory=dict)
+    ungrouped: dict[tuple[str, str], Chunk] = field(default_factory=dict)
 
     def add(self, other: Records) -> None:
         """Count ``other``'s records here too."""
@@ -390,7 +392,6 @@ def _jsonl_chunks(
             grouped.append(
                 Chunk(chunk_id, source, record[field], path, folder, document, record=own_id)
             )
-            continue
         record_id = record.get("id")
         # An id of 0 is kept; a missing, null or empty id falls back to the line.
         if record_id in (None, ""):
@@ -399,17 +400,24 @@ def _jsonl_chunks(
             chunk_id = literal_id(str(record_id))
             chunk_id = f"{inside}:{chunk_id}" if inside else chunk_id
         ungrouped.append((line_number, chunk_id, record[field]))
-    if grouped:
-        return grouped
     counts = Counter(chunk_id for _, chunk_id, _ in ungrouped)
     shared = {chunk_id: count for chunk_id, count in counts.items() if count > 1}
-    if repeated is not None:
+    if repeated is not None and not grouped:
         repeated += shared.items()
     chunks: list[Chunk] = []
     for line, chunk_id, body in ungrouped:
         unique = f"{chunk_id}@{line}" if chunk_id in shared else chunk_id
         document = f"{path or source}{_RECORD}{unique}"
         chunks.append(Chunk(unique, source, body, path, folder, document))
+    if grouped:
+        if records.missing != records.count:
+            records.ungrouped.clear()
+            return grouped
+        records.ungrouped.update(
+            ((group.path or group.source, group.id), chunk)
+            for group, chunk in zip(grouped, chunks, strict=True)
+        )
+        return grouped
     return chunks
 
 
@@ -881,7 +889,7 @@ class Repeat:
 
 def drop_duplicates(
     chunks: Sequence[Chunk],
-    seen: dict[str, str] | None = None,
+    seen: dict[bytes, str] | None = None,
     repeats: list[Repeat] | None = None,
 ) -> tuple[list[Chunk], Note | None]:
     """Keep the first of documents whose text is word-for-word the same.
@@ -895,7 +903,8 @@ def drop_duplicates(
     parsing its Markdown, which measuring does later. A file given twice is a different
     check, made when inputs are read.
 
-    ``seen`` maps the text of documents read earlier (another input set) to their label,
+    ``seen`` maps digests of normalized documents read earlier (another input set) to their
+    label,
     and is updated, so a contrast draft that repeats a reference document is dropped too.
     Twins would sit on both sides of held-out calibration and make it look too tight.
     Documents under ``DUPLICATE_MIN_WORDS`` words are always kept. The note names documents
@@ -903,7 +912,7 @@ def drop_duplicates(
     document with the copy kept, so an edit of a dropped draft can pair with that copy.
     """
     seen = {} if seen is None else seen
-    firsts: dict[str, Chunk] = {}  # the first chunk of each document kept here, by text
+    firsts: dict[bytes, Chunk] = {}  # the first chunk of each document kept here, by text
     documents: dict[str, list[Chunk]] = {}
     for chunk in chunks:
         documents.setdefault(_duplicate_unit(chunk), []).append(chunk)
@@ -913,7 +922,7 @@ def drop_duplicates(
         tokens = words(strip_front_matter("\n\n".join(chunk.text for chunk in members)))
         if len(tokens) < DUPLICATE_MIN_WORDS:
             continue
-        key = " ".join(tokens).lower()
+        key = hashlib.blake2b(" ".join(tokens).lower().encode("utf-8")).digest()
         label = _document_label(members[0])
         if key in seen:
             dropped.append((label, seen[key]))
@@ -2290,6 +2299,7 @@ def build_reference(
     contrast: Sequence[Chunk] | None = None,
     contrast_label: str = "LLM",
     keep_chunks: bool = False,
+    passages: bool = False,
     measurer: Measurer | None = None,
 ) -> ReferenceReport:
     """Profile a writer's chunks as a reference: each metric's mean and spread, its held-out
@@ -2315,6 +2325,7 @@ def build_reference(
         contrast=contrast,
         contrast_label=contrast_label,
         keep_chunks=keep_chunks,
+        passages=passages,
         measurer=measurer,
     )[0]
 
@@ -2379,10 +2390,11 @@ def _build_reference(
     contrast_label: str,
     keep_chunks: bool,
     calibrate_lengths: bool = True,
+    passages: bool = False,
     measurer: Measurer | None = None,
 ) -> tuple[ReferenceReport, ContrastFit | None]:
     # The documents read for the paragraph null (``_calibrate_drift``), whose parses are kept.
-    chosen = _drift_documents(chunks) if calibrate_lengths else []
+    chosen = _drift_documents(chunks) if passages and calibrate_lengths else []
     measured = _measure(
         chunks,
         parser,

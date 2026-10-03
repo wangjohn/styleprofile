@@ -10,16 +10,18 @@ records.
 The parser is by far the slowest step (about 17,000 words a second on one core, against
 about 200,000 for everything else), so on a large corpus it runs in worker processes, each
 with its own copy of the model. Workers parse and return each chunk's syntax metrics, never the
-parsed documents, and the main process measures everything else meanwhile.
+parsed documents. Large surface-only runs use workers too; smaller runs measure surface
+metrics in this process. Results always arrive in chunk order.
 """
 
 from __future__ import annotations
 
 import ast
+import math
 import os
 import sys
 from bisect import bisect_right
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import repeat
@@ -57,6 +59,10 @@ if TYPE_CHECKING:
 # with four, 210,000 in 16 s and 7 s.
 AUTO_JOBS = 4
 PARALLEL_WORDS = 50_000
+# Surface workers win by 100k words in measured 1/4-process builds, but each adds a
+# Python runtime. Use them automatically from 500k to keep medium builds memory-light.
+# At 500k, the fastest of three alternating runs was 4.68 s serial, 2.96 s with four.
+SURFACE_PARALLEL_WORDS = 500_000
 # ... and no more than fit in a quarter of the machine's memory at about 300 MB each (a
 # worker's peak parsing 500-word windows): a 4 GB machine gets 3, 2 GB gets 1 (no workers).
 WORKER_MEMORY_SHARE = 0.25
@@ -92,7 +98,15 @@ def memory_jobs() -> int | None:
 def cpus() -> int:
     """The CPUs this process may use."""
     count = getattr(os, "process_cpu_count", os.cpu_count)()
-    return count or 1
+    available = count or 1
+    if sys.version_info < (3, 13):
+        try:
+            quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+            if quota != "max" and int(quota) > 0 and int(period) > 0:
+                available = min(available, max(1, math.ceil(int(quota) / int(period))))
+        except (OSError, ValueError):
+            pass
+    return available
 
 
 def check_jobs(jobs: object) -> int:
@@ -164,8 +178,8 @@ def _guarded(path: Path, line: int) -> bool:
     return False
 
 
-def start_pool(count: int, model: str) -> Executor:
-    """``count`` spawned worker processes, each loading spaCy ``model`` as it starts."""
+def start_pool(count: int, model: str | None) -> Executor:
+    """Spawn ``count`` workers, loading spaCy only when ``model`` is given."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
@@ -181,9 +195,9 @@ def start_pool(count: int, model: str) -> Executor:
 _worker_parser: Parser | None = None
 
 
-def _start_worker(model: str) -> None:
+def _start_worker(model: str | None) -> None:
     global _worker_parser
-    _worker_parser = load_parser(model)
+    _worker_parser = load_parser(model) if model is not None else None
 
 
 def _parse_in_worker(items: Sequence[tuple[str, Sequence[tuple[int, int]]]]) -> list[Parsed]:
@@ -319,9 +333,10 @@ class Measurer:
     """How a run measures: the measurement cache, worker processes for the parser, and a
     progress callback. These decide how fast the numbers arrive, never the numbers.
 
-    ``jobs`` is the number of processes that parse: 1 parses in this process, 0 picks
+    ``jobs`` is the number of measurement processes: 1 parses in this process, 0 picks
     automatically (one per CPU up to ``AUTO_JOBS``, and as many as ``memory_jobs`` allows,
-    once there are ``PARALLEL_WORDS`` words to parse). Workers start only when
+    from ``PARALLEL_WORDS`` syntax words or ``SURFACE_PARALLEL_WORDS`` surface words).
+    Explicit counts also respect the memory limit. Workers start only when
     ``workers_can_start``, whatever ``jobs`` says. Use it as a context manager, or ``close``
     it: that stops the workers and writes the cache.
     """
@@ -334,7 +349,9 @@ class Measurer:
         progress: ProgressCallback | None = None,
     ) -> None:
         self.cache = cache
-        self.jobs = check_jobs(jobs)
+        self.requested_jobs = check_jobs(jobs)
+        limit = memory_jobs()
+        self.jobs = min(jobs, limit) if jobs > 1 and limit is not None else jobs
         self.progress = progress
         self._pool: Executor | None = None
         self._pool_failed = False
@@ -344,7 +361,7 @@ class Measurer:
         if self.progress is not None:
             self.progress(progress)
 
-    def workers(self, words: int) -> int:
+    def workers(self, words: int, *, surface: bool = False) -> int:
         """How many processes parse ``words`` words; 1 means this one."""
         if self.jobs == 1 or self._pool_failed:
             return 1
@@ -354,9 +371,46 @@ class Measurer:
             return 1
         if self.jobs > 1:
             return self.jobs
-        if words < PARALLEL_WORDS:
+        if words < (SURFACE_PARALLEL_WORDS if surface else PARALLEL_WORDS):
             return 1
         return min(AUTO_JOBS, cpus(), memory_jobs() or AUTO_JOBS)
+
+    def surface(
+        self,
+        items: list[_SurfaceItem],
+        parser: Parser | None = None,
+    ) -> Iterator[_SurfaceResult]:
+        """Measure surface metrics and calibration pieces, preserving input order."""
+        if not items:
+            return
+        size = sum(len(item[1].text.split()) for item in items)
+        count = self.workers(size, surface=True)
+        remaining = deque(items)
+        items.clear()
+        if count > 1:
+            work = deque(remaining)
+            from concurrent.futures.process import BrokenProcessPool
+
+            try:
+                if self._pool is None:
+                    self._pool_size = count
+                    self._pool = start_pool(count, parser.model if parser else None)
+                active = deque()
+                while work or active:
+                    # Bound the queued results as well as the input batches: map() submits
+                    # the whole corpus on older Python, keeping finished counts in memory.
+                    while work and len(active) < count * 2:
+                        batch = [work.popleft() for _ in range(min(TASK_TEXTS, len(work)))]
+                        active.append(self._pool.submit(_surface_in_worker, batch))
+                    for result in active.popleft().result():
+                        remaining.popleft()
+                        yield result
+                return
+            except (BrokenProcessPool, OSError):
+                self._pool_failed = True
+                self._stop_pool()
+        while remaining:
+            yield _surface(remaining.popleft())
 
     def parse(
         self,
@@ -376,6 +430,7 @@ class Measurer:
         if count > 1:
             # Imported here: most runs start no workers, and these modules cost a scoring
             # run about 7 MB.
+            from concurrent.futures import CancelledError
             from concurrent.futures.process import BrokenProcessPool
 
             try:
@@ -388,7 +443,11 @@ class Measurer:
                         yield result
                         done += 1
                 return
-            except (BrokenProcessPool, OSError):
+            except (BrokenProcessPool, OSError, CancelledError) as error:
+                # Surface work shares this pool and can stop it between syntax batches.
+                # Only that shutdown makes cancellation a reason to retry here.
+                if isinstance(error, CancelledError) and not self._pool_failed:
+                    raise
                 self._pool_failed = True
                 self._stop_pool()
         yield from parse(parser, items[done:], {position - done for position in keep})
@@ -502,6 +561,26 @@ def _add(total: Counter[str], counts: Mapping[str, int]) -> None:
 
 def _distributions(text: str, tokens: list[str] | None = None) -> dict[str, Counter[str]]:
     return {"masked_bigram": masked_bigrams(text, tokens), "char_trigram": char_trigrams(text)}
+
+
+_SurfaceItem = tuple[str, Prose, list[tuple[str, Prose]]]
+_SurfaceResult = tuple[Metrics, dict[str, Counter[str]], list[Metrics | None]]
+
+
+def _surface(item: _SurfaceItem) -> _SurfaceResult:
+    markdown, parsed, pieces = item
+    tokens = words(parsed.text)
+    metrics = surface_metrics(markdown, parsed, tokens)
+    counts = _distributions(parsed.text, tokens)
+    measured = []
+    for text, part in pieces:
+        tokens = words(part.text)
+        measured.append(surface_metrics(text, part, tokens) if tokens else None)
+    return metrics, counts, measured
+
+
+def _surface_in_worker(items: Sequence[_SurfaceItem]) -> list[_SurfaceResult]:
+    return [_surface(item) for item in items]
 
 
 def measure(
@@ -675,6 +754,30 @@ def measure(
     if parser is not None and keep_docs:
         docs = [None for _ in kept]
 
+    surface_items: list[_SurfaceItem] = []
+    surface_positions: set[int] = set()
+    for index, item in enumerate(kept):
+        pending = [
+            planned[position] for position in item.pieces if planned[position].parsed is not None
+        ]
+        value = caching.decode_or_none(item.cached) if item.cached is not None else None
+        if value is None or pending:
+            if item.parsed is None:
+                item.parsed = prose(item.chunk.text)
+            surface_items.append(
+                (
+                    item.chunk.text,
+                    item.parsed,
+                    [
+                        (piece.markdown, piece.parsed)
+                        for piece in pending
+                        if piece.parsed is not None
+                    ],
+                )
+            )
+            surface_positions.add(index)
+    surface_results = measurer.surface(surface_items, parser)
+
     # Main pass, in order: each chunk's metrics and counts (read, or measured and parsed), and
     # its pieces'. Counts are summed as they come, so only a score keeps each chunk's.
     # Without each chunk's counts (a reference, not a score), each chunk's metrics are kept
@@ -688,24 +791,19 @@ def measure(
     measurer.report(Progress(phase, 0, len(kept), 0, parsing))
     for index, item in enumerate(kept):
         value = caching.decode_or_none(item.cached) if item.cached is not None else None
-        if value is not None:
-            metrics: Metrics = value["metrics"]
-            counts = {name: Counter(entry) for name, entry in value["distributions"].items()}
-        else:
-            if item.parsed is None:
-                item.parsed = prose(item.chunk.text)
-            # The prose's words, found once for the metrics and the patterns.
-            tokens = words(item.parsed.text)
-            metrics = surface_metrics(item.chunk.text, item.parsed, tokens)
-            counts = _distributions(item.parsed.text, tokens)
         pending = [
             planned[position] for position in item.pieces if planned[position].parsed is not None
         ]
-        for piece in pending:
-            assert piece.parsed is not None
-            tokens = words(piece.parsed.text)
-            if tokens:
-                piece.metrics = surface_metrics(piece.markdown, piece.parsed, tokens)
+        fresh = next(surface_results) if index in surface_positions else None
+        if fresh is not None:
+            for piece, measured_piece in zip(pending, fresh[2], strict=True):
+                piece.metrics = measured_piece
+        if value is not None:
+            metrics = value["metrics"]
+            counts = {name: Counter(entry) for name, entry in value["distributions"].items()}
+        else:
+            assert fresh is not None
+            metrics, counts, _ = fresh
         if parser is not None and (index in parsed_chunks or value is None):
             if index in parsed_chunks:
                 syntax, trigrams, piece_syntax, doc = next(results)
@@ -747,6 +845,8 @@ def measure(
             distributions.append(counts)
         total_words += item.size
         measurer.report(Progress(phase, index + 1, len(kept), total_words, parsing))
+    next(surface_results, None)
+    surface_items.clear()
     return Measured(
         [item.chunk for item in kept],
         all_metrics,

@@ -170,7 +170,9 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> list[tuple[str, Any, ty
     # A reference large enough for paragraph thresholds (``calibration.drift`` tails, and a
     # score's ``thresholds``): the demo corpus, remixed from the essays.
     demo = gen.generate("demo", out=tmp)
-    large = sp.build(demo / "writer", sp.Settings(syntax=False), contrast=demo / "contrast")
+    large = sp.build(
+        demo / "writer", sp.Settings(syntax=False), contrast=demo / "contrast", passages=True
+    )
     made += [
         ("reference large enough for paragraph thresholds", large.report, ReferenceReport),
         ("score with paragraph thresholds", large.score(DRAFT, passages=True).report, ScoreReport),
