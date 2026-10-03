@@ -87,9 +87,10 @@ def test_demo_refuses_symlinks(tmp_path: Path) -> None:
 def test_demo_resource_fallback_and_empty_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(demo, "files", lambda package: tmp_path)
-    directory, samples = demo.prepare(str(tmp_path / "empty"))
     root = Path(__file__).resolve().parents[1] / "examples"
+    monkeypatch.setattr(demo, "files", lambda package: tmp_path)
+    monkeypatch.setattr(demo, "__file__", str(root.parent / "src" / "styleprofile" / "demo.py"))
+    directory, samples = demo.prepare(str(tmp_path / "empty"))
     assert samples["draft.md"] == (root / "draft.md").read_bytes()
     assert (directory / "draft.md").read_bytes() == samples["draft.md"]
 
