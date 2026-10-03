@@ -330,9 +330,14 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     )
     build.add_argument("--all", action="store_true", help="show every metric, not just key ones")
     build.add_argument(
+        "--by-paragraph",
+        action="store_true",
+        help="calibrate paragraph checks (experimental)",
+    )
+    build.add_argument(
         "--keep-chunks",
         action="store_true",
-        help="also save every chunk's metrics in the profile, for debugging (much larger)",
+        help="save each chunk's metrics for debugging (much larger)",
     )
 
     score_parser = commands.add_parser(
@@ -612,6 +617,7 @@ def _run_build(args: argparse.Namespace) -> int:
             contrast=args.contrast,
             contrast_label=args.contrast_label,
             keep_chunks=args.keep_chunks,
+            passages=args.by_paragraph,
             progress=progress,
             jobs=args.jobs,
             cache=not args.no_cache,
@@ -847,6 +853,27 @@ def _run_score(args: argparse.Namespace) -> int:
     if args.output:
         _refuse_overwrite(args.output, samples)
     profile = _load_score_reference(reference_arg, flagged=args.reference is not None)
+    if args.by_paragraph and not (profile.report.get("calibration") or {}).get("drift"):
+        command = [
+            PROG,
+            "build",
+            "WRITER_TEXTS",
+            "--by-paragraph",
+            "-o",
+            reference_arg,
+        ]
+        contrast = profile.report["settings"].get("contrast")
+        if contrast:
+            command += ["--contrast", "CONTRAST_TEXTS"]
+        if not profile.has_syntax:
+            command += ["--no-syntax"]
+        if not args.json:
+            _note(
+                "Paragraph checks need a profile built with --by-paragraph; "
+                "use your original inputs in: "
+                f"{shell_join(command)}"
+            )
+        args.by_paragraph = False
     # Flags left out are inherited from the profile.
     overrides: SettingsOverrides = {}
     if args.window_words is not None:

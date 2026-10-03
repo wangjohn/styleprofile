@@ -233,7 +233,7 @@ def test_automatic_jobs_wait_for_a_large_parse(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(measure, "cpus", lambda: 16)
     monkeypatch.setattr(measure, "memory_jobs", lambda: 3)
     assert automatic.workers(10**7) == 3
-    assert Measurer(jobs=4).workers(10) == 4  # --jobs overrides
+    assert Measurer(jobs=4).workers(10) == 3  # explicit jobs respect memory too
     assert Measurer(jobs=1).workers(10**7) == 1
     assert Measurer(jobs=3).workers(10) == 3  # asked for, so used however little to parse
     # A script whose workers would run it again gets one process, even when it asks for more.
@@ -301,6 +301,9 @@ def test_worker_processes_give_the_same_profile() -> None:
 class _BrokenPool:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
+
+    def submit(self, *args: Any, **kwargs: Any) -> Any:
+        raise BrokenProcessPool("a worker died while starting")
 
     def map(self, *args: Any, **kwargs: Any) -> Any:
         raise BrokenProcessPool("a worker died while starting")

@@ -80,7 +80,15 @@ COMMANDS: list[tuple[str, list[str]]] = [
     ("score-by-paragraph", ["score", "--by-paragraph", DRAFT, REFERENCE]),
     (
         "build-demo",
-        ["build", f"{DEMO}/writer", "--contrast", f"{DEMO}/contrast", "-o", DEMO_REFERENCE],
+        [
+            "build",
+            "--by-paragraph",
+            f"{DEMO}/writer",
+            "--contrast",
+            f"{DEMO}/contrast",
+            "-o",
+            DEMO_REFERENCE,
+        ],
     ),
     # Paragraph drift is experimental, shown only with --by-paragraph.
     ("score-demo", ["score", DRAFT, DEMO_REFERENCE]),

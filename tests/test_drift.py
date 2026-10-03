@@ -63,7 +63,7 @@ def demo(tmp_path_factory: pytest.TempPathFactory) -> tuple[list[Path], Path]:
 @pytest.fixture(scope="module")
 def demo_profile(demo: tuple[list[Path], Path]) -> sp.Profile:
     documents, contrast = demo
-    return sp.build(documents, sp.Settings(syntax=False), contrast=contrast)
+    return sp.build(documents, sp.Settings(syntax=False), contrast=contrast, passages=True)
 
 
 # Blocks and paragraphs.
@@ -279,7 +279,7 @@ def test_the_writers_own_held_out_documents_do_not_drift(
     tmp_path: Path, demo: tuple[list[Path], Path]
 ) -> None:
     documents, contrast = demo
-    profile = sp.build(documents[:30], sp.Settings(syntax=False), contrast=contrast)
+    profile = sp.build(documents[:30], sp.Settings(syntax=False), contrast=contrast, passages=True)
     drifting = []
     for path in documents[30:]:
         result = profile.score(path, passages=True)
@@ -292,7 +292,10 @@ def test_a_thin_reference_flags_nothing_rather_than_guess() -> None:
     # Seven essays calibrate paragraph-sized spans too loosely to single a paragraph out.
     examples = ROOT / "examples"
     profile = sp.build(
-        examples / "writer", sp.Settings(syntax=False), contrast=examples / "llm-drafts"
+        examples / "writer",
+        sp.Settings(syntax=False),
+        contrast=examples / "llm-drafts",
+        passages=True,
     )
     result = profile.score(DRAFT, passages=True)
     assert result.passages and not any(passage.drifts for passage in result.passages)
@@ -431,7 +434,7 @@ def test_spans_across_windows_use_the_documents_parse() -> None:
 
 def test_without_a_contrast_set_it_does_not_reassure(demo: tuple[list[Path], Path]) -> None:
     documents, _ = demo
-    profile = sp.build(documents, sp.Settings(syntax=False))
+    profile = sp.build(documents, sp.Settings(syntax=False), passages=True)
     result = profile.score(DRAFT, passages=True)
     (document,) = result.report["passages"] or []
     assert document["by"] == "delta"

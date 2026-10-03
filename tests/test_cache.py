@@ -109,7 +109,7 @@ def test_a_cache_hit_gives_a_byte_identical_report(
     cache_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     settings = sp.Settings(syntax=False)
-    cold = sp.build(WRITER, settings, contrast=CONTRAST, cache=True)
+    cold = sp.build(WRITER, settings, contrast=CONTRAST, cache=True, passages=True)
     assert cache_home.exists()
     counting = Counting(monkeypatch)
     spans: list[int] = []
@@ -120,14 +120,14 @@ def test_a_cache_hit_gives_a_byte_identical_report(
         return measure_spans(parts, whole)
 
     monkeypatch.setattr(measure, "measure_spans", counting_spans)
-    warm = sp.build(WRITER, settings, contrast=CONTRAST, cache=True)
+    warm = sp.build(WRITER, settings, contrast=CONTRAST, cache=True, passages=True)
     assert counting.texts == []  # every chunk and piece came from the cache
     assert spans == []  # and every document read in parts for drift calibration
     assert "drift" in (warm.report.get("calibration") or {})
     cold.save(tmp_path / "cold.json")
     warm.save(tmp_path / "warm.json")
     assert (tmp_path / "cold.json").read_bytes() == (tmp_path / "warm.json").read_bytes()
-    uncached = sp.build(WRITER, settings, contrast=CONTRAST, cache=False)
+    uncached = sp.build(WRITER, settings, contrast=CONTRAST, cache=False, passages=True)
     assert dumps_report(uncached.report) == dumps_report(warm.report)
     # Scores too, whose chunks keep their own pattern counts.
     first = warm.score(DRAFT, cache=True)

@@ -15,6 +15,14 @@ then `styleprofile setup` for the parser-based metrics.
 > writer's texts, and `styleprofile score` again for saved score reports. There is no
 > migration: several metrics, the calibration and the report layout all changed.
 
+### Changed
+
+- **Paragraph calibration runs on request.** Use `build --by-paragraph` or
+  `build(..., passages=True)` to prepare experimental paragraph checks. Ordinary builds
+  skip this work; scores without it explain how to rebuild.
+- **Large builds measure surface metrics in workers.** Duplicate detection stores compact
+  text digests, grouped JSONL fallbacks reuse records, and workers respect CPU and memory limits.
+
 ### Breaking changes
 
 - **The library leaves the measurement cache off by default.** `build` and `evaluate`

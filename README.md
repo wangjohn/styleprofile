@@ -208,7 +208,9 @@ and the resolution floors.
 **Experimental, and off by default.** On writer text of a topic the reference never saw, it
 found a paragraph drifting in up to about a third of the writer's own documents (the table
 below), so it runs only when you ask for it with `--by-paragraph` (`passages=True` in the
-library), and what it finds is a lead to read, not a finding.
+library). Build the reference with `build --by-paragraph` first
+(`build(..., passages=True)` in Python); ordinary builds skip paragraph calibration.
+What it finds is a lead to read, not a finding.
 
 One number over a whole draft dilutes a paragraph or two in another register: `make demo`'s
 draft has two paragraphs written like an LLM and still reads "close" overall. With
