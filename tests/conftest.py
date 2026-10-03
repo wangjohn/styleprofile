@@ -19,3 +19,9 @@ def _private_cache(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
         os.environ.pop("XDG_CACHE_HOME", None)
     else:
         os.environ["XDG_CACHE_HOME"] = saved
+
+
+def pytest_xdist_auto_num_workers() -> int:
+    # Each worker may load spaCy. Bound the default on large developer machines, while
+    # still using the available cores on smaller CI runners; -n N can override this.
+    return min(4, os.cpu_count() or 1)

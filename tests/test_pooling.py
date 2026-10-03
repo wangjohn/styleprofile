@@ -606,7 +606,9 @@ def own_comments(tmp_path_factory: pytest.TempPathFactory) -> _OwnComments:
     writer = _write(
         folder / "writer.jsonl", [{"id": f"w{i}", "text": t} for i, t in enumerate(train)]
     )
-    reference = sp.build(writer, sp.Settings(syntax=False))
+    # The generated records are unique to this fixture; a disk cache adds writer-thread
+    # cleanup to every build without reusable measurements. Cache behavior is tested elsewhere.
+    reference = sp.build(writer, sp.Settings(syntax=False), cache=False)
     assert reference.report["settings"]["pool_used"] is True
     return _OwnComments(reference, held_out, folder)
 
@@ -673,8 +675,11 @@ def own_batches(tmp_path_factory: pytest.TempPathFactory) -> list[_Batches]:
             if text not in seen:
                 seen.add(text)
                 held_out.append(text)
-        writer = _records(folder, "writer.jsonl", train)
-        reference = sp.build(writer, sp.Settings(syntax=False))
+        writer = _records(folder, "writer.jsonl", train[:1500])
+        # Keep the seeds and all 30 held-out batches; 1,500 training records still
+        # provide over 100 pooled windows for the same calibration paths.
+        # These unique corpora do not benefit from a disk cache.
+        reference = sp.build(writer, sp.Settings(syntax=False), cache=False)
         batches = [held_out[start : start + 20] for start in range(0, len(held_out), 20)]
         flagged: dict[tuple[str, str], int] = {}
         for number, texts in enumerate(batches):

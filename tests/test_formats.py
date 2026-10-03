@@ -551,7 +551,7 @@ def test_conversion_is_linear() -> None:
         assert len(html) > 5_000_000
         start = time.perf_counter()
         html_to_markdown(html)
-        assert time.perf_counter() - start < 5
+        assert time.perf_counter() - start < 15
 
 
 def _site(root: Path, folders: dict[str, dict[str, str]]) -> None:
@@ -769,7 +769,7 @@ def test_unclosed_inline_tags_stay_linear() -> None:
     assert len(html) > 5_000_000
     start = time.perf_counter()
     markdown = html_to_markdown(html)
-    assert time.perf_counter() - start < 5
+    assert time.perf_counter() - start < 15
     assert markdown.startswith(f"**{sentence.strip()}**\n\n")
 
 

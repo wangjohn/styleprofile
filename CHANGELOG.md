@@ -33,6 +33,9 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **Faster CI and safer tests.** Test runs use up to four parallel workers, Python 3.14
+  joins the syntax matrix, and permission tests skip under root. Release smoke tests also
+  install syntax and run setup; Dependabot checks Python dependencies.
 - **Windows and macOS support.** Output uses readable ASCII bars and arrows when the
   stream cannot encode them, command hints use the platform shell, and the measurement
   cache uses the platform cache directory. CI tests both systems, including syntax on macOS.
