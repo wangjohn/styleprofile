@@ -104,7 +104,16 @@ def test_library_example_runs(examples: Path) -> None:
     """docs/library.md, run as a doctest."""
     flags = doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE
     failures, tried = doctest.testfile(
-        str(ROOT / "docs" / "library.md"), module_relative=False, optionflags=flags
+        str(ROOT / "docs" / "library.md"),
+        module_relative=False,
+        optionflags=flags,
+        extraglobs={
+            "essays": [p.read_text(encoding="utf-8") for p in sorted((ROOT / WRITER).glob("*.md"))],
+            "drafts": [
+                p.read_text(encoding="utf-8") for p in sorted((ROOT / CONTRAST).glob("*.md"))
+            ],
+            "draft": (ROOT / DRAFT).read_text(encoding="utf-8"),
+        },
     )
     assert tried > 0 and failures == 0
 
@@ -190,7 +199,9 @@ def test_a_string_is_a_path_never_text(examples: Path) -> None:
         profile.score("nope.md")
     assert missing.value.code == "input_not_found"
     for text in ("Some text I wrote.", "I wrote this/that today", "Sometext"):
-        with pytest.raises(sp.StyleProfileError, match=r"pass raw text as Text\(\.\.\.\)$"):
+        with pytest.raises(
+            sp.StyleProfileError, match=r"use build_texts\(\.\.\.\) or Profile.score_text"
+        ):
             profile.score(text)
 
 
@@ -266,7 +277,10 @@ def test_score_inherits_the_profile_settings(examples: Path) -> None:
         ),
     )
     # Whole settings replace the inherited ones, and overrides apply on top.
-    replaced = profile.score(DRAFT, dataclasses.replace(settings, window_words=100), min_words=3)
+    with pytest.warns(DeprecationWarning, match="keyword overrides"):
+        replaced = profile.score(
+            DRAFT, dataclasses.replace(settings, window_words=100), min_words=3
+        )
     assert replaced.report["settings"]["window_words"] == 100 and replaced.notes == ()
     with pytest.raises(TypeError, match="unknown setting"):
         profile.score(DRAFT, window=100)  # pyright: ignore[reportCallIssue]

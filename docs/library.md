@@ -1,26 +1,32 @@
 # Using styleprofile from Python
 
-The library runs the same pipeline as the `styleprofile` command: it reads the same inputs,
-cuts them into the same windows, loads spaCy the same way, and a score inherits its
-profile's settings. The CLI and the library can't give different numbers.
+Start with strings you already have. Each string is one document; `essays` are the writer's
+texts, `drafts` are contrast drafts, and `draft` is the text to check. The examples run as a
+doctest (`tests/test_api.py`) with the sample texts in `examples/` supplied as those variables.
 
-The examples on this page run as a test (`tests/test_api.py`) from the repository root, on
-the sample corpus in [`examples/`](../examples/).
+```python
+>>> import styleprofile as sp
+>>> profile = sp.build_texts(essays, contrast=drafts)
+>>> result = profile.score_text(draft)
+>>> result.verdict
+<Verdict.CLOSE: 'close'>
 
-## Build a profile, then score a draft
+```
+
+For files and folders, use `Path`:
 
 ```python
 >>> from pathlib import Path
->>> import styleprofile as sp
 >>> profile = sp.build(Path("examples/writer"), contrast=Path("examples/llm-drafts"))
 >>> draft = Path("examples/draft.md").read_text(encoding="utf-8")
->>> result = profile.score(sp.Text(draft))
->>> result.verdict
-<Verdict.CLOSE: 'close'>
+>>> result = profile.score_text(draft)
 >>> print(f"Delta {result.delta:.2f}, {result.likeness_verdict.words('LLM')}")
 Delta 0..., like the reference
 
 ```
+
+The library runs the same pipeline as the command: it reads the same inputs, cuts them into
+windows, and loads spaCy the same way. Scores inherit the profile's settings.
 
 `result.verdict` is a `Verdict` and `result.likeness_verdict` a `LikenessVerdict`
 (`.words(label)` names the contrast set). Both are string enums with the same words as the
@@ -135,7 +141,9 @@ catches those.
 
 A plain `str` is always a path, never text, so a typo in a folder name fails instead of
 being profiled as a two-word text. A missing `str` that reads like text (it has spaces,
-say) fails with a message pointing to `Text`.
+say) fails with a message pointing to `build_texts`, `score_text` and `Text`.
+`build_texts` accepts an iterable of strings; `score_text` accepts one string or an iterable.
+Use `Text` when you want to name each document yourself.
 
 Every input is cut into windows, `Chunk`s included. Re-windowing chunks you already cut
 is harmless (they keep their documents); pass `Settings(window_words=0)` to use them as
@@ -172,8 +180,11 @@ that it uses spaCy only when the profile has syntax metrics, reads drafts with
 `input_format="auto"`, scores each draft on its own (`pool=False`; pass `pool=True` to
 judge short drafts as one batch), and keeps each draft whole (`split_on="none"`; pass
 `split_on="heading"`, or `"heading:2"` for chapters under parts, for a verdict per
-chapter). Pass whole `Settings` to replace them, or keyword
-overrides (`window_words=0`) to change single fields, as `styleprofile score` takes flags.
+chapter). Keyword overrides (`window_words=0`) change single fields, as
+`styleprofile score` takes flags. `build` accepts these keywords too, on top of a `Settings` argument if given. Passing `Settings` to `score` is
+deprecated and emits `DeprecationWarning`: it still replaces all inherited settings,
+including defaults the caller did not set. Prefer `profile.score(path, syntax=False)`
+to preserve every other inherited setting.
 Leave a keyword out to inherit it; the keywords are typed (`api.SettingsOverrides`), so a
 type checker catches a misspelled one. A different window size or syntax setting is warned
 about in the report, and a different `min_words` gets a note.
@@ -217,15 +228,17 @@ its numbers, so they are not `Settings` and are never saved:
   script again: they start only when the call runs inside an `if __name__ == "__main__":`
   block of the script (read from its syntax tree), or from a notebook or interactive
   session. Otherwise everything is parsed in one process, whatever `jobs` says.
-- `cache`: with `True` (the default for `build` and `evaluate`), chunks measured by an
-  earlier run come from the measurement cache (see the README) and new ones are added to
-  it; `False` neither reads nor writes it. `Profile.score` uses it only with `cache=True`.
+- `cache`: `False` by default for `build`, `build_texts`, `evaluate`, `score` and
+  `score_text`; the library neither reads nor writes the measurement cache. With `True`, chunks
+  measured by an earlier run come from the measurement cache (see the README) and new ones are added to
+  it. Cached pattern counts can recover wording from the texts; opt in only when you
+  want them stored. The CLI explicitly enables caching for builds and evaluations.
   `STYLEPROFILE_NO_CACHE=1` turns it off everywhere. When it cannot be used, the run goes
   on without it and adds a `NoteCode.CACHE_UNAVAILABLE` note.
 
 ## Saving, loading and evaluating
 
-- `profile.save("writer.json")` and `sp.Profile.load("writer.json")` read and write the
+- `profile.save("writer.json")` and `sp.load("writer.json")` read and write the
   same files as `styleprofile build` and `styleprofile score`. `save` also sets
   `profile.path`, whose file name later scores record. `result.save(path)` writes a score
   report. Reports never save paths: inputs are recorded by their final name (`posts`,

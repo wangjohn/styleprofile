@@ -28,6 +28,7 @@ import functools
 import json
 import os
 import statistics
+import warnings
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -253,9 +254,10 @@ class Settings:
 
 
 class SettingsOverrides(TypedDict, total=False):
-    """Keyword overrides for ``Profile.score``: any ``Settings`` field, by name. Leave a
-    keyword out to inherit it; a value given (``None`` included, for ``text_field``) is used
-    as is, and ``None`` for a number or ``syntax`` is refused like any invalid setting."""
+    """Keyword overrides for ``build`` and ``Profile.score``: any ``Settings`` field,
+    by name. Leave a keyword out to inherit it; a value given (``None`` included, for
+    ``text_field``) is used as is, and ``None`` for a number or ``syntax`` is refused like
+    any invalid setting."""
 
     window_words: int
     min_words: int
@@ -381,6 +383,30 @@ class Profile(_Result[ReferenceReport]):
         """The summary ``styleprofile build`` prints; ``full`` adds every metric."""
         return format_reference_summary(self._report, color=color, full=full)
 
+    def score_text(
+        self,
+        text: str | Iterable[str],
+        *,
+        progress: ProgressCallback | None = None,
+        passages: bool = False,
+        jobs: int = AUTO_JOBS,
+        cache: bool = False,
+        **overrides: Unpack[SettingsOverrides],
+    ) -> ScoreResult:
+        """Score raw text, or several strings with one document per string.
+
+        Options and inherited settings are the same as for ``score``. Use ``score`` with
+        ``Text`` objects when documents need names of their own.
+        """
+        return self.score(
+            _strings(text),
+            progress=progress,
+            passages=passages,
+            jobs=jobs,
+            cache=cache,
+            **overrides,
+        )
+
     def score(
         self,
         inputs: Inputs,
@@ -402,9 +428,10 @@ class Profile(_Result[ReferenceReport]):
         ``"none"``: each draft is one document, however the reference's texts were split
         (``split_on="heading"`` gives a manuscript a verdict per chapter; see
         ``Settings.split_on``). ``group_field`` is inherited;
-        drafts without it are read with a note, unless it is given here. ``settings``
-        replaces them all, and keyword overrides (``window_words=0``, ``min_words=5``; see
-        ``SettingsOverrides``) change single fields: leave one out to inherit it.
+        drafts without it are read with a note, unless it is given here. The deprecated
+        ``settings`` argument replaces them all. Keyword overrides (``window_words=0``,
+        ``min_words=5``; see ``SettingsOverrides``) change single fields:
+        leave one out to inherit it.
 
         A window size or syntax setting unlike the profile's is warned about in the report,
         since z-scores assume chunks like the reference's; another ``min_words`` gets a
@@ -419,6 +446,13 @@ class Profile(_Result[ReferenceReport]):
         found a paragraph drifting in up to about a third of the writer's own documents
         (docs/method.md, "Where a draft drifts"), so treat what it finds as a lead to read.
         """
+        if settings is not None:
+            warnings.warn(
+                "Passing Settings to Profile.score is deprecated: it replaces all inherited "
+                "settings. Use keyword overrides such as syntax=False instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         notes: list[Note] = []
         with _notes_on_error(notes), _measurer(progress, jobs, cache) as measurer:
             base = settings
@@ -430,10 +464,7 @@ class Profile(_Result[ReferenceReport]):
                     pool=False,
                     split_on=NONE,
                 )
-            unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
-            if unknown:
-                raise TypeError(f"unknown setting(s): {', '.join(unknown)}")
-            chosen = dataclasses.replace(base, **overrides)
+            chosen = _overridden(base, overrides)
             recorded = self.settings
             if chosen.min_words != recorded.min_words:
                 notes.append(
@@ -832,6 +863,51 @@ class Evaluation(_Result[EvaluationReport]):
         return format_evaluation(self._report, color=color)
 
 
+load = Profile.load
+
+
+def _strings(texts: str | Iterable[str]) -> list[Text]:
+    values = [texts] if isinstance(texts, str) else list(texts)
+    if any(not isinstance(value, str) for value in values):
+        raise TypeError("expected raw text strings; use build or score for paths, Text or Chunk")
+    return [Text(value) for value in values]
+
+
+def build_texts(
+    texts: Iterable[str],
+    *,
+    contrast: Iterable[str] | None = None,
+    contrast_label: str = "LLM",
+    progress: ProgressCallback | None = None,
+    keep_chunks: bool = False,
+    jobs: int = AUTO_JOBS,
+    cache: bool = False,
+    **overrides: Unpack[SettingsOverrides],
+) -> Profile:
+    """Build from raw strings, with one document per string.
+
+    Options are the same as for ``build``. Use ``build`` with ``Text`` objects to name
+    documents, or with paths to read files and folders.
+    """
+    return build(
+        _strings(texts),
+        contrast=_strings(contrast) if contrast is not None else None,
+        contrast_label=contrast_label,
+        progress=progress,
+        keep_chunks=keep_chunks,
+        jobs=jobs,
+        cache=cache,
+        **overrides,
+    )
+
+
+def _overridden(settings: Settings, overrides: SettingsOverrides) -> Settings:
+    unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(Settings)})
+    if unknown:
+        raise TypeError(f"unknown setting(s): {', '.join(unknown)}")
+    return dataclasses.replace(settings, **overrides)
+
+
 def build(
     inputs: Inputs,
     settings: Settings = DEFAULTS,
@@ -841,7 +917,8 @@ def build(
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
     jobs: int = AUTO_JOBS,
-    cache: bool = True,
+    cache: bool = False,
+    **overrides: Unpack[SettingsOverrides],
 ) -> Profile:
     """Build a reference profile from a writer's texts, as ``styleprofile build`` does.
 
@@ -858,11 +935,14 @@ def build(
     never a number in the profile. ``jobs`` is how many processes run the spaCy parser: 0
     (the default) picks one per CPU, up to 4, once there are 50,000 words to parse, and only
     where worker processes can start (see ``measure.workers_can_start``: a script needs an
-    ``if __name__ == "__main__":`` guard); 1 parses in this process. With ``cache`` (the
-    default), chunks measured by an earlier run are read from the measurement cache and new
-    ones are added to it (see ``styleprofile.cache``); ``cache=False`` neither reads nor
-    writes it. ``progress`` is called as each phase starts and as each chunk is measured.
+    ``if __name__ == "__main__":`` guard); 1 parses in this process. With ``cache=True``,
+    chunks measured by an earlier run are read from the measurement cache and new ones are
+    added to it (see ``styleprofile.cache``); the default,
+    ``cache=False``, neither reads nor writes it. Keyword overrides change individual
+    ``Settings`` fields, including when a settings object is given. ``progress`` is called
+    as each phase starts and as each chunk is measured.
     """
+    settings = _overridden(settings, overrides)
     notes: list[Note] = []
     with _notes_on_error(notes), _measurer(progress, jobs, cache) as measurer:
         pooling = _pooling(settings)
@@ -994,7 +1074,7 @@ def evaluate(
     retrain: bool = False,
     progress: ProgressCallback | None = None,
     jobs: int = AUTO_JOBS,
-    cache: bool = True,
+    cache: bool = False,
 ) -> Evaluation:
     """Stress-test contrast likeness against edited drafts, as ``styleprofile evaluate``
     does: build a reference with ``contrast`` (the original drafts), then score each set in
@@ -1363,7 +1443,8 @@ def _missing(value: str, suggest_text: bool) -> StyleProfileError:
     shown = value.strip().split("\n")[0]
     shown = shown if len(shown) <= 40 else shown[:40] + "..."
     return StyleProfileError(
-        f"{shown!r} not found; a str input is a path, so pass raw text as Text(...)",
+        f"{shown!r} not found; a str input is a path, so use build_texts(...) or "
+        "Profile.score_text(...) for raw text, or Text(...)",
         code="input_not_found",
     )
 
