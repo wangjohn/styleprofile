@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 from collections.abc import Sequence
@@ -135,6 +136,13 @@ def check_wheel(wheel: Path, version: str) -> None:
         _fail(f"wheel has files outside the package: {stray}")
     if "styleprofile/py.typed" not in names:
         _fail("wheel lacks styleprofile/py.typed")
+    required_samples = {
+        f"styleprofile/_examples/{path.relative_to(ROOT / 'examples').as_posix()}"
+        for path in (ROOT / "examples").rglob("*")
+        if path.is_file()
+    }
+    if missing := required_samples - set(names):
+        _fail(f"wheel lacks demo samples: {sorted(missing)}")
     requires = [line for line in metadata.splitlines() if line.startswith("Requires-Dist:")]
     if any("@" in line or "://" in line for line in requires):
         _fail(f"a requirement names a URL, which PyPI refuses: {requires}")
@@ -232,6 +240,15 @@ def smoke_test(wheel: Path, work: Path, *, syntax: bool) -> None:
         _fail("the repository is on sys.path")
 
     print(_run([cli, "--version"], cwd=run, env=env).strip())
+    start = time.perf_counter()
+    out = _run([cli, "demo"], cwd=run, env=env)
+    elapsed = time.perf_counter() - start
+    demo_report = json.loads((run / "styleprofile-demo" / "writer.profile.json").read_text())
+    if "Delta" not in out or "Next: try it on your own texts" not in out:
+        _fail(f"installed demo did not print a verdict and next steps:\n{out}")
+    if demo_report["settings"]["syntax_used"] or elapsed >= 5:
+        _fail(f"surface demo must finish in under 5 s: {elapsed:.2f} s")
+    print(f"installed demo: verdict printed in {elapsed:.2f} s without spaCy")
     out = _run(
         [
             cli,
@@ -274,6 +291,10 @@ def smoke_test(wheel: Path, work: Path, *, syntax: bool) -> None:
     used = report["settings"]["syntax_used"]
     if not used or used["model"] != "en_core_web_sm":
         _fail(f"build after setup did not use the parser: {used}")
+    out = _run([cli, "demo", "--dir", "syntax-demo"], cwd=run, env=env)
+    demo_report = json.loads((run / "syntax-demo" / "writer.profile.json").read_text())
+    if not demo_report["settings"]["syntax_used"]:
+        _fail("installed demo after setup did not use syntax")
     print(f"syntax after setup: {used}")
 
 

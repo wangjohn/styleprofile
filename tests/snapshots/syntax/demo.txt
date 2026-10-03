@@ -1,0 +1,57 @@
+$ styleprofile demo --dir '<tmp>/bundled-demo'
+[exit 0]
+--- stdout
+STYLE PROFILE   7 chunks, 4,496 words
+
+As a reference   held-out Delta 0.82 typically, 95% under 0.97 (7 documents)
+  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7 documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75 words, no verdict.
+
+Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on 7 reference and 5 contrast documents)
+  LLM-likeness on held-out text: reference 0.20 typically (95% under 1.03), LLM drafts 13.72
+  Length alone: AUC 0.73 (reference 640 words per chunk, LLM drafts 624): some length difference
+  Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, Headings ▲
+
+Pass --all, or run `styleprofile show` on it, to see the metrics.
+
+wrote <tmp>/bundled-demo/writer.profile.json
+Next, score a draft against it:
+  styleprofile score <draft> <tmp>/bundled-demo/writer.profile.json
+STYLE COMPARISON   1 chunk, 542 words   vs writer.profile.json (7 chunks)
+
+Overall: close   Delta 0.81
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.85 typically (95% under 1.08).
+
+LLM-likeness: like the reference   0.70
+  The reference's own writing at this length (542 words) scores 0.21 typically (95% under 1.06); the LLM drafts 13.58.
+
+By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
+  close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
+  Voice and stance             1.32x  █████░░░░░░░░░░░░░░░  somewhat different
+  Vocabulary                   0.72x  ███░░░░░░░░░░░░░░░░░  close
+  Function words               0.66x  ███░░░░░░░░░░░░░░░░░  close
+  Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
+  Sentence shape               0.49x  ██░░░░░░░░░░░░░░░░░░  close
+  Rhythm                       0.47x  ██░░░░░░░░░░░░░░░░░░  close
+  Syntax                       0.40x  ██░░░░░░░░░░░░░░░░░░  close
+  How sentences open           0.28x  █░░░░░░░░░░░░░░░░░░░  close
+  Formatting                   0.15x  █░░░░░░░░░░░░░░░░░░░  close
+
+Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
+                                                   this text   reference
+  Sentences per paragraph                               4.38        6.15   ▼▼▼
+  "more"                                             5.5 /1k     1.5 /1k   ▲▲
+  "but"                                              5.5 /1k     2.0 /1k   ▲▲
+  Sentences starting However / Moreover                 2.9%        0.0%   ▲▲  reference never varies
+  Em dashes                                          1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  "these"                                            1.8 /1k     0.0 /1k   ▲▲  reference never varies
+  Words per paragraph                             67.8 words  86.9 words   ▼▼
+
+Pass --all to see every metric.
+
+Next: try it on your own texts
+  styleprofile build posts/ --contrast llm-drafts/ -o writer.json
+  styleprofile score draft.md writer.json
+--- stderr
+Thin reference: it has 7 chunks; aim for 15 or more by adding documents or using a smaller --window-words.
+Thin reference: it has 4,496 words; aim for 20,000 or more of the writer's text, in one genre.

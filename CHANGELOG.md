@@ -33,6 +33,9 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Added
 
+- **Try the bundled samples.** `styleprofile demo` copies the sample corpus, builds a
+  profile and scores a draft. The samples ship in the wheel; `--dir` chooses the folder.
+
 - **Faster CI and safer tests.** Test runs use up to four parallel workers, Python 3.14
   joins the syntax matrix, and permission tests skip under root. Release smoke tests also
   install syntax and run setup; Dependabot checks Python dependencies.

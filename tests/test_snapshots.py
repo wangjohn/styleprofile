@@ -51,6 +51,7 @@ DEMO_REPORT = f"{TMP}/demo-draft.json"
 # (name, arguments) in the order they run; later commands read what earlier ones wrote.
 # `build` gains --no-syntax in surface mode, and `score` and `show` inherit it from the profile.
 COMMANDS: list[tuple[str, list[str]]] = [
+    ("demo", ["demo", "--dir", f"{TMP}/bundled-demo"]),
     ("build", ["build", WRITER, "--contrast", CONTRAST, "-o", REFERENCE]),
     ("score", ["score", DRAFT, REFERENCE, "-o", REPORT]),
     ("score-quiet", ["score", "-q", DRAFT, REFERENCE]),
@@ -181,7 +182,7 @@ def outputs(
         patch.delenv("FORCE_COLOR", raising=False)
         patch.setenv("COLUMNS", "100")
         for name, args in MODES[mode]:
-            if mode == "surface" and args[0] == "build":
+            if mode == "surface" and args[0] in ("build", "demo"):
                 args = [*args, "--no-syntax"]
             results[name] = _run(args, tmp)
     yield mode, results

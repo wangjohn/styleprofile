@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
-from styleprofile import __version__, api, spacy_model
+from styleprofile import __version__, api, demo, spacy_model
 from styleprofile import cache as caching
 from styleprofile.api import (
     AUTO,
@@ -274,6 +274,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         prog=PROG,
         description="Measure a writer's style, then see how far a draft drifts from it.",
         epilog=(
+            f"Try the bundled samples: {PROG} demo\n\n"
             "Build a reference from the writer's texts once, then score drafts against it:\n"
             f"  {PROG} build posts/ --contrast llm-drafts/ -o writer.json\n"
             f"  {PROG} score draft.md writer.json\n\n"
@@ -511,6 +512,25 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
             "environment has no pip; it does nothing when the model is already installed.",
             f"{PROG} setup",
         ),
+    )
+    demo_parser = commands.add_parser(
+        "demo",
+        **_help_parser(
+            "Try the bundled sample texts: copy them to a folder, build a reference and "
+            "score a draft. An unchanged previous demo folder can be reused.",
+            f"{PROG} demo --dir styleprofile-demo",
+        ),
+    )
+    demo_parser.add_argument(
+        "--dir",
+        default="styleprofile-demo",
+        metavar="DIR",
+        help="where to put the samples and profile (default: ./styleprofile-demo)",
+    )
+    demo_parser.add_argument(
+        "--no-syntax",
+        action="store_true",
+        help="skip the spaCy parser and its metrics",
     )
     return parser, dict(commands.choices)
 
@@ -1037,6 +1057,31 @@ def _run_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_demo(args: argparse.Namespace) -> int:
+    directory, samples = demo.prepare(args.dir)
+    # Keep the ordinary build/score output and explicit CLI build cache behavior.
+    root = str(Path(args.dir).expanduser())
+    profile = str(Path(root) / demo.PROFILE)
+    syntax = ["--no-syntax"] if args.no_syntax else []
+    _dispatch(
+        [
+            "build",
+            str(Path(root) / "writer"),
+            "--contrast",
+            str(Path(root) / "llm-drafts"),
+            "-o",
+            profile,
+            *syntax,
+        ]
+    )
+    demo.record(directory, samples)
+    code = _dispatch(["score", str(Path(root) / "draft.md"), profile])
+    print("\nNext: try it on your own texts")
+    print(f"  {PROG} build posts/ --contrast llm-drafts/ -o writer.json")
+    print(f"  {PROG} score draft.md writer.json")
+    return code
+
+
 RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "build": _run_build,
     "score": _run_score,
@@ -1045,6 +1090,7 @@ RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "evaluate": _run_evaluate,
     "cache": _run_cache,
     "setup": _run_setup,
+    "demo": _run_demo,
 }
 
 
