@@ -133,7 +133,7 @@ def test_language_notes_are_printed_by_build_and_score(
     from styleprofile.cli import main
 
     sample = tmp_path / "spanish.md"
-    sample.write_text(LANGUAGES[2] * 10)
+    sample.write_text(LANGUAGES[2] * 10, encoding="utf-8")
     reference = tmp_path / "profile.json"
     assert (
         main(["build", str(sample), "--no-syntax", "--window-words", "100", "-o", str(reference)])
