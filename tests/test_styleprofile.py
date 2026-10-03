@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -1661,3 +1663,17 @@ def test_repeated_inputs_are_read_once(tmp_path: Path, capsys: pytest.CaptureFix
     built, expected = (json.loads(p.read_text(encoding="utf-8")) for p in (reference, once))
     assert built["chunk_count"] == expected["chunk_count"]
     assert built["summary"] == expected["summary"]
+
+
+def test_module_entry_point_reports_the_version(tmp_path: Path) -> None:
+    from styleprofile import __version__
+
+    result = subprocess.run(
+        [sys.executable, "-m", "styleprofile", "--version"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == f"styleprofile {__version__} (report schema {VERSION})"
+    assert result.stderr == ""
