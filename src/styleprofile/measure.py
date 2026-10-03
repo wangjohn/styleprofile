@@ -430,6 +430,7 @@ class Measurer:
         if count > 1:
             # Imported here: most runs start no workers, and these modules cost a scoring
             # run about 7 MB.
+            from concurrent.futures import CancelledError
             from concurrent.futures.process import BrokenProcessPool
 
             try:
@@ -442,7 +443,11 @@ class Measurer:
                         yield result
                         done += 1
                 return
-            except (BrokenProcessPool, OSError):
+            except (BrokenProcessPool, OSError, CancelledError) as error:
+                # Surface work shares this pool and can stop it between syntax batches.
+                # Only that shutdown makes cancellation a reason to retry here.
+                if isinstance(error, CancelledError) and not self._pool_failed:
+                    raise
                 self._pool_failed = True
                 self._stop_pool()
         yield from parse(parser, items[done:], {position - done for position in keep})

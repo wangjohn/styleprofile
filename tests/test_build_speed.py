@@ -31,17 +31,26 @@ def test_paragraph_calibration_is_opt_in_and_other_profile_bytes_stay_identical(
     assert "drift" in sp.build_texts(strings, syntax=False, passages=True).report["calibration"]
 
 
+@pytest.mark.parametrize("json_output", [False, True])
 def test_score_without_paragraph_calibration_names_rebuild_and_scores_normally(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], json_output: bool
 ) -> None:
     path = tmp_path / "writer.json"
     sp.build(WRITER, syntax=False, contrast=CONTRAST).save(path)
-    assert main(["score", str(DRAFT), str(path), "--by-paragraph"]) == 0
+    args = ["score", str(DRAFT), str(path), "--by-paragraph"]
+    if json_output:
+        args.append("--json")
+    assert main(args) == 0
     output = capsys.readouterr()
     assert "Paragraph checks need" in output.err
     assert "styleprofile build" in output.err and "--by-paragraph" in output.err
     assert "--contrast" in output.err
-    assert "Delta" in output.out and "Where it drifts" not in output.out
+    if json_output:
+        report = json.loads(output.out)
+        assert report["reference"]["delta_mean"] is not None
+        assert not report.get("passages")
+    else:
+        assert "Delta" in output.out and "Where it drifts" not in output.out
 
 
 def test_surface_workers_preserve_profile_bytes_and_stop() -> None:
@@ -162,3 +171,57 @@ def test_surface_failure_after_completed_batch_keeps_order(
     with Measurer(jobs=2) as measurer:
         actual = build_reference(chunks, measurer=measurer)
     assert json.dumps(actual) == json.dumps(expected)
+
+
+def test_surface_failure_cancels_queued_syntax_and_retries_remaining_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import Future
+    from typing import Any
+
+    class Pool:
+        calls = 0
+
+        def __init__(self) -> None:
+            self.pending: Future[Any] = Future()
+
+        def submit(self, function: Any, items: Any) -> Future[Any]:
+            self.calls += 1
+            future: Future[Any] = Future()
+            if self.calls == 2:
+                future.set_exception(OSError("surface batch failed"))
+            else:
+                future.set_result(function(items))
+            return future
+
+        def map(self, function: Any, tasks: Any) -> Any:
+            yield [({}, {}, [], None)] * measure.TASK_TEXTS
+            yield self.pending.result()
+
+        def shutdown(self, **kwargs: object) -> None:
+            self.pending.cancel()
+
+    pool = Pool()
+    monkeypatch.setattr(measure, "start_pool", lambda *args: pool)
+    monkeypatch.setattr(measure, "workers_can_start", lambda: True)
+    monkeypatch.setattr(measure, "memory_jobs", lambda: 4)
+    retried: list[str] = []
+
+    def parse(parser: Any, items: Any, keep: Any) -> Any:
+        for text, _ in items:
+            retried.append(text)
+            yield ({}, {}, [], None)
+
+    monkeypatch.setattr(measure, "parse", parse)
+    from types import SimpleNamespace
+
+    parser = SimpleNamespace(model="unused")
+    texts = [f"Sentence number {index}." for index in range(65)]
+    items = [(text, measure.prose(text), []) for text in texts]
+    with Measurer(jobs=2) as measurer:
+        surface = measurer.surface(items, parser)  # type: ignore[arg-type]
+        syntax = measurer.parse(parser, [(text, []) for text in texts])  # type: ignore[arg-type]
+        for _ in texts:
+            next(surface)
+            next(syntax)
+    assert retried == texts[measure.TASK_TEXTS :]

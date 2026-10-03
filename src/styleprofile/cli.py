@@ -867,12 +867,11 @@ def _run_score(args: argparse.Namespace) -> int:
             command += ["--contrast", "CONTRAST_TEXTS"]
         if not profile.has_syntax:
             command += ["--no-syntax"]
-        if not args.json:
-            _note(
-                "Paragraph checks need a profile built with --by-paragraph; "
-                "use your original inputs in: "
-                f"{shell_join(command)}"
-            )
+        _note(
+            "Paragraph checks need a profile built with --by-paragraph; "
+            "use your original inputs in: "
+            f"{shell_join(command)}"
+        )
         args.by_paragraph = False
     # Flags left out are inherited from the profile.
     overrides: SettingsOverrides = {}
