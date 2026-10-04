@@ -106,3 +106,12 @@ def test_default_snapshots_fit_120_columns() -> None:
             verdict_table = bool(re.search(r"^  .*\S {3,}\S.*(?:▲|▼|—)", line))
             if not (command or quoted or verdict_table):
                 assert len(line) <= 120, (path.name, number, len(line), line)
+
+
+def test_requested_split_without_boundaries_says_text_was_kept_whole() -> None:
+    profile = api.build(WRITER, syntax=False, cache=False)
+    result = profile.score_text(DRAFT.read_text(encoding="utf-8"), split_on="heading", cache=False)
+    [note] = [note for note in result.notes if note.code == NoteCode.SPLIT]
+    assert "kept whole" in note.text()
+    assert "split into documents" not in note.text()
+    assert "no headings" in note.text(verbose=True)

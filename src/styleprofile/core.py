@@ -417,7 +417,7 @@ _NOTE_FORMS: dict[NoteCode, dict[str, NoteForm]] = {
             "split {0} {1}texts into {2} documents at their {3}",
         ),
         "0": NoteForm(
-            ("Text split into documents where possible; use split_on to choose headings or rules."),
+            "Text kept whole: no usable split; supply document boundaries or choose split_on.",
             "{0} into parts of at least half a window, so {1}",
         ),
         "1": NoteForm(
