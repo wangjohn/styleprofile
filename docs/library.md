@@ -248,9 +248,8 @@ its numbers, so they are not `Settings` and are never saved:
   `posts/2024/a.md`; see [method.md](method.md)), while `result.sources` lists the real
   files read, unsaved. A profile keeps summaries only; `sp.build(..., keep_chunks=True)`
   also saves every chunk's metrics, for debugging.
-  A report saved by another version of styleprofile, or one lacking or garbling a part this
-  version needs, is refused with a message naming the part and saying to build (or score)
-  it again; nothing is migrated before 0.2.0.
+  Reports use a major and minor format version, as described below. Required data that is
+  missing or malformed is refused with a message naming the part and how to make it again.
 - `sp.evaluate(inputs, contrast, {"light": Path("edits/light")})` runs the rewording stress
   test that `styleprofile evaluate` runs.
 - `build_reference(chunks)` and `score(chunks, reference)` in `styleprofile.profile` are
@@ -260,3 +259,47 @@ its numbers, so they are not `Settings` and are never saved:
   pass `measurer=Measurer(cache=MeasurementCache(), jobs=0)` (from `styleprofile.measure`
   and `styleprofile.cache`); close it, or use it in a `with` block, to stop its workers and
   write the cache.
+
+## Saved report compatibility
+
+The JSON integer `version` is the report's **major** version; `minor_version` is its
+**minor** version. Reference and score reports currently write major 8, minor 1; evaluation
+reports use their separate major 2, minor 1. This is a report format version, independent
+of the package release. Existing files with only an integer version mean minor zero:
+`version: 8` means 8.0, and an evaluation's `version: 2` means 2.0. Loading and saving keeps
+those numbers and any unknown fields intact.
+
+A major changes when measurements, calibration, existing fields' meaning, or required
+data change incompatibly. Different majors are refused with instructions to rebuild,
+rescore, or reevaluate. In particular, legacy major 7 remains incompatible with major 8's
+paragraph measurements and sentence-boundary windowing; it is not an older minor. Older
+integer majors are not coerced into the current major.
+
+A minor adds optional information without changing existing numbers or their meaning.
+Matching-major reports with an older minor still load. A newer minor also loads, with
+`NoteCode.NEWER_REPORT_VERSION` in `Profile.notes` or a result's notes explaining that
+some fields may be ignored. The CLI prints that note for `show` and when scoring against
+such a profile. Lower-level `load_report(path, notes=notes)` fills a supplied list with
+these transient notes; they are not saved as text-reliability warnings.
+
+Optional information has these defaults and remedies:
+
+| Missing field | Behavior |
+|---|---|
+| `minor_version` | Minor zero. |
+| Recorded input settings | `Settings` defaults; missing `window_words` means 0 (unwindowed). |
+| Reference `chunks` | No saved per-chunk metrics; summaries still score drafts. |
+| Reference `contrast` | No LLM-likeness score; rebuild with contrast texts to add it. |
+| Reference `calibration.drift` | No paragraph thresholds; rebuild with `--by-paragraph` to add them. |
+| Score `passages` | No saved paragraph checks; `show --by-paragraph` says to score again with that flag. |
+
+Additive fields must document a safe default or explain how to enable the feature.
+Required summaries, weights, verdicts and calibration ranges are still validated: matching
+versions do not make a missing or malformed scientific value safe to invent. Version
+numbers must be integers (not booleans), with a positive major and nonnegative minor.
+
+
+Human rendering uses short notes and warnings. `Profile.to_text`, `ScoreResult.to_text`
+and `Evaluation.to_text` accept `verbose=True` for full explanations. `Note.message` and
+saved report `warnings` retain their long text; `Note.text()` selects the short form and
+`Note.text(verbose=True)` selects the original message.

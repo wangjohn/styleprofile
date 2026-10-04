@@ -145,7 +145,7 @@ from styleprofile.weighting import (
 # Also calibration.by_length: the reference's held-out ranges for texts of about 75,
 # 150 and 300 words, so each chunk is judged at its own length; score reports carry a
 # ``verdict``, which is "too short to judge" below 75 words.
-# Reports of any other version are refused (``check_version``): rebuild them.
+# Reports of another major version are refused: their measurements may not match.
 # Also in 6, before any release: reference profiles leave out per-chunk rows (unless built
 # with keep_chunks) and store ``document_count``; sources are saved by their input's name,
 # never as paths; the contrast AUC's ``bootstrap`` records its method and resamples.
@@ -153,6 +153,8 @@ from styleprofile.weighting import (
 # (see ``syntax.is_nominalization``), so a version 6 profile's values would not match.
 # 8 (0.2.0): long plain blocks split at sentences; long single paragraphs omit structure.
 VERSION = 8
+# Additive report fields increment this; legacy integer versions have minor zero.
+MINOR_VERSION = 1
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
 REFERENCE: Final = "reference"
@@ -1776,10 +1778,10 @@ def report_kind(report: Mapping[str, Any]) -> str:
     return kind
 
 
-def load_report(path: Path, name: str | None = None) -> Report:
+def load_report(path: Path, name: str | None = None, *, notes: list[Note] | None = None) -> Report:
     """Read any styleprofile report: reference, score or evaluation.
 
-    A report of another version, or one that lacks a key its kind needs (see ``schema``), is
+    A report of another major version, or one that lacks a key its kind needs, is
     refused with code ``outdated``. Messages call the file ``name``, by default ``path``."""
     name = str(path) if name is None else name
     if path.is_dir():
@@ -1800,12 +1802,14 @@ def load_report(path: Path, name: str | None = None) -> Report:
             check_version(report, name)
         raise StyleProfileError(f"{name} is {UNREADABLE}", code="outdated")
     check_report(report, name)
+    if notes is not None:
+        notes.extend(version_notes(report))
     return cast(Report, report)
 
 
 def check_report(report: Mapping[str, Any], name: str = "the report") -> None:
     """Refuse a report of a known kind (see ``report_kind``) that this styleprofile cannot
-    read: one of another version (``check_version``), or one whose shape its kind does not
+    read: one of another major version (``check_version``), or one whose shape its kind does not
     have (``schema.find_problem``): a key missing, a part of the wrong kind, or a null where
     one is needed, naming the part. All get code ``outdated``."""
     check_version(report, name)
@@ -1891,12 +1895,16 @@ def _before_means(report: Mapping[str, Any]) -> bool:
 
 
 def check_version(report: Mapping[str, Any], name: str = "the report") -> None:
-    """Refuse a report of another version than this styleprofile writes, saying how to
-    make it again: its settings and metrics would be misread rather than migrated."""
+    """Refuse incompatible majors and malformed numbers; matching majors share semantics.
+
+    The missing minor of a legacy integer report is zero. Additive minors do not change
+    existing measurements, required fields or their meaning.
+    """
     kind = report.get("kind")
     expected = EVALUATION_VERSION if kind == EVALUATION else VERSION
     version = report.get("version")
-    if type(version) is not int:
+    minor = report.get("minor_version", 0)
+    if type(version) is not int or version < 1 or type(minor) is not int or minor < 0:
         # Missing, or not a number ("6", say): no version this or any styleprofile writes.
         raise StyleProfileError(f"{name} is {UNREADABLE}", code="outdated")
     if version == expected:
@@ -1919,6 +1927,15 @@ def check_version(report: Mapping[str, Any], name: str = "the report") -> None:
         f"{expected}); {_again(kind)}",
         code="outdated",
     )
+
+
+def version_notes(report: Mapping[str, Any]) -> tuple[Note, ...]:
+    """Transient compatibility advice for a valid report, also used by library results."""
+    expected = EVALUATION_VERSION if report.get("kind") == EVALUATION else VERSION
+    minor = report.get("minor_version", 0)
+    if report.get("version") == expected and type(minor) is int and minor > MINOR_VERSION:
+        return (NoteCode.NEWER_REPORT_VERSION.note(),)
+    return ()
 
 
 def load_reference(path: Path, name: str | None = None) -> ReferenceReport:
@@ -2379,6 +2396,7 @@ def _build_reference(
     )
     report: ReferenceReport = {
         "version": VERSION,
+        "minor_version": MINOR_VERSION,
         "kind": REFERENCE,
         **base.described,
         "warnings": base.warnings,
@@ -2593,6 +2611,7 @@ def score(
         ]
     return {
         "version": VERSION,
+        "minor_version": MINOR_VERSION,
         "kind": SCORE,
         **base.described,
         "warnings": warnings,

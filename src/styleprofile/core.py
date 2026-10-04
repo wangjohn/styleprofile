@@ -33,6 +33,8 @@ class StyleProfileError(ValueError):
 class NoteCode(StrEnum):
     """The kinds of ``Note``. Front ends dispatch on these, so every note has one."""
 
+    NEWER_REPORT_VERSION = "newer_report_version"
+    """A saved report uses a newer additive minor; unknown fields may be ignored."""
     NO_PARAGRAPH_BREAKS = "no_paragraph_breaks"
     """Paragraph structure is omitted for a long single paragraph."""
     OVERSIZE_CHUNK = "oversize_chunk"
@@ -149,7 +151,8 @@ class Note:
 
     ``message`` never mentions flags; when it names a setting, ``setting`` says which, as
     for ``StyleProfileError``. Notes describe the run, not the text, so they are not saved
-    in reports; warnings about the text are (``report["warnings"]``).
+    in reports; warnings about the text are (``report["warnings"]``). Frontends use
+    ``text()`` for the short form or ``text(verbose=True)`` for the original message.
     """
 
     message: str
@@ -306,6 +309,16 @@ def warning_text(message: str, *, verbose: bool = False) -> str:
 
 
 _NOTE_FORMS: dict[NoteCode, dict[str, NoteForm]] = {
+    NoteCode.NEWER_REPORT_VERSION: {
+        "default": NoteForm(
+            "Newer minor report version; some fields may be ignored. Upgrade styleprofile.",
+            "This report uses a newer minor version; some fields may be ignored.",
+        ),
+        "fallback": NoteForm(
+            "Newer minor report version; some fields may be ignored. Upgrade styleprofile.",
+            "{0}",
+        ),
+    },
     NoteCode.WARNING_COUNT: {
         "default": NoteForm("{0}; run without -q to see them", "{0}; run without -q to see them"),
         "fallback": NoteForm("Warnings present; run without -q to see them.", "{0}"),

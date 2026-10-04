@@ -93,6 +93,7 @@ from styleprofile.profile import (
     pool,
     report_kind,
     score,
+    version_notes,
     window,
     write_report,
 )
@@ -299,7 +300,7 @@ class _Result(Generic[_R]):
         self, report: _R, *, notes: Sequence[Note] = (), sources: Sequence[str] = ()
     ) -> None:
         self._report = report
-        self._notes = tuple(notes)
+        self._notes = (*notes, *version_notes(report))
         self._sources = tuple(sources)
 
     def save(self, path: str | os.PathLike[str]) -> None:
@@ -453,7 +454,7 @@ class Profile(_Result[ReferenceReport]):
                 DeprecationWarning,
                 stacklevel=2,
             )
-        notes: list[Note] = []
+        notes = list(version_notes(self._report))
         with _notes_on_error(notes), _measurer(progress, jobs, cache) as measurer:
             base = settings
             if base is None:

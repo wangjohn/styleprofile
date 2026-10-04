@@ -952,7 +952,11 @@ def _drift_view(
     (``shown``)."""
     documents = report.get("passages") or []
     if not documents:
-        return []
+        return (
+            ["Paragraph checks were not saved; score again with --by-paragraph."]
+            if by_paragraph
+            else []
+        )
     order = {doc["name"]: index for index, doc in enumerate(worst_first(report["documents"]))}
     documents = sorted(documents, key=lambda document: order.get(document["name"], len(order)))
     label = reference["contrast"]["label"] if reference["contrast"] else None
