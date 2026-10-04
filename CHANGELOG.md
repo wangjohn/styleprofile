@@ -17,6 +17,10 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Changed
 
+- **Start with a packaged demo.** The README now leads with installation and
+  `styleprofile demo`, adds corpus-size and troubleshooting tables, and links separate
+  command and contributor guides. Recipes describe the shipped CLI and library APIs.
+
 - **Short notes by default.** Build, score and evaluation messages use short, actionable
   text. `--verbose` restores full explanations; JSON keeps full warnings. Small references
   get one size-and-next-step warning.

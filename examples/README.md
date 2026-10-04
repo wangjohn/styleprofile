@@ -1,9 +1,20 @@
 # Sample corpus
 
-A small corpus for trying styleprofile end to end. Run `make demo` from the repository root:
-it scores `draft.md`, which slips into the LLM register in two paragraphs, first against the
-seven essays, then against a larger synthetic corpus remixed from them, which finds the two
-paragraphs under "Where it drifts" (experimental, shown with `--by-paragraph`).
+Run the installed command from any directory:
+
+```bash
+styleprofile demo
+```
+
+It copies the bundled samples into `styleprofile-demo/`, builds a reference, and scores
+`draft.md`. Expect `Overall: close`: its whole-document average hides two paragraphs in an
+LLM register. The seven-essay reference is deliberately thin. Use `--dir` to choose another
+empty folder; rerunning is allowed only when the previous demo files are unchanged.
+`--no-syntax` runs the surface-only example without spaCy.
+
+From a clone, `make demo` also shows the experimental paragraph check, first against the
+seven essays (too few to set thresholds), then against a larger synthetic remix that finds
+the two paragraphs. It builds with `--by-paragraph` before scoring with that flag.
 
 All text here is original, written for this repository, and released under the repository's
 MIT license. No third-party or public-domain text is included.

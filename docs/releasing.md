@@ -95,6 +95,6 @@ bumping the model with it**, all in one change:
 3. `uv lock`, then `MODEL_SHA256` in `src/styleprofile/spacy_model.py` from the model's
    hash in `uv.lock`;
 4. `make snapshots`, since a new parser changes the syntax metrics, and report `VERSION` in
-   `src/styleprofile/profile.py` if saved profiles' values would change.
+   `src/styleprofile/reports.py` if saved profiles' values would change.
 
 `tests/test_packaging.py` checks that the version, bound, URL and hash agree.
