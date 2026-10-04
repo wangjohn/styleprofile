@@ -10,7 +10,7 @@ import pytest
 
 from styleprofile import StyleProfileError
 from styleprofile.cli import main
-from styleprofile.profile import load_report, report_kind
+from styleprofile.reports import load_report, report_kind
 
 POSTS = [
     "I don't know what I expected. We tried it anyway, and it mostly worked for a while.",

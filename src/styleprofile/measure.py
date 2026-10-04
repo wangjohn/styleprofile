@@ -50,7 +50,7 @@ from styleprofile.syntax import Parser, load_parser, pos_trigrams, syntax_metric
 if TYPE_CHECKING:
     from concurrent.futures import Executor
 
-    from styleprofile.profile import Chunk
+    from styleprofile.corpus.types import Chunk
 
 # Automatic worker processes: one per CPU, at most AUTO_JOBS, and only when there are at least
 # PARALLEL_WORDS words to parse. A worker takes 1-2 seconds to start (it loads its own spaCy

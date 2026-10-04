@@ -33,7 +33,7 @@ import pytest
 
 from styleprofile.cache import MeasurementCache
 from styleprofile.cli import main
-from styleprofile.profile import MINOR_VERSION
+from styleprofile.reports import MINOR_VERSION
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
 gen: Any = importlib.import_module("gen")

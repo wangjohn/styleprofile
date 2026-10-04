@@ -19,7 +19,9 @@ import pytest
 import styleprofile as sp
 from styleprofile import schema
 from styleprofile.cli import main
-from styleprofile.profile import Chunk, build_reference, dumps_report, load_report, score
+from styleprofile.corpus.types import Chunk
+from styleprofile.reference import build_reference
+from styleprofile.reports import dumps_report, load_report
 from styleprofile.schema import (
     EvaluationReport,
     Problem,
@@ -28,6 +30,7 @@ from styleprofile.schema import (
     SyntaxUsed,
     find_problem,
 )
+from styleprofile.scoring import score
 from styleprofile.syntax import SyntaxUnavailableError, load_parser
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))

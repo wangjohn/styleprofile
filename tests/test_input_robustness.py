@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 import styleprofile as sp
-from styleprofile.profile import Chunk, window
+from styleprofile.corpus.types import Chunk
+from styleprofile.corpus.windows import window
 from styleprofile.surface import (
     PARAGRAPH_METRICS,
     paragraph_metrics_missing,

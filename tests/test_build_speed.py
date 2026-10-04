@@ -11,8 +11,12 @@ import styleprofile as sp
 from styleprofile import measure
 from styleprofile.cli import main
 from styleprofile.core import NoteCode
+from styleprofile.corpus.duplicates import drop_duplicates
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.windows import window
 from styleprofile.measure import Measurer
-from styleprofile.profile import build_reference, drop_duplicates, dumps_report, load_chunks, window
+from styleprofile.reference import build_reference
+from styleprofile.reports import dumps_report
 
 ROOT = Path(__file__).resolve().parent.parent
 WRITER = ROOT / "examples" / "writer"

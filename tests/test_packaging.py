@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import styleprofile as sp
-from styleprofile import api, spacy_model, syntax
+from styleprofile import runtime, spacy_model, syntax
 from styleprofile.cli import main
 from styleprofile.spacy_model import (
     MODEL_SHA256,
@@ -300,7 +300,7 @@ def model_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_spacy = SimpleNamespace(load=load, __version__="3.8.16")
     monkeypatch.setattr(syntax, "import_module", lambda name: fake_spacy)
     # The real loader, uncached, so the fake is what it sees.
-    monkeypatch.setattr(api, "_default_parser", syntax.load_parser)
+    monkeypatch.setattr(runtime, "_default_parser", syntax.load_parser)
 
 
 @pytest.mark.usefixtures("model_missing")
@@ -331,7 +331,7 @@ def no_spacy(monkeypatch: pytest.MonkeyPatch) -> None:
         raise ImportError(name)
 
     monkeypatch.setattr(syntax, "import_module", import_module)
-    monkeypatch.setattr(api, "_default_parser", syntax.load_parser)
+    monkeypatch.setattr(runtime, "_default_parser", syntax.load_parser)
 
 
 @pytest.mark.usefixtures("no_spacy")

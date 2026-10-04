@@ -21,7 +21,7 @@ from styleprofile.display import (
     format_summary,
 )
 from styleprofile.metrics import METRICS
-from styleprofile.profile import write_report
+from styleprofile.reports import write_report
 from styleprofile.schema import Baseline, GroupRange
 
 # The demo's areas: sentence shape's raw Delta is higher, but it is well inside its own wide

@@ -17,11 +17,14 @@ from typing import Any
 import pytest
 
 import styleprofile as sp
-from styleprofile import measure, status
+from styleprofile import measure, runtime, status
 from styleprofile.cli import main
 from styleprofile.core import Phase, Progress
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.windows import window
 from styleprofile.measure import Measurer, workers_can_start
-from styleprofile.profile import build_reference, dumps_report, load_chunks, window
+from styleprofile.reference import build_reference
+from styleprofile.reports import dumps_report
 from styleprofile.status import StatusLine
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -396,13 +399,13 @@ def test_a_piece_whose_prose_repeats_is_found_as_main_found_it() -> None:
 def test_a_model_that_fails_to_load_leaves_syntax_out_under_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from styleprofile import api, syntax
+    from styleprofile import syntax
 
     def broken(model: str) -> Any:
         raise syntax.SyntaxUnavailableError(f"{model} is broken")
 
     monkeypatch.setattr(syntax, "_load", broken)
-    api._default_parser.cache_clear()  # pyright: ignore[reportPrivateUsage]
+    runtime._default_parser.cache_clear()  # pyright: ignore[reportPrivateUsage]
     try:
         profile = sp.build(WRITER, jobs=1, cache=False)
         assert profile.report["settings"]["syntax_used"] is None
@@ -410,4 +413,4 @@ def test_a_model_that_fails_to_load_leaves_syntax_out_under_auto(
         with pytest.raises(sp.SyntaxUnavailableError):
             sp.build(WRITER, sp.Settings(syntax=True), jobs=1, cache=False)
     finally:
-        api._default_parser.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        runtime._default_parser.cache_clear()  # pyright: ignore[reportPrivateUsage]

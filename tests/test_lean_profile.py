@@ -12,15 +12,11 @@ import pytest
 
 from styleprofile import StyleProfileError
 from styleprofile.cli import main
-from styleprofile.profile import (
-    VERSION,
-    SourceNames,
-    build_reference,
-    document_of,
-    load_chunks,
-    root_name,
-    window,
-)
+from styleprofile.corpus.ids import document_of
+from styleprofile.corpus.reading import SourceNames, load_chunks, root_name
+from styleprofile.corpus.windows import window
+from styleprofile.reference import build_reference
+from styleprofile.reports import VERSION
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
