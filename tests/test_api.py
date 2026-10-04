@@ -468,7 +468,7 @@ def test_notes_reach_the_caller_when_a_run_fails(
     draft = tmp_path / "draft.md"
     draft.write_text(POSTS[1], encoding="utf-8")
     command = ["build", str(post), str(post), "--contrast", str(draft), "--no-syntax"]
-    assert main([*command, "-o", str(tmp_path / "x.json")]) == 1
+    assert main([*command, "-o", str(tmp_path / "x.json"), "--verbose"]) == 1
     err = capsys.readouterr().err
     assert err.startswith(f"note: {repeated.message}\nerror: ")
 

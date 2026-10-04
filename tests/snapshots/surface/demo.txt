@@ -4,9 +4,12 @@ $ styleprofile demo --dir '<tmp>/bundled-demo' --no-syntax
 STYLE PROFILE   7 chunks, 4,496 words
 
 As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
-  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7 documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75 words, no verdict.
+  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7
+  documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75
+  words, no verdict.
 
-Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on 7 reference and 5 contrast documents)
+Contrast: LLM drafts   5 chunks from 5 documents; separates them from the reference with AUC 1.00 (perfect separation on
+7 reference and 5 contrast documents)
   LLM-likeness on held-out text: reference 0.20 typically (95% under 0.82), LLM drafts 14.23
   Length alone: AUC 0.73 (reference 640 words per chunk, LLM drafts 624): some length difference
   Compared with the reference, LLM drafts have: Long words (7+ letters) ▲, List items ▲, Bold phrases ▲, Headings ▲
@@ -19,7 +22,8 @@ Next, score a draft against it:
 STYLE COMPARISON   1 chunk, 542 words   vs writer.profile.json (7 chunks)
 
 Overall: close   Delta 0.85
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under 0.99).
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under
+  0.99).
 
 LLM-likeness: like the reference   0.71
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.
@@ -52,5 +56,4 @@ Next: try it on your own texts
   styleprofile score draft.md writer.json
   styleprofile score draft.md --against posts/
 --- stderr
-Thin reference: it has 7 chunks; aim for 15 or more by adding documents or using a smaller --window-words.
-Thin reference: it has 4,496 words; aim for 20,000 or more of the writer's text, in one genre.
+Thin reference: 7 chunks, 4,496 words (aim for 15+ chunks and 20,000+ words); add more of the writer's documents

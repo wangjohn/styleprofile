@@ -379,9 +379,9 @@ class Profile(_Result[ReferenceReport]):
         """Whether the profile has syntax metrics (spaCy was used to build it)."""
         return self._report["settings"]["syntax_used"] is not None
 
-    def to_text(self, *, full: bool = False, color: bool = False) -> str:
+    def to_text(self, *, full: bool = False, color: bool = False, verbose: bool = False) -> str:
         """The summary ``styleprofile build`` prints; ``full`` adds every metric."""
-        return format_reference_summary(self._report, color=color, full=full)
+        return format_reference_summary(self._report, color=color, full=full, verbose=verbose)
 
     def score_text(
         self,
@@ -468,11 +468,8 @@ class Profile(_Result[ReferenceReport]):
             recorded = self.settings
             if chosen.min_words != recorded.min_words:
                 notes.append(
-                    Note(
-                        f"min_words {chosen.min_words} overrides the reference's "
-                        f"{recorded.min_words}",
-                        NoteCode.SETTING_OVERRIDDEN,
-                        setting="min_words",
+                    NoteCode.SETTING_OVERRIDDEN.note(
+                        "0", f"{chosen.min_words}", f"{recorded.min_words}", setting="min_words"
                     )
                 )
             given = overrides.get("text_field") or (settings.text_field if settings else None)
@@ -506,20 +503,14 @@ class Profile(_Result[ReferenceReport]):
             reference_pooled = bool((self._report.get("settings") or {}).get("pool_used"))
             if cut.pooled is None and cut.short and len(chunks) > 1:
                 notes.append(
-                    Note(
-                        f"these {len(chunks):,} texts are short (the median is under a quarter "
-                        "of a window), so each is judged at its own length, and those under "
-                        f"{MIN_JUDGED_WORDS} words get no verdict; use pool to judge them as "
-                        "one batch",
-                        NoteCode.SHORT_TEXTS,
-                        setting="pool",
+                    NoteCode.SHORT_TEXTS.note(
+                        "0", f"{len(chunks):,}", f"{MIN_JUDGED_WORDS}", setting="pool"
                     )
                 )
             missing = (
-                "the reference has syntax metrics but {missing}, so syntax is left out of "
-                "this score; {fix} to include it"
+                NoteCode.NO_SYNTAX.forms["score_reference"].long
                 if self.has_syntax
-                else "{missing}, so this score has surface metrics only; {fix} to include syntax"
+                else NoteCode.NO_SYNTAX.forms["score_surface"].long
             )
             parser = _parser(chosen.syntax, notes, missing, step)
             step(Phase.SCORE)
@@ -807,6 +798,7 @@ class ScoreResult(_Result[ScoreReport]):
         color: bool = False,
         width: int = 80,
         by_paragraph: bool = False,
+        verbose: bool = False,
     ) -> str:
         """The comparison ``styleprofile score`` prints; ``full`` shows every metric and
         every document, the document table fits ``width`` columns, and ``by_paragraph``
@@ -821,6 +813,7 @@ class ScoreResult(_Result[ScoreReport]):
             width=width,
             shown=shown,
             by_paragraph=by_paragraph,
+            verbose=verbose,
         )
 
     def __repr__(self) -> str:
@@ -858,9 +851,9 @@ def _reaches(verdict: Any, limit: Any, levels: Sequence[Any]) -> bool:
 class Evaluation(_Result[EvaluationReport]):
     """The rewording stress test: what ``styleprofile evaluate`` prints and saves."""
 
-    def to_text(self, *, color: bool = False) -> str:
+    def to_text(self, *, color: bool = False, verbose: bool = False) -> str:
         """The tables ``styleprofile evaluate`` prints."""
-        return format_evaluation(self._report, color=color)
+        return format_evaluation(self._report, color=color, verbose=verbose)
 
 
 load = Profile.load
@@ -1006,10 +999,7 @@ def build(
             else None
         )
         contrast_windows = contrast_cut.windows if contrast_cut is not None else None
-        missing = (
-            "{missing}, so this profile has surface metrics only; for syntax metrics, {fix} "
-            "and build again"
-        )
+        missing = NoteCode.NO_SYNTAX.forms["build_surface"].long
         parser = _parser(settings.syntax, notes, missing, step)
         step(Phase.BUILD)
         report = _or_without_syntax(
@@ -1143,16 +1133,15 @@ def evaluate(
             if overlap:
                 count = len(overlap)
                 notes.append(
-                    Note(
-                        f"{label}: {count:,} file{'' if count == 1 else 's'} in "
-                        f"{', '.join(_typed(value))} are also given as the writer's "
-                        "texts or the original drafts, so that set is not an edit of them",
-                        NoteCode.EDITED_OVERLAP,
+                    NoteCode.EDITED_OVERLAP.note(
+                        "0",
+                        f"{label}",
+                        f"{count:,}",
+                        f"{('' if count == 1 else 's')}",
+                        f"{', '.join(_typed(value))}",
                     )
                 )
-        missing = (
-            "{missing}, so this uses surface metrics only; for syntax metrics, {fix} and run again"
-        )
+        missing = NoteCode.NO_SYNTAX.forms["evaluate_surface"].long
         parser = _parser(settings.syntax, notes, missing, step)
         # The drafts pool as the writer's texts do, and each edited set as its originals did,
         # so an edited window pairs with its original window by name.
@@ -1263,16 +1252,13 @@ def _thin_reference(
 
     if documents < ENOUGH_DOCUMENTS and settings.group_field and len(windows) > 1:
         note(
-            f"it comes from {_plural(documents, 'document')}, so it has no held-out "
-            "calibration and cannot learn a contrast: every record has the same "
-            f"{settings.group_field}; leave out group_field, or group by a finer field",
+            NoteCode.THIN_REFERENCE.message(
+                "0", f"{_plural(documents, 'document')}", f"{settings.group_field}"
+            ),
             "group_field",
         )
     elif documents < ENOUGH_DOCUMENTS:
-        note(
-            f"it comes from {_plural(documents, 'document')}, so it has no held-out "
-            "calibration and cannot learn a contrast; add more of the writer's documents"
-        )
+        note(NoteCode.THIN_REFERENCE.message("3", f"{_plural(documents, 'document')}"))
     if report["chunk_count"] < ENOUGH_CHUNKS:
         smaller = (
             "a smaller window_words"
@@ -1280,8 +1266,9 @@ def _thin_reference(
             else f"window_words {DEFAULT_WINDOW_WORDS}"
         )
         note(
-            f"it has {_plural(report['chunk_count'], 'chunk')}; aim for {ENOUGH_CHUNKS} or "
-            f"more by adding documents or using {smaller}",
+            NoteCode.THIN_REFERENCE.message(
+                "1", f"{_plural(report['chunk_count'], 'chunk')}", f"{ENOUGH_CHUNKS}", f"{smaller}"
+            ),
             "window_words",
         )
     # The windows' own held-out range needs only two documents, but a document holding
@@ -1298,22 +1285,24 @@ def _thin_reference(
             # divide at headings or rules the automatic split left alone.
             first = next(w for w in windows if chunk_document(w) == document)
             text = not is_record(first) and _PART not in document
-            how = (
-                " (split_on heading or split_on rule splits each text at its headings or "
-                "rules, where it has them)"
-            )
+            how = NoteCode.THIN_REFERENCE.message("split_advice")
             note(
-                f"one document holds {largest:,} of its {_plural(len(windows), 'chunk')}, so "
-                f"its held-out range rests on the other {_plural(rest, 'chunk')}, where a "
-                f"range needs {MIN_CALIBRATION_PIECES} from {MIN_CALIBRATION_DOCUMENTS} or "
-                "more documents; add documents of a similar size"
-                + (", or split that one" + how if text else ""),
+                NoteCode.THIN_REFERENCE.message(
+                    "dominant",
+                    f"{largest:,}",
+                    _plural(len(windows), "chunk"),
+                    _plural(rest, "chunk"),
+                    str(MIN_CALIBRATION_PIECES),
+                    str(MIN_CALIBRATION_DOCUMENTS),
+                    NoteCode.THIN_REFERENCE.message("split_suffix", how) if text else "",
+                ),
                 "split_on" if text else None,
             )
     if report["word_count"] < ENOUGH_WORDS:
         note(
-            f"it has {_plural(report['word_count'], 'word')}; aim for {ENOUGH_WORDS:,} or "
-            "more of the writer's text, in one genre"
+            NoteCode.THIN_REFERENCE.message(
+                "2", f"{_plural(report['word_count'], 'word')}", f"{ENOUGH_WORDS:,}"
+            )
         )
     return thin
 
@@ -1344,23 +1333,13 @@ def _finish(measurer: Measurer, notes: list[Note]) -> None:
     measurer.close()
     if measurer.requested_jobs > measurer.jobs:
         notes.append(
-            Note(
-                f"jobs reduced from {measurer.requested_jobs} to {measurer.jobs} "
-                "to fit available memory",
-                NoteCode.WORKERS_LIMITED,
-                setting="jobs",
+            NoteCode.WORKERS_LIMITED.note(
+                "0", f"{measurer.requested_jobs}", f"{measurer.jobs}", setting="jobs"
             )
         )
     store = measurer.cache
     if store is not None and store.problem is not None:
-        notes.append(
-            Note(
-                f"the measurement cache at {store.path} could not be used ({store.problem}), "
-                "so this run went on without it: what it measured from then on is not "
-                "saved for the next",
-                NoteCode.CACHE_UNAVAILABLE,
-            )
-        )
+        notes.append(NoteCode.CACHE_UNAVAILABLE.note("0", f"{store.path}", f"{store.problem}"))
 
 
 def _progress(callback: ProgressCallback | None) -> Callable[[Phase], None]:
@@ -1561,30 +1540,20 @@ def _read(
         files = {chunk.path for chunk in loaded if chunk.path is not None}
         repeated = files & seen
         if repeated and repeated == files:
-            notes.append(Note(f"{value} was already given; using it once", NoteCode.REPEATED_INPUT))
+            notes.append(NoteCode.REPEATED_INPUT.note("0", f"{value}"))
             if not contributed:
                 # Every file came from an earlier input, so no source carries this name:
                 # leave it out of the report's settings (``_described``).
                 names.roots.pop(value, None)
         elif repeated:
             notes.append(
-                Note(
-                    f"skipping {_plural(len(repeated), 'file')} in {value} already given",
-                    NoteCode.REPEATED_INPUT,
-                )
+                NoteCode.REPEATED_INPUT.note("1", f"{_plural(len(repeated), 'file')}", f"{value}")
             )
         chunks += [chunk for chunk in loaded if chunk.path not in repeated]
         seen |= files
     shared = sorted(group for group, count in inputs_with.items() if count > 1)
     if shared:
-        notes.append(
-            Note(
-                f"records with the same {group_field} (such as {shared[0]!r}) are in more than "
-                "one input, and each input's records are separate documents; to keep a group "
-                "together, give the folder that holds them",
-                NoteCode.GROUPING,
-            )
-        )
+        notes.append(NoteCode.GROUPING.note("0", f"{group_field}", f"{shared[0]!r}"))
     if known_texts is not None:
         chunks, note = drop_duplicates(chunks, known_texts, repeats)
         if note:
@@ -1631,19 +1600,16 @@ def _check_groups(
                 f"records have the fields {fields}",
                 code="group_field",
             )
-        notes.append(
-            Note(
-                f"{value}: no record has a {group_field}, so each record is read as a "
-                "document of its own",
-                NoteCode.MISSING_GROUP,
-            )
-        )
+        notes.append(NoteCode.MISSING_GROUP.note("1", f"{value}", f"{group_field}"))
         return True
     notes.append(
-        Note(
-            f"{value}: {found.missing:,} of {_plural(found.count, 'record')} have no "
-            f"{group_field}, so they are read as one document, {group_id(group_field, None)}",
-            NoteCode.MISSING_GROUP,
+        NoteCode.MISSING_GROUP.note(
+            "0",
+            f"{value}",
+            f"{found.missing:,}",
+            f"{_plural(found.count, 'record')}",
+            f"{group_field}",
+            f"{group_id(group_field, None)}",
         )
     )
     return False
@@ -1703,13 +1669,7 @@ def _chunked(
     for chunk in chunks:
         parsed = prose(chunk.text)
         if unlikely_english(parsed):
-            notes.append(
-                Note(
-                    f"{_label(chunk)} may not be English; English-based measurements may be "
-                    "unreliable. Use English texts for a dependable comparison.",
-                    NoteCode.NON_ENGLISH,
-                )
-            )
+            notes.append(NoteCode.NON_ENGLISH.note("0", f"{_label(chunk)}"))
     stand_ins: set[str] = set()
     used: set[str] = set()
     if split is not None and settings.split_on != NONE:
@@ -1730,21 +1690,14 @@ def _chunked(
         parsed = prose(chunk.text)
         size = len(words(parsed.text))
         if paragraph_metrics_missing(parsed, size):
-            notes.append(
-                Note(
-                    f"{chunk.id}: paragraph metrics were left out because the text has no "
-                    "paragraph breaks. Keep the original paragraph breaks when available.",
-                    NoteCode.NO_PARAGRAPH_BREAKS,
-                )
-            )
+            notes.append(NoteCode.NO_PARAGRAPH_BREAKS.note("0", f"{chunk.id}"))
         if settings.window_words and size > 2 * settings.window_words:
             notes.append(
-                Note(
-                    f"{chunk.id}: {size:,} prose words exceed twice window_words "
-                    f"({settings.window_words:,}); no safe sentence boundary could split this "
-                    "block further. Add sentence or paragraph breaks, or use a larger "
-                    "window_words.",
-                    NoteCode.OVERSIZE_CHUNK,
+                NoteCode.OVERSIZE_CHUNK.note(
+                    "0",
+                    f"{chunk.id}",
+                    f"{size:,}",
+                    f"{settings.window_words:,}",
                     setting="window_words",
                 )
             )
@@ -1803,7 +1756,7 @@ def _split(
     # With a few documents, each is worth only a few independent calibration pieces, so the
     # texts split at their structure whenever it gives more documents.
     reason = (
-        f", since {_plural(count, 'document')} are too few to calibrate well"
+        NoteCode.SPLIT.message("reason", _plural(count, "document"))
         if automatic and not few
         else ""
     )
@@ -1832,12 +1785,17 @@ def _split(
         used.add(plan.kind)
         parts += len(plan.parts)
         done.append(
-            f"split {role}{_label(chunk)} into {_plural(len(plan.parts), 'document')} at "
-            f"{plan.describe()}"
+            NoteCode.SPLIT.message(
+                "1",
+                f"{role}",
+                f"{_label(chunk)}",
+                f"{_plural(len(plan.parts), 'document')}",
+                f"{plan.describe()}",
+            )
         )
     if len(done) > NOTED_SPLITS or (reason and len(done) > 1):
         where = "headings or rules" if len(used) > 1 else f"{next(iter(used))}s"
-        done = [f"split {len(done):,} {role}texts into {parts:,} documents at their {where}"]
+        done = [NoteCode.SPLIT.message("many", f"{len(done):,}", role, f"{parts:,}", where)]
     if reason and done:
         done = [done[0] + reason]
     notes += [Note(message, NoteCode.SPLIT, setting="split_on") for message in done]
@@ -1849,20 +1807,16 @@ def _split(
         level = mode.partition(":")[2]
         markers = f"level-{level} headings" if level else "headings" if mode == HEADING else "rules"
         if len(whole) == 1:
-            message = f"{role}{_label(whole[0])} has no {markers} that split it"
-            kept = "it is kept whole"
+            message = NoteCode.SPLIT.message("2", f"{role}", f"{_label(whole[0])}", f"{markers}")
+            kept = NoteCode.SPLIT.message("3")
         else:
             texts = len(chunks) - sum(map(is_record, chunks))
-            message = f"{len(whole):,} of {_plural(texts, role + 'text')} have no {markers} "
-            message += "that split them"
-            kept = "they are kept whole"
-        notes.append(
-            Note(
-                f"{message} into parts of at least half a window, so {kept}",
-                NoteCode.SPLIT,
-                setting="split_on",
+            message = NoteCode.SPLIT.message(
+                "4", f"{len(whole):,}", f"{_plural(texts, role + 'text')}", f"{markers}"
             )
-        )
+            message += NoteCode.SPLIT.message("5")
+            kept = NoteCode.SPLIT.message("6")
+        notes.append(NoteCode.SPLIT.note("0", f"{message}", f"{kept}", setting="split_on"))
     stand_ins = {chunk_document(chunk) for chunk in whole} if automatic and few else set()
     return out, stand_ins, used
 
@@ -1916,33 +1870,22 @@ def _stand_ins(
                 )
         label = _label(first)
         grouped = (
-            f"each of its {len(found):,} windows stands in for a document"
+            NoteCode.STAND_INS.message("windows", f"{len(found):,}")
             if len(groups) == len(found)
-            else f"its {len(found):,} windows are grouped into {len(groups)} stand-in "
-            "documents of consecutive text"
+            else NoteCode.STAND_INS.message("groups", f"{len(found):,}", str(len(groups)))
         )
         notes.append(
-            Note(
-                f"{role}{label} has no headings or rules that divide it into "
-                f"{MIN_PARTS} or more parts of at least half a window, so {grouped}",
-                NoteCode.STAND_INS,
-                setting="split_on",
+            NoteCode.STAND_INS.note(
+                "0", f"{role}", f"{label}", f"{MIN_PARTS}", f"{grouped}", setting="split_on"
             )
         )
         if role:
             warnings.append(
-                f"the {role}set's documents are {len(groups)} stand-ins, consecutive parts "
-                f"of one file ({label}), so its AUC interval and cross-validated weights "
-                "treat neighbouring parts as separate drafts and are less certain than they "
-                "look; give the drafts as separate files, or mark where each begins with a "
-                "heading or rule"
+                NoteCode.CONTRAST_STAND_INS.message("0", f"{role}", f"{len(groups)}", f"{label}")
             )
         else:
             warnings.append(
-                f"held-out calibration comes from {len(groups)} stand-in documents, "
-                f"consecutive parts of one file ({label}): calibration from them is less "
-                "sensitive, so short off-voice passages are caught less often; mark where "
-                "pieces begin with headings or rules, or give them as separate files"
+                NoteCode.CALIBRATION_STAND_INS.message("0", f"{len(groups)}", f"{label}")
             )
     return windows, warnings
 
@@ -1985,12 +1928,8 @@ def _pooled(
     if pooled == AUTO and len(joined.windows) < ENOUGH_CHUNKS:
         if calibrated:
             notes.append(
-                Note(
-                    f"the median {noun} is under a quarter of a window, but joining them "
-                    f"would make only {_plural(len(joined.windows), 'window')}, too few to "
-                    "calibrate, so each is kept on its own; use pool to join them anyway",
-                    NoteCode.POOLED,
-                    setting="pool",
+                NoteCode.POOLED.note(
+                    "0", f"{noun}", f"{_plural(len(joined.windows), 'window')}", setting="pool"
                 )
             )
         return _Cut(_windowed(chunks, settings.window_words), None, joined.short)
@@ -2004,31 +1943,22 @@ def _pooled(
         if joined.together == count
         else f"{joined.together:,} of {_plural(count, role + noun)}"
     )
-    message = (
-        f"joined {texts} into {_plural(len(joined.windows), 'window')} of about "
-        f"{settings.window_words:,} words"
+    message = NoteCode.POOLED.message(
+        "1", f"{texts}", f"{_plural(len(joined.windows), 'window')}", f"{settings.window_words:,}"
     )
     setting = None
     if settings.pool == AUTO and calibrated:
-        message += f", since the median {noun} is under a quarter of a window"
+        message += NoteCode.POOLED.message("2", f"{noun}")
     grouped = settings.group_field is not None and any(map(is_grouped, chunks))
     if grouped:
-        message += f", never across {settings.group_field} groups"
+        message += NoteCode.POOLED.message("3", f"{settings.group_field}")
     elif calibrated:
-        message += (
-            ". With no group_field, each window counts as one document for held-out "
-            f"calibration: if the {noun}s come from different threads or authors, and "
-            "especially if those are interleaved, its ranges are too narrow and verdicts on "
-            "new text can be far too harsh"
-        )
+        message += NoteCode.POOLED.message("4", f"{noun}")
         candidates = records.group_fields() if records is not None else []
         if candidates:
             shown = ", ".join(f"{name} ({values:,} values)" for name, values in candidates[:3])
             first = candidates[0][0]
-            message += (
-                f". These records have {shown}: pass group_field {first} if each value is a "
-                "separate source"
-            )
+            message += NoteCode.POOLED.message("5", f"{shown}", f"{first}")
         setting = "group_field"
     notes.append(Note(message, NoteCode.POOLED, setting=setting))
     return _Cut(joined.windows, joined, joined.short)
@@ -2046,15 +1976,7 @@ def _grouping_notes(
         sizes[chunk_document(chunk)] += len(words(chunk.text))
     median = statistics.median(sizes.values()) if sizes else 0
     if pooled and len(sizes) > 1 and median < settings.window_words / 4:
-        return [
-            Note(
-                f"most {field} groups are short (a median of {median:,.0f} words), so "
-                "pooling has little to join and their records are measured nearly alone; "
-                "group by a coarser field, or leave out group_field",
-                NoteCode.GROUPING,
-                setting="group_field",
-            )
-        ]
+        return [NoteCode.GROUPING.note("1", f"{field}", f"{median:,.0f}", setting="group_field")]
     return []
 
 
@@ -2165,46 +2087,30 @@ def _edits_of_repeats(
             result.append(paired_as(chunk, like) or chunk)
 
     def note(message: str) -> None:
-        notes.append(Note(f"{label}: {message}", NoteCode.DUPLICATES))
+        notes.append(NoteCode.DUPLICATES.note("0", f"{label}", f"{message}"))
 
     if len(paired) == 1:
         ((edit, copy),) = paired
         note(
-            f"the edit of {edit!r} is paired with {copy!r}: the original of {edit!r} "
-            f"repeats {copy!r} word for word, so only {copy!r} was kept"
+            NoteCode.DUPLICATES.message(
+                "1", f"{edit!r}", f"{copy!r}", f"{edit!r}", f"{copy!r}", f"{copy!r}"
+            )
         )
     elif paired:
         edit, copy = paired[0]
-        note(
-            f"{len(paired):,} edits of drafts that repeat another word for word are paired "
-            f"with the copy kept (for example, {edit!r} with {copy!r})"
-        )
+        note(NoteCode.DUPLICATES.message("4", f"{len(paired):,}", f"{edit!r}", f"{copy!r}"))
     if len(doubled) == 1:
         ((edit, copy),) = doubled
-        note(
-            f"left out the edit of {edit!r}: its original repeats {copy!r} word for word, "
-            f"and another edit of that text is already paired with {copy!r}"
-        )
+        note(NoteCode.DUPLICATES.message("2", f"{edit!r}", f"{copy!r}", f"{copy!r}"))
     elif doubled:
         edit, copy = doubled[0]
-        note(
-            f"left out {len(doubled):,} edits of drafts that repeat another word for word, "
-            f"whose text another edit already pairs with (for example, {edit!r}, a copy of "
-            f"{copy!r})"
-        )
+        note(NoteCode.DUPLICATES.message("5", f"{len(doubled):,}", f"{edit!r}", f"{copy!r}"))
     if len(outside) == 1:
         ((edit, text),) = outside
-        note(
-            f"left out the edit of {edit!r}: its original repeats the writer's {text} word "
-            "for word, so it was dropped from the drafts and has no draft to pair with"
-        )
+        note(NoteCode.DUPLICATES.message("3", f"{edit!r}", f"{text}"))
     elif outside:
         edit, text = outside[0]
-        note(
-            f"left out {len(outside):,} edits of drafts dropped for repeating the writer's "
-            f"texts word for word, which leaves them no draft to pair with (for example, "
-            f"{edit!r}, a copy of the writer's {text})"
-        )
+        note(NoteCode.DUPLICATES.message("6", f"{len(outside):,}", f"{edit!r}", f"{text}"))
     return result
 
 
@@ -2213,10 +2119,7 @@ def _pooling_mismatch(cut: _Cut, reference_pooled: bool) -> list[str]:
     they read closer to it than they are. The other way round needs none: each short text is
     judged at its own length against the reference's length calibration, or abstains."""
     if cut.pooled is not None and not reference_pooled:
-        return [
-            "these texts were joined into windows, but the reference's were not, so they "
-            "read closer to it than they are; score them without pooling"
-        ]
+        return [NoteCode.POOLING_MISMATCH.message("0")]
     return []
 
 

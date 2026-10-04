@@ -365,7 +365,7 @@ def test_cli_builds_from_html_and_prints_notes(tmp_path: Path, capsys: Any) -> N
     (posts / "draft.docx").write_bytes(b"PK")
     output = tmp_path / "writer.json"
     build = ["build", str(posts), "-o", str(output), "--no-syntax", "--input-format", "html"]
-    assert main(build) == 0
+    assert main([*build, "--verbose"]) == 0
     err = capsys.readouterr().err
     assert (
         f"note: skipped 1 .docx and 1 other file in {posts}; convert the .docx file to "
@@ -376,7 +376,7 @@ def test_cli_builds_from_html_and_prints_notes(tmp_path: Path, capsys: Any) -> N
     # would not note.
     draft = tmp_path / "draft.md"
     draft.write_text(_wrapped((WRITER / "mud-season.md").read_text(encoding="utf-8")))
-    assert main(["score", str(draft), str(output), "--json"]) == 0
+    assert main(["score", str(draft), str(output), "--json", "--verbose"]) == 0
     captured = capsys.readouterr()
     assert (
         f"note: {draft} looks like HTML, so it is read as HTML (pass --input-format markdown "
@@ -645,7 +645,7 @@ def test_cli_build_drops_duplicates_across_reference_and_contrast(
     (drafts / "stolen.md").write_text((WRITER / "old-maps.md").read_text(), encoding="utf-8")
     output = tmp_path / "writer.json"
     command = ["build", str(posts), "--contrast", str(drafts), "-o", str(output), "--no-syntax"]
-    assert main(command) == 0
+    assert main([*command, "--verbose"]) == 0
     err = capsys.readouterr().err
     assert "note: dropped 1 document that repeats another word for word" in err
     assert err.count("note: dropped 1 document") == 2
@@ -666,9 +666,7 @@ def test_sniffed_files_are_named_in_the_note(tmp_path: Path, capsys: Any) -> Non
             NoteCode.READ_AS_HTML_IN_FOLDER,
         )
     ]
-    from styleprofile.cli import NOTE_HINTS
-
-    assert "would also apply to .html files" in NOTE_HINTS[NoteCode.READ_AS_HTML_IN_FOLDER]
+    assert "would also apply to .html files" in (NoteCode.READ_AS_HTML_IN_FOLDER.hint or "")
 
 
 def test_forced_jsonl_errors_say_it_was_forced(tmp_path: Path, capsys: Any) -> None:

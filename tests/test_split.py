@@ -313,7 +313,7 @@ def test_a_file_without_headings_gets_stand_in_documents(bare_file: Path) -> Non
         "caught less often; mark where pieces begin with headings or rules, or give them as "
         "separate files"
     )
-    assert warning in profile.to_text()
+    assert warning in profile.to_text(verbose=True)
     assert not any("stand-in" in w for w in profile.score(DRAFT).warnings)
 
 
@@ -654,7 +654,7 @@ def test_the_split_suggestion_is_never_circular(
     (folder / "big.md").write_text(f"{_prose(6000)}", encoding="utf-8")
     for n in range(2):
         (folder / f"{n}.md").write_text(_prose(300, n), encoding="utf-8")
-    code = main(["build", str(folder), "-o", str(tmp_path / "p.json"), "--no-syntax"])
+    code = main(["build", str(folder), "-o", str(tmp_path / "p.json"), "--no-syntax", "--verbose"])
     assert code == 0
     # Wrapped lines may break at a hyphen, so compare without whitespace.
     shown = "".join(capsys.readouterr().err.split())
@@ -694,17 +694,40 @@ def test_cli_builds_one_file_with_a_contrast_and_scores_its_chapters(
 ) -> None:
     out = tmp_path / "writer.json"
     assert (
-        main(["build", str(writer_file), "--contrast", str(DRAFTS), "-o", str(out), "--no-syntax"])
+        main(
+            [
+                "build",
+                str(writer_file),
+                "--contrast",
+                str(DRAFTS),
+                "-o",
+                str(out),
+                "--no-syntax",
+                "--verbose",
+            ]
+        )
         == 0
     )
     captured = capsys.readouterr()
     assert "note: split writer.md into 7 documents at its level-1 headings" in captured.err
     assert "(7 documents)" in captured.out
-    assert main(["score", "-q", str(writer_file), str(out), "--split-on", "heading"]) == 0
+    assert (
+        main(["score", "-q", str(writer_file), str(out), "--split-on", "heading", "--verbose"]) == 0
+    )
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 7 and all(str(writer_file) + "#" in line for line in lines), lines
     code = main(
-        ["build", str(writer_file), "--split-on", "none", "--contrast", str(DRAFTS), "-o", str(out)]
+        [
+            "build",
+            str(writer_file),
+            "--split-on",
+            "none",
+            "--contrast",
+            str(DRAFTS),
+            "-o",
+            str(out),
+            "--verbose",
+        ]
     )
     assert code == 1 and "contrast set needs" in capsys.readouterr().err
 

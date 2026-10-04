@@ -17,6 +17,10 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Changed
 
+- **Short notes by default.** Build, score and evaluation messages use short, actionable
+  text. `--verbose` restores full explanations; JSON keeps full warnings. Small references
+  get one size-and-next-step warning.
+
 - **Paragraph calibration runs on request.** Use `build --by-paragraph` or
   `build(..., passages=True)` to prepare experimental paragraph checks. Ordinary builds
   skip this work; scores without it explain how to rebuild.

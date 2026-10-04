@@ -20,6 +20,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from styleprofile.core import NoteCode
 from styleprofile.measure import Measurer
 from styleprofile.profile import (
     EVALUATION,
@@ -344,8 +345,9 @@ def evaluate_rewording(
         skipped = sorted({match_key(chunk) for chunk in chunks} & dropped)
         if skipped:
             warnings.append(
-                f"{set_label}: skipped {len(skipped)} edited draft(s) whose original has too "
-                f"little prose to score (e.g. {skipped[0]!r})"
+                NoteCode.SKIPPED_EDITS.message(
+                    "0", f"{set_label}", f"{len(skipped)}", f"{skipped[0]!r}"
+                )
             )
             chunks = [chunk for chunk in chunks if match_key(chunk) not in dropped]
         loaded = {match_key(chunk) for chunk in chunks}
@@ -371,14 +373,15 @@ def evaluate_rewording(
         result["skipped"] = skipped
         if missing:
             warnings.append(
-                f"{set_label}: {len(missing)} of {len(names)} drafts have no edited copy "
-                f"(e.g. {missing[0]!r}); its AUC is over fewer drafts than the original's, "
-                "and signal survival compares it with the drafts it covers"
+                NoteCode.MISSING_EDITS.message(
+                    "0", f"{set_label}", f"{len(missing)}", f"{len(names)}", f"{missing[0]!r}"
+                )
             )
         if too_short:
             warnings.append(
-                f"{set_label}: {len(too_short)} edited draft(s) have no chunk with at least "
-                f"{min_words} prose words (e.g. {too_short[0]!r}), so they are not scored"
+                NoteCode.SHORT_EDITS.message(
+                    "0", f"{set_label}", f"{len(too_short)}", f"{min_words}", f"{too_short[0]!r}"
+                )
             )
         present = set(documents)
         same_drafts = [index for index, doc in enumerate(fit.contrast_documents) if doc in present]

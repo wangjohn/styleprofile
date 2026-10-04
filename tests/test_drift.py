@@ -414,7 +414,7 @@ def test_the_command_line_shows_passages_and_lists_paragraphs(
     out = capsys.readouterr().out
     assert "Where it drifts (experimental)" in out
     assert out.index("By area") < out.index("Where it drifts") < out.index("Biggest")
-    assert "By paragraph" in out and "* drifts, above" in out
+    assert "By paragraph" in out and "* drifts, above" in " ".join(out.split())
 
 
 @pytest.mark.skipif(not HAS_SPACY, reason="spaCy is not installed")

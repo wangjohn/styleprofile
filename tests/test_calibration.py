@@ -652,7 +652,7 @@ def test_without_shorter_lengths_only_texts_near_a_window_are_judged(
     sample = tmp_path / "part.md"
     sample.write_text(cut_paragraphs(DRAFT.read_text(encoding="utf-8"), 200)[0], encoding="utf-8")
     assert main(["score", "--no-syntax", str(sample), str(path)]) == 0
-    assert "rebuild it with --window-words 113 or more" in capsys.readouterr().out
+    assert "rebuild it with --window-words 113 or more" in " ".join(capsys.readouterr().out.split())
 
 
 def test_the_demo_draft_gets_a_sensible_verdict() -> None:
@@ -1091,7 +1091,7 @@ def test_a_few_flagged_chunks_are_named_beside_a_close_headline(
     alone = tmp_path / "essays.md"
     alone.write_text("\n\n".join(essays), encoding="utf-8")
     assert main(["score", "-q", str(alone), str(reference), "--no-syntax"]) == 0
-    assert "clearly different" not in capsys.readouterr().out
+    assert "clearly different" not in " ".join(capsys.readouterr().out.split())
     assert _score(["\n\n".join(essays)], _reference())["reference"]["verdict"]["flagged"] == 0
 
 

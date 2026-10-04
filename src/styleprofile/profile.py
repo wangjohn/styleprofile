@@ -433,11 +433,7 @@ def _repeated_note(label: str, repeated: Sequence[tuple[str, int]]) -> Note:
     """The note for JSONL records in ``label`` that share ids (see ``_jsonl_chunks``)."""
     shared = ", ".join(f"{count} share {record_id!r}" for record_id, count in repeated[:3])
     more = f" and {len(repeated) - 3} more ids" if len(repeated) > 3 else ""
-    return Note(
-        f"records in {label} share ids ({shared}{more}); each record is still its own "
-        "document, named by id and line (id@LINE)",
-        NoteCode.REPEATED_ID,
-    )
+    return NoteCode.REPEATED_ID.note("0", f"{label}", f"{shared}", f"{more}")
 
 
 def expand_path(value: str) -> Path:
@@ -628,22 +624,17 @@ def _stdin_chunks(
         return chunks
     fmt = input_format
     if fmt == AUTO and looks_like_jsonl(text):
-        notes.append(
-            Note(
-                "stdin is JSON objects, one per line, so it is read as JSONL",
-                NoteCode.READ_AS_JSONL,
-            )
-        )
+        notes.append(NoteCode.READ_AS_JSONL.note("0"))
         chunks = _jsonl_chunks(text, "stdin", "stdin", None, text_field, records, repeated=repeated)
         notes += [_repeated_note("stdin", repeated)] if repeated else []
         return chunks
     if fmt == AUTO and looks_like_html(text):
         fmt = HTML
-        notes.append(Note("stdin looks like HTML, so it is read as HTML", NoteCode.READ_AS_HTML))
+        notes.append(NoteCode.READ_AS_HTML.note("0"))
     if fmt == HTML:
         text = html_to_markdown(text)
         if not re.search(r"\w", text):
-            notes.append(Note("stdin has no readable text after conversion", NoteCode.EMPTY_HTML))
+            notes.append(NoteCode.EMPTY_HTML.note("0"))
     return [
         Chunk("stdin", "stdin", text, document=document_of("stdin", "stdin"), converted=fmt == HTML)
     ]
@@ -785,13 +776,7 @@ def load_chunks(
             files, skipped, generated = _walk(path)
             described = _skipped(skipped)
             if generated:
-                notes.append(
-                    Note(
-                        f"left out static-site output and template folders in {value}: "
-                        f"{_listing(generated)}; name one directly to read it",
-                        NoteCode.SKIPPED_DIRS,
-                    )
-                )
+                notes.append(NoteCode.SKIPPED_DIRS.note("0", f"{value}", f"{_listing(generated)}"))
             if not files:
                 if generated:
                     raise StyleProfileError(
@@ -811,8 +796,8 @@ def load_chunks(
                 )
             if described:
                 notes.append(
-                    Note(
-                        f"skipped {described[0]} in {value}; {described[1]}", NoteCode.SKIPPED_FILES
+                    NoteCode.SKIPPED_FILES.note(
+                        "0", f"{described[0]}", f"{value}", f"{described[1]}"
                     )
                 )
             sources = _name_sources(value, path, files, names)
@@ -836,20 +821,14 @@ def load_chunks(
             they = "it is" if len(detected.sniffed) == 1 else "they are"
             looks = "looks" if len(detected.sniffed) == 1 else "look"
             notes.append(
-                Note(
-                    f"{_listing(detected.sniffed)} {looks} like HTML, so {they} read as HTML",
-                    NoteCode.READ_AS_HTML_IN_FOLDER if path.is_dir() else NoteCode.READ_AS_HTML,
+                (NoteCode.READ_AS_HTML_IN_FOLDER if path.is_dir() else NoteCode.READ_AS_HTML).note(
+                    "files", _listing(detected.sniffed), looks, they
                 )
             )
         notes += [_repeated_note(label, repeated) for label, repeated in detected.repeated]
         if detected.empty:
             has = "has" if len(detected.empty) == 1 else "have"
-            notes.append(
-                Note(
-                    f"{_listing(detected.empty)} {has} no readable text after conversion from HTML",
-                    NoteCode.EMPTY_HTML,
-                )
-            )
+            notes.append(NoteCode.EMPTY_HTML.note("1", f"{_listing(detected.empty)}", f"{has}"))
     return chunks
 
 
@@ -941,10 +920,7 @@ def drop_duplicates(
     if all(_grouped(documents[unit][0]) for unit in dropped_documents):
         kind = "record"
     repeating = f"1 {kind} that repeats" if count == 1 else f"{count:,} {kind}s that repeat"
-    note = (
-        f"dropped {repeating} another word for word, keeping the first copy (for example, "
-        f"{copy} repeats {original})"
-    )
+    note = NoteCode.DUPLICATES.message("7", f"{repeating}", f"{copy}", f"{original}")
     return kept, Note(note, NoteCode.DUPLICATES)
 
 
@@ -2128,8 +2104,9 @@ def _learn_contrast(
         measurer.report(Progress(Phase.CONTRAST))
     if measured.empty or measured.below:
         report["warnings"].append(
-            f"skipped {measured.empty + measured.below} contrast chunk(s) with no prose or "
-            f"fewer than {min_words} prose words"
+            NoteCode.SKIPPED_CONTRAST.message(
+                "0", f"{measured.empty + measured.below}", f"{min_words}"
+            )
         )
     floor = floors(report["summary"])
     contrast_z = [_z_against(metrics, report["summary"], floor) for metrics in measured.metrics]
@@ -2155,21 +2132,13 @@ def _learn_contrast(
     _calibrate_contrast_lengths(report["summary"], calibrated, fit, measured.pieces, floor)
     calibration = learned["calibration"]
     if not calibration["cross_validated"]:
-        report["warnings"].append(
-            "the contrast set is one document, so its likeness range is measured in-sample "
-            "and is optimistic; add more contrast documents"
-        )
+        report["warnings"].append(NoteCode.SINGLE_CONTRAST.message("0"))
     if calibration["auc_ci"] is None:
-        report["warnings"].append(
-            "the reference or contrast set has fewer than 2 documents, so the contrast AUC "
-            "has no confidence interval"
-        )
+        report["warnings"].append(NoteCode.NO_AUC_INTERVAL.message("0"))
     length = calibration["length_baseline"]
     if length and length["auc"] >= LENGTH_AUC_WARNING:
         report["warnings"].append(
-            f"the contrast set differs strongly in length (length alone separates it with "
-            f"AUC {length['auc']:.2f}), so {label}-likeness may partly reflect length; match "
-            "lengths or split both sets into windows of the same size"
+            NoteCode.LENGTH_CONTRAST.message("0", f"{length['auc']:.2f}", f"{label}")
         )
     return {
         "label": label,
@@ -2246,20 +2215,14 @@ def _base_report(
 
     warnings: list[str] = []
     if measured.empty:
-        warnings.append(
-            f"skipped {measured.empty} chunk(s) with no prose (only code, tables or markup)"
-        )
+        warnings.append(NoteCode.EMPTY_CHUNKS.message("0", f"{measured.empty}"))
     if measured.below:
-        warnings.append(
-            f"skipped {measured.below} chunk(s) with fewer than {min_words} prose words"
-        )
+        warnings.append(NoteCode.BELOW_MIN_WORDS.message("0", f"{measured.below}", f"{min_words}"))
     # A score judges each chunk at its own length instead (``calibration``).
     words = _words(chunk_metrics)
     short = sum(count < SHORT_CHUNK_WORDS for count in words)
     if short and kind == REFERENCE:
-        warnings.append(
-            f"{short} chunk(s) have fewer than {SHORT_CHUNK_WORDS} words; their rates are noisy"
-        )
+        warnings.append(NoteCode.NOISY_CHUNKS.message("0", f"{short}", f"{SHORT_CHUNK_WORDS}"))
     # The settings are recorded as given, whatever their keys.
     recorded = cast(
         ReportSettings,
@@ -2474,7 +2437,7 @@ def _left_out(rows: Sequence[ScoredChunk], shown: int = 5) -> str:
         name = row["id"] if windows[base_id(row["id"])] > 1 else base_id(row["id"])
         names.append(f"{name} ({words:,} words, {why})")
     more = f" and {len(left_out) - shown} more" if len(left_out) > shown else ""
-    return "left out of the verdict and the means as too short to judge: " + ", ".join(names) + more
+    return NoteCode.LEFT_OUT.message("details", ", ".join(names), more)
 
 
 def _without_rms(calibration: Calibration | None) -> BaselineCalibration | None:
@@ -2551,11 +2514,7 @@ def score(
     if judged and len(judged) < len(rows):
         warnings.append(_left_out(rows))
     if not reference.get("reliability"):
-        warnings.append(
-            "the reference has no held-out reliability (it needs chunks from at least two "
-            "documents and a current report version), so Delta caps each metric at 3 "
-            "instead of weighting it by reliability"
-        )
+        warnings.append(NoteCode.NO_RELIABILITY.message("0"))
     if prepared.effects:
         present = {
             (group, name)
@@ -2569,37 +2528,37 @@ def score(
         )
         if total_weight and missing / total_weight > 0.1:
             warnings.append(
-                f"this run lacks metrics that carry {100 * missing / total_weight:.0f}% of "
-                "the likeness weight (for example syntax); likeness uses the rest"
+                NoteCode.MISSING_LIKENESS_METRICS.message(
+                    "0", f"{100 * missing / total_weight:.0f}"
+                )
             )
     if reference["chunk_count"] < 2:
-        warnings.append("the reference has one chunk, so it has no spread; split it into windows")
+        warnings.append(NoteCode.SINGLE_CHUNK.message("0"))
     # 0 and None both mean no windowing.
     own_settings = base.described["settings"]
     own_window = own_settings.get("window_words") or None
     reference_window = reference_settings.get("window_words") or None
     if own_window != reference_window:
         warnings.append(
-            "window sizes differ from the reference "
-            f"({own_window or 'off'} vs {reference_window or 'off'}); "
-            "z-scores assume equal-sized chunks"
+            NoteCode.WINDOW_MISMATCH.message(
+                "0", f"{own_window or 'off'}", f"{reference_window or 'off'}"
+            )
         )
     own_syntax = own_settings["syntax_used"]
     reference_syntax = reference_settings.get("syntax_used")
     if own_syntax and not reference_syntax:
-        warnings.append("the reference has no syntax metrics, so syntax is not scored")
+        warnings.append(NoteCode.REFERENCE_NO_SYNTAX.message("0"))
     elif reference_syntax and not own_syntax:
-        warnings.append(
-            "the reference has syntax metrics but this run does not, so Delta leaves out "
-            "syntax and sentence openers; its value is not comparable with syntax runs"
-        )
+        warnings.append(NoteCode.SCORE_NO_SYNTAX.message("0"))
     elif own_syntax and reference_syntax:
         keys = ("model", "model_version")
         if any(own_syntax.get(key) != reference_syntax.get(key) for key in keys):
             warnings.append(
-                "the reference was parsed with a different spaCy model "
-                f"({reference_syntax.get('model')} {reference_syntax.get('model_version')}); "
-                "syntax metrics may not be comparable"
+                NoteCode.SYNTAX_MODEL_MISMATCH.message(
+                    "0",
+                    f"{reference_syntax.get('model')}",
+                    f"{reference_syntax.get('model_version')}",
+                )
             )
     passages: list[DocumentPassages] | None = None
     if pooled:
