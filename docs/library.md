@@ -53,7 +53,7 @@ and `reason` says why (see [Length-aware verdicts](method.md#length-aware-verdic
 
 **Experimental:** Build with `passages=True` to calibrate paragraph checks; ordinary
 builds skip this work. On scoring, `passages=True` also reads each document in spans of 100 words or more to
-show where it drifts (see [Where it drifts](../README.md#where-it-drifts-experimental)). It is
+show where it drifts (see [Paragraph checks](usage.md#paragraph-checks-experimental)). It is
 off by default: on writer text of topics the reference never saw, it found a paragraph
 drifting in up to about a third of the writer's own documents (see
 [method.md](method.md#where-a-draft-drifts)). `result.passages` holds one `Passage` per

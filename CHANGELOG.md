@@ -17,6 +17,10 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Changed
 
+- **Start with a packaged demo.** The README now leads with installation and
+  `styleprofile demo`, adds corpus-size and troubleshooting tables, and links separate
+  command and contributor guides. Recipes describe the shipped CLI and library APIs.
+
 - **Smaller domain modules.** Corpus preparation, reference construction, scoring and
   report I/O now live in separate modules behind the same public library API.
 
