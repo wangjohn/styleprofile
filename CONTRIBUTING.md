@@ -73,5 +73,3 @@ with the change, so reviewers see the output change.
 `styleprofile setup`, which downloads spaCy's model, then runs the test suite from the
 unpacked sdist, as CI does. Releases are published to PyPI by pushing a `v*` tag;
 see [docs/releasing.md](https://github.com/wangjohn/styleprofile/blob/main/docs/releasing.md).
-
-

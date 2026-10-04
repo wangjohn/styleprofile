@@ -489,4 +489,3 @@ report.json` to see it again.
 Verdicts on edited text are weaker evidence than verdicts on raw drafts. If the AUC falls
 after editing, a "like the reference" reading only shows that the edits removed the habits
 the score measures, not that a person wrote the text.
-
