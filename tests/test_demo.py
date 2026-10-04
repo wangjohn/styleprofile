@@ -127,7 +127,7 @@ def test_demo_continues_when_the_cache_has_a_disk_error(
     assert fallback.out == measured.out
     assert "Overall: close" in fallback.out
     assert "Cache unavailable (disk I/O error)" in fallback.err
-    assert "so this run went on without it" in fallback.err
+    assert "run continued without it" in fallback.err
 
 
 def test_demo_accepts_a_directory_starting_with_a_dash(

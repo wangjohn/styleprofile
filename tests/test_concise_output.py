@@ -100,7 +100,9 @@ def test_default_snapshots_fit_120_columns() -> None:
             # The '$' header is the test's command, not CLI output. Quoted commands are
             # reproducible literal text; aligned verdict rows deliberately retain columns.
             command = line.startswith("$ ")
-            quoted = "`" in line or bool(re.match(r'^\s*[“"].*[”"]', line))
+            quoted = line.lstrip().startswith(("`", "To reuse: `")) or bool(
+                re.match(r'^\s*[“"].*[”"]\s*$', line)
+            )
             verdict_table = bool(re.search(r"^  .*\S {3,}\S.*(?:▲|▼|—)", line))
             if not (command or quoted or verdict_table):
                 assert len(line) <= 120, (path.name, number, len(line), line)
