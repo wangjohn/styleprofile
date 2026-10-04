@@ -24,6 +24,98 @@ def test_unknown_saved_warning_is_preserved() -> None:
     assert warning_text(future, verbose=True) == future
 
 
+def test_dynamic_note_context_stays_on_one_line() -> None:
+    name = "an\nEnglish\tfile.md"
+    note = NoteCode.NON_ENGLISH.note("0", name)
+    assert "an English file.md" in note.text()
+    assert "\n" not in note.text() and "\t" not in note.text()
+    assert name in note.text(verbose=True)
+
+
+def test_cli_flag_translation_does_not_change_dynamic_context(capsys) -> None:
+    from styleprofile.cli import FLAGS, _notes
+
+    note = NoteCode.OVERSIZE_CHUNK.note("0", "pool.md", "2,001", "500", setting="window_words")
+    _notes([note])
+    text = capsys.readouterr().err
+    assert "pool.md:" in text and "--pool.md" not in text
+    assert "twice --window-words" in text
+    assert len(text.strip()) <= 106
+    assert note.text(settings=FLAGS) == text.removeprefix("note: ").strip()
+
+
+def test_cli_warning_flags_preserve_labels_and_original_reports(tmp_path, capsys) -> None:
+    # Both score and show must translate advice, without rewriting dynamic labels.
+    profile = api.build(WRITER, syntax=False, min_words=75, cache=False)
+    reference = tmp_path / "reference.json"
+    profile.save(reference)
+    tiny = tmp_path / "tiny.md"
+    tiny.write_text("A few words that cannot be scored.", encoding="utf-8")
+    output = tmp_path / "score.json"
+    command = ["score", str(DRAFT), str(tiny), str(reference), "--no-cache", "-o", str(output)]
+    assert main(command) == 0
+    short = capsys.readouterr().out
+    assert "lower --min-words" in short
+    saved = output.read_bytes()
+    assert "lower --min-words" not in json.loads(saved)["warnings"][0]
+    assert main([*command, "--verbose"]) == 0
+    verbose = capsys.readouterr().out
+    assert "chunk(s) with fewer than 75 prose words" in verbose
+    assert output.read_bytes() == saved
+    assert main(["show", str(output)]) == 0
+    assert "lower --min-words" in capsys.readouterr().out
+
+    message = NoteCode.SHORT_EDITS.message("0", "min_words", "1", "75", "'draft'")
+    assert warning_text(message, settings={"min_words": "--min-words"}).startswith("min_words:")
+    message = NoteCode.LEFT_OUT.message("details", "draft", "")
+    assert "use --pool" in warning_text(message, settings={"pool": "--pool"})
+
+
+def test_unknown_warning_wraps_unbroken_context_without_losing_text() -> None:
+    from styleprofile.display import _human_text, _strip
+
+    warning = "Note: Future warning " + "x" * 300
+    short = _human_text([warning], verbose=False)
+    assert all(len(line) <= 120 for line in short.splitlines())
+    assert "".join(short.split()) == "".join(warning.split())
+    assert _human_text([warning], verbose=True) == warning
+    for size in (226, 227, 228, 300):
+        colored = "\033[33mNote: " + "x" * size + "\033[0m"
+        rendered = _human_text([colored], verbose=False)
+        assert "\033" not in _strip(rendered)
+        assert all(len(line) <= 120 for line in _strip(rendered).splitlines())
+        assert "".join(_strip(rendered).split()) == "".join(_strip(colored).split())
+        assert _human_text([colored], verbose=True) == colored
+
+
+def test_combined_thin_reference_keeps_structural_remedies(capsys) -> None:
+    from styleprofile.cli import _thin_warnings
+
+    profile = api.build(WRITER, syntax=False, cache=False)
+    report = profile.report
+    grouped = NoteCode.THIN_REFERENCE.note("0", "1 document", "thread", setting="group_field")
+    dominant = NoteCode.THIN_REFERENCE.note(
+        "dominant", "40", "42 chunks", "2 chunks", "20", "3", ""
+    )
+    single = NoteCode.THIN_REFERENCE.note("3", "1 document")
+    for note, remedy in [
+        (grouped, "finer --group-field"),
+        (dominant, "similar-sized documents"),
+        (single, "no held-out calibration or contrast"),
+    ]:
+        candidate = report.copy()
+        candidate["document_count"] = 1 if note != dominant else 3
+        thin = api.Profile(candidate, notes=[note])
+        _thin_warnings(thin)
+        short = capsys.readouterr().err
+        assert len(short.splitlines()) == 1 and len(short.strip()) <= 120
+        assert remedy in short
+        _thin_warnings(thin, verbose=True)
+        verbose = capsys.readouterr().err
+        assert "Thin reference: " in verbose
+        assert note.message.replace("group_field", "--group-field") in verbose
+
+
 def test_every_note_has_bounded_short_and_original_long_forms() -> None:
     for code in NoteCode:
         assert code.forms

@@ -601,11 +601,7 @@ def _notes(notes: Sequence[Note], *, verbose: bool = False) -> None:
         if note.code != NoteCode.THIN_REFERENCE:
             hint = _flagged(note.code.hint, "input_format") if note.code.hint else None
             setting = note.setting or ("input_format" if note.code.hint is not None else None)
-            message = _flagged(note.text(verbose=verbose), setting)
-            if not verbose:
-                for other in FLAGS:
-                    if other != setting:
-                        message = _flagged(message, other)
+            message = _flagged(note.message, setting) if verbose else note.text(settings=FLAGS)
             _note(f"{message} ({hint})" if verbose and hint else message)
 
 
@@ -677,11 +673,23 @@ def _default_output(inputs: Sequence[str]) -> str:
 
 def _thin_warnings(profile: Profile, *, verbose: bool = False) -> None:
     if not verbose:
-        if any(note.code == NoteCode.THIN_REFERENCE for note in profile.notes):
+        thin = [note for note in profile.notes if note.code == NoteCode.THIN_REFERENCE]
+        if thin:
             report = profile.report
+            variant = "summary"
+            if any(note.setting == "group_field" for note in thin):
+                variant = "summary_group"
+            elif report["document_count"] < 2:
+                variant = "summary_document"
+            elif any(
+                NoteCode.THIN_REFERENCE.forms["dominant"].shorten(note.message) is not None
+                for note in thin
+            ):
+                variant = "summary_dominant"
             message = NoteCode.THIN_REFERENCE.message(
-                "summary", f"{report['chunk_count']:,}", f"{report['word_count']:,}"
+                variant, f"{report['chunk_count']:,}", f"{report['word_count']:,}"
             )
+            message = _flagged(message, "group_field")
             print(_warn(message, _color(sys.stderr)), file=sys.stderr)
         return
     for note in profile.notes:
@@ -712,7 +720,9 @@ def _run_build(args: argparse.Namespace) -> int:
     # Files found inside a folder are known only once it has been read.
     _refuse_overwrite(args.output, typed, profile.sources)
     profile.save(args.output)
-    print(profile.to_text(color=_color(), full=args.all, verbose=args.verbose))
+    print(
+        profile.to_text(color=_color(), full=args.all, verbose=args.verbose, warning_settings=FLAGS)
+    )
     sys.stdout.flush()  # keep the warnings after the summary when both go to one pipe
     _thin_warnings(profile, verbose=args.verbose)
     print(f"\nwrote {args.output}")
@@ -1124,6 +1134,7 @@ def _run_score(args: argparse.Namespace) -> int:
             width=_width(),
             by_paragraph=args.by_paragraph,
             verbose=args.verbose,
+            warning_settings=FLAGS,
         )
         print(_flagged(text, setting))
         if args.output:
@@ -1144,10 +1155,10 @@ def _run_show(args: argparse.Namespace) -> int:
     _notes(version_notes(report))
     color = _color()
     if report["kind"] == EVALUATION:
-        print(format_evaluation(report, color=color))
+        print(format_evaluation(report, color=color, warning_settings=FLAGS))
         return 0
     if report["kind"] == REFERENCE:
-        print(format_summary(report, color=color, full=args.all))
+        print(format_summary(report, color=color, full=args.all, warning_settings=FLAGS))
         return 0
     baseline = report["reference"]["baseline"]
     text = format_summary(
@@ -1157,6 +1168,7 @@ def _run_show(args: argparse.Namespace) -> int:
         full=args.all,
         width=_width(),
         by_paragraph=args.by_paragraph,
+        warning_settings=FLAGS,
     )
     print(text)
     return 0
@@ -1219,7 +1231,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         if args.output:
             _note(f"wrote {args.output}")
     else:
-        print(result.to_text(color=_color(), verbose=args.verbose))
+        print(result.to_text(color=_color(), verbose=args.verbose, warning_settings=FLAGS))
         if args.output:
             print(f"\nwrote {args.output}")
     return 0

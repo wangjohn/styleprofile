@@ -380,9 +380,18 @@ class Profile(_Result[ReferenceReport]):
         """Whether the profile has syntax metrics (spaCy was used to build it)."""
         return self._report["settings"]["syntax_used"] is not None
 
-    def to_text(self, *, full: bool = False, color: bool = False, verbose: bool = False) -> str:
+    def to_text(
+        self,
+        *,
+        full: bool = False,
+        color: bool = False,
+        verbose: bool = False,
+        warning_settings: Mapping[str, str] | None = None,
+    ) -> str:
         """The summary ``styleprofile build`` prints; ``full`` adds every metric."""
-        return format_reference_summary(self._report, color=color, full=full, verbose=verbose)
+        return format_reference_summary(
+            self._report, color=color, full=full, verbose=verbose, warning_settings=warning_settings
+        )
 
     def score_text(
         self,
@@ -800,6 +809,7 @@ class ScoreResult(_Result[ScoreReport]):
         width: int = 80,
         by_paragraph: bool = False,
         verbose: bool = False,
+        warning_settings: Mapping[str, str] | None = None,
     ) -> str:
         """The comparison ``styleprofile score`` prints; ``full`` shows every metric and
         every document, the document table fits ``width`` columns, and ``by_paragraph``
@@ -815,6 +825,7 @@ class ScoreResult(_Result[ScoreReport]):
             shown=shown,
             by_paragraph=by_paragraph,
             verbose=verbose,
+            warning_settings=warning_settings,
         )
 
     def __repr__(self) -> str:
@@ -852,9 +863,17 @@ def _reaches(verdict: Any, limit: Any, levels: Sequence[Any]) -> bool:
 class Evaluation(_Result[EvaluationReport]):
     """The rewording stress test: what ``styleprofile evaluate`` prints and saves."""
 
-    def to_text(self, *, color: bool = False, verbose: bool = False) -> str:
+    def to_text(
+        self,
+        *,
+        color: bool = False,
+        verbose: bool = False,
+        warning_settings: Mapping[str, str] | None = None,
+    ) -> str:
         """The tables ``styleprofile evaluate`` prints."""
-        return format_evaluation(self._report, color=color, verbose=verbose)
+        return format_evaluation(
+            self._report, color=color, verbose=verbose, warning_settings=warning_settings
+        )
 
 
 load = Profile.load

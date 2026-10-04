@@ -1232,12 +1232,19 @@ def metric_label(metric: str) -> str:
 
 
 def format_reference_summary(
-    report: ReferenceReport, *, color: bool = False, full: bool = False, verbose: bool = False
+    report: ReferenceReport,
+    *,
+    color: bool = False,
+    full: bool = False,
+    verbose: bool = False,
+    warning_settings: Mapping[str, str] | None = None,
 ) -> str:
     """The short view ``build`` prints: size, held-out range, contrast and warnings; ``full``
     adds every metric (``format_summary`` shows the key ones)."""
     if full:
-        return format_summary(report, color=color, full=True, verbose=verbose)
+        return format_summary(
+            report, color=color, full=True, verbose=verbose, warning_settings=warning_settings
+        )
     style = _Style(color, truecolor=False)
     lines = [style.bold("STYLE PROFILE") + style.dim(f"   {_size(report)}")]
     lines += _reference_lines(report, style)
@@ -1246,7 +1253,9 @@ def format_reference_summary(
         lines += [
             "",
             *(
-                style.warn(f"Note: {warning_text(warning, verbose=verbose)}")
+                style.warn(
+                    f"Note: {warning_text(warning, verbose=verbose, settings=warning_settings)}"
+                )
                 for warning in report["warnings"]
             ),
         ]
@@ -1268,6 +1277,7 @@ def format_summary(
     shown: Mapping[str, str] | None = None,
     by_paragraph: bool = False,
     verbose: bool = False,
+    warning_settings: Mapping[str, str] | None = None,
 ) -> str:
     """Terminal view of a report; ``full`` shows every metric instead of the key ones.
 
@@ -1299,7 +1309,9 @@ def format_summary(
         lines += [
             "",
             *(
-                style.warn(f"Note: {warning_text(warning, verbose=verbose)}")
+                style.warn(
+                    f"Note: {warning_text(warning, verbose=verbose, settings=warning_settings)}"
+                )
                 for warning in report["warnings"]
             ),
         ]
@@ -1349,7 +1361,11 @@ def _survival(entry: Survival, style: _Style) -> str:
 
 
 def format_evaluation(
-    result: EvaluationReport, *, color: bool = False, verbose: bool = False
+    result: EvaluationReport,
+    *,
+    color: bool = False,
+    verbose: bool = False,
+    warning_settings: Mapping[str, str] | None = None,
 ) -> str:
     """Terminal view of an evaluation report (``styleprofile evaluate``)."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
@@ -1469,7 +1485,9 @@ def format_evaluation(
         lines += [
             "",
             *(
-                style.warn(f"Note: {warning_text(warning, verbose=verbose)}")
+                style.warn(
+                    f"Note: {warning_text(warning, verbose=verbose, settings=warning_settings)}"
+                )
                 for warning in result["warnings"]
             ),
         ]
@@ -1495,13 +1513,15 @@ def _human_text(lines: list[str], *, verbose: bool) -> str:
             rendered.append(line)
         else:
             indent = plain[: len(plain) - len(plain.lstrip(" "))]
-            rendered.append(
-                textwrap.fill(
-                    line,
-                    width=120,
-                    subsequent_indent=indent,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
+            # A whole-line style must surround the wrapped prose: breaking its escape
+            # sequence would leave terminal control characters visible.
+            styled = re.fullmatch(r"(\033\[[0-9;]*m)([^\033]*)(\033\[[0-9;]*m)", line)
+            wrapped = textwrap.fill(
+                plain if styled else line,
+                width=120,
+                subsequent_indent=indent,
+                break_long_words=True,
+                break_on_hyphens=False,
             )
+            rendered.append(styled[1] + wrapped + styled[3] if styled else wrapped)
     return "\n".join(rendered)

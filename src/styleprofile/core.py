@@ -4,6 +4,7 @@ and verdicts. Anything in the package can import it without a cycle."""
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
@@ -129,7 +130,13 @@ class NoteCode(StrEnum):
         """Make a run note without changing its long ``message`` contract."""
         return Note(self.message(variant, *values), self, setting)
 
-    def text(self, message: str, *, verbose: bool = False) -> str:
+    def text(
+        self,
+        message: str,
+        *,
+        verbose: bool = False,
+        settings: Mapping[str, str] | None = None,
+    ) -> str:
         """Choose human prose; verbose output keeps the original long message."""
         if verbose:
             return message
@@ -141,12 +148,12 @@ class NoteCode(StrEnum):
         for name, form in self.forms.items():
             if name == "fallback":
                 continue
-            short = form.shorten(message)
+            short = form.shorten(message, settings=settings)
             if short is not None:
                 return short
         # Some notes combine central fragments (splits and pooling). Their code still
         # gives one actionable short form; their complete explanation remains available.
-        return self.forms["fallback"].short
+        return _setting_text(self.forms["fallback"].short, settings)
 
 
 @dataclass(frozen=True)
@@ -164,9 +171,9 @@ class Note:
     code: NoteCode
     setting: str | None = None
 
-    def text(self, *, verbose: bool = False) -> str:
+    def text(self, *, verbose: bool = False, settings: Mapping[str, str] | None = None) -> str:
         """The short human form, or the original message with ``verbose=True``."""
-        return self.code.text(self.message, verbose=verbose)
+        return self.code.text(self.message, verbose=verbose, settings=settings)
 
 
 class Phase(StrEnum):
@@ -269,20 +276,31 @@ class NoteForm:
     long: str
     continuation: bool = False
 
-    def shorten(self, message: str) -> str | None:
+    def shorten(self, message: str, *, settings: Mapping[str, str] | None = None) -> str | None:
         pattern = _note_pattern(self.long)
         found = pattern.match(message) if self.continuation else pattern.fullmatch(message)
         if found is None:
             return None
         values = found.groups()
         # Bound context such as an arbitrarily long filename, preserving the action.
-        slots = sum(field is not None for _, field, _, _ in Formatter().parse(self.short))
-        literal = sum(len(text) for text, _, _, _ in Formatter().parse(self.short))
+        template = _setting_text(self.short, settings)
+        slots = sum(field is not None for _, field, _, _ in Formatter().parse(template))
+        literal = sum(len(text) for text, _, _, _ in Formatter().parse(template))
         budget = max(1, (100 - literal) // slots) if slots else 100
+        values = tuple(" ".join(value.split()) for value in values)
         compact = tuple(
             value if len(value) <= budget else value[: budget - 1] + "…" for value in values
         )
-        return self.short.format(*compact)
+        return template.format(*compact)
+
+
+def _setting_text(template: str, settings: Mapping[str, str] | None) -> str:
+    """Translate advice before inserting context, so filenames and labels stay intact."""
+    for name, replacement in (settings or {}).items():
+        template = re.sub(
+            rf"\b{re.escape(name)}\b", lambda _, replacement=replacement: replacement, template
+        )
+    return template
 
 
 @cache
@@ -295,7 +313,9 @@ def _note_pattern(template: str) -> re.Pattern[str]:
     return re.compile("".join(parts), re.DOTALL)
 
 
-def warning_text(message: str, *, verbose: bool = False) -> str:
+def warning_text(
+    message: str, *, verbose: bool = False, settings: Mapping[str, str] | None = None
+) -> str:
     """Read saved warning strings without changing JSON, including older reports.
 
     Unrecognized warnings are kept intact, so a future or user-supplied warning cannot
@@ -307,7 +327,7 @@ def warning_text(message: str, *, verbose: bool = False) -> str:
         for name, form in code.forms.items():
             if name == "fallback":
                 continue
-            short = form.shorten(message)
+            short = form.shorten(message, settings=settings)
             if short is not None:
                 return short
     return message
@@ -1054,8 +1074,26 @@ _NOTE_FORMS: dict[NoteCode, dict[str, NoteForm]] = {
                 "20,000+ words); add more of the writer's documents"
             ),
         ),
+        "summary_group": NoteForm(
+            "Thin reference: {0} chunks, {1} words; no calibration or contrast. "
+            "Use finer group_field.",
+            "Thin reference: {0} chunks, {1} words; no calibration or contrast. "
+            "Use finer group_field.",
+        ),
+        "summary_document": NoteForm(
+            "Thin reference: {0} chunks, {1} words; no held-out calibration or contrast. "
+            "Add documents.",
+            "Thin reference: {0} chunks, {1} words; no held-out calibration or contrast. "
+            "Add documents.",
+        ),
+        "summary_dominant": NoteForm(
+            "Thin reference: {0} chunks, {1} words; one document dominates. "
+            "Add similar-sized documents.",
+            "Thin reference: {0} chunks, {1} words; one document dominates. "
+            "Add similar-sized documents.",
+        ),
         "0": NoteForm(
-            "Thin reference; add more of the writer's documents.",
+            "One group prevents calibration and contrast; omit group_field or use finer groups.",
             (
                 "it comes from {0}, so it has no held-out calibration and cannot "
                 "learn a contrast: every record has the same {1}; leave out "
@@ -1071,7 +1109,7 @@ _NOTE_FORMS: dict[NoteCode, dict[str, NoteForm]] = {
             ("it has {0}; aim for {1} or more of the writer's text, in one genre"),
         ),
         "3": NoteForm(
-            "Thin reference; add more of the writer's documents.",
+            "One document cannot calibrate held-out ranges or contrast; add independent documents.",
             (
                 "it comes from {0}, so it has no held-out calibration and cannot "
                 "learn a contrast; add more of the writer's documents"
