@@ -531,6 +531,9 @@ result = profile.score(sp.Text("A draft to check against the writer."))
 print(result.verdict, result.delta, result.likeness_verdict.words(result.contrast_label))
 ```
 
+Notes and warnings use short text in human output. Pass `--verbose` to `build`, `score`
+or `evaluate` for full explanations; JSON reports always keep the full warning text.
+
 See [docs/library.md](https://github.com/wangjohn/styleprofile/blob/main/docs/library.md) for inputs, settings, notes and
 saving. `build`, `Profile.score` and `evaluate` take `progress`, `jobs` and `cache` as the
 command line does (`score` uses the cache only with `cache=True`).

@@ -11,11 +11,13 @@ By document   furthest from the reference first
   sharpening.md     637  close                0.56  like reference
 
 Across 2 documents: very different   Delta 2.59
-  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.82 typically (a mean over 2 chunks, up to 0.96).
+  Lower is closer. The reference's own held-out writing at these lengths (620-637 words per chunk) scores 0.82 typically
+  (a mean over 2 chunks, up to 0.96).
   Pooled over every document from here on; the table above has each one's own.
 
 LLM-likeness: a few LLM traits   7.01
-  The reference's own writing at these lengths (620-637 words per chunk) scores 0.21 typically (a mean over 2 chunks, up to 0.91); the LLM drafts 13.70.
+  The reference's own writing at these lengths (620-637 words per chunk) scores 0.21 typically (a mean over 2 chunks, up
+  to 0.91); the LLM drafts 13.70.
   Strongest LLM signals: Long words (7+ letters) ▲▲▲, List items ▲▲▲, Bold phrases ▲▲▲
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale

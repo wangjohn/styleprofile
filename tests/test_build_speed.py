@@ -256,4 +256,4 @@ def test_one_shot_paragraph_scoring_builds_the_requested_calibration(
     encoded_expected = json.loads(dumps_report(expected.report))
     assert report["reference"]["delta_mean"] == encoded_expected["reference"]["delta_mean"]
     assert "Paragraph checks need" not in output.err
-    assert "To reuse it:" in output.err and "--by-paragraph" in output.err
+    assert "To reuse:" in output.err and "--by-paragraph" in output.err

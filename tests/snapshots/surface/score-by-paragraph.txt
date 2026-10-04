@@ -4,7 +4,8 @@ $ styleprofile score --by-paragraph examples/draft.md '<tmp>/writer.json'
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
 Overall: close   Delta 0.85
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under 0.99).
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under
+  0.99).
 
 LLM-likeness: like the reference   0.71
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.
@@ -32,4 +33,5 @@ Biggest differences   (each ▲ or ▼ is one standard deviation, up to 3)
 
 Pass --all to see every metric.
 --- stderr
-note: Paragraph checks need a profile built with --by-paragraph; use your original inputs in: styleprofile build WRITER_TEXTS --by-paragraph -o <tmp>/writer.json --contrast CONTRAST_TEXTS --no-syntax
+note: Paragraph checks need --by-paragraph at build time; rebuild with your original inputs.
+  `styleprofile build WRITER_TEXTS --by-paragraph -o <tmp>/writer.json --contrast CONTRAST_TEXTS --no-syntax`

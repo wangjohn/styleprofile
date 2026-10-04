@@ -4,7 +4,8 @@ $ styleprofile score --all examples/draft.md '<tmp>/writer.json'
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
 Overall: close   Delta 0.85
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under 0.99).
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under
+  0.99).
 
 LLM-likeness: like the reference   0.71
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.

@@ -100,15 +100,6 @@ HINTS = {
         f"pip install '{spacy_model.MODEL_URL}'"
     ),
 }
-# Advice for notes, by ``Note.code``.
-NOTE_HINTS = {
-    NoteCode.READ_AS_HTML: "pass --input-format markdown to read it as written",
-    NoteCode.READ_AS_HTML_IN_FOLDER: (
-        "if any are really Markdown, give them separately with --input-format markdown, which "
-        "would also apply to .html files in the folder"
-    ),
-    NoteCode.READ_AS_JSONL: "pass --input-format markdown to read it as prose",
-}
 # `score` exits with this when a document reaches a --fail-above, --fail-likeness or
 # --fail-flagged level.
 EXIT_FAILED = 3
@@ -130,6 +121,7 @@ move a whole document's verdict little: --fail-flagged catches them"""
 # Library errors and notes name a setting (``setting``) as a whole word; the CLI prints the
 # flag that sets it instead.
 FLAGS = {
+    "input_format": "--input-format",
     "window_words": "--window-words",
     "min_words": "--min-words",
     "top_k": "--top-k",
@@ -307,6 +299,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     build.formatter_class = lambda prog: argparse.RawDescriptionHelpFormatter(
         prog, width=100, max_help_position=32
     )
+    build.add_argument("--verbose", action="store_true", help="show full notes and explanations")
     build.add_argument(
         "inputs",
         nargs="+",
@@ -369,6 +362,9 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     )
     score_parser.formatter_class = lambda prog: argparse.RawDescriptionHelpFormatter(
         prog, width=120, max_help_position=44
+    )
+    score_parser.add_argument(
+        "--verbose", action="store_true", help="show full notes and explanations"
     )
     score_parser.add_argument(
         "paths",
@@ -481,14 +477,14 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     evaluate = commands.add_parser(
         "evaluate",
         **_help_parser(
-            "Stress-test LLM-likeness against edited drafts: score each edited copy of the "
-            "contrast drafts with the weights learned without its original.",
+            "Stress-test edited drafts with the likeness weights learned without their originals.",
             f"{PROG} evaluate posts/ --contrast llm-drafts/ "
             "--edited light=edits/light humanize=edits/humanize",
             usage=f"{PROG} evaluate [options] INPUT [INPUT ...] --contrast PATH "
             "--edited LABEL=DIR [LABEL=DIR ...]",
         ),
     )
+    evaluate.add_argument("--verbose", action="store_true", help="show full notes and explanations")
     evaluate.add_argument(
         "inputs",
         nargs="+",
@@ -598,14 +594,15 @@ def _flagged(message: str, setting: str | None) -> str:
     return re.sub(rf"\b{re.escape(setting)}\b", flag, message)
 
 
-def _notes(notes: Sequence[Note]) -> None:
+def _notes(notes: Sequence[Note], *, verbose: bool = False) -> None:
     """Print notes as ``note:`` lines, except thin-reference notes, which ``build`` prints
     as warnings after its summary."""
     for note in notes:
         if note.code != NoteCode.THIN_REFERENCE:
-            hint = NOTE_HINTS.get(note.code)
-            message = _flagged(note.message, note.setting)
-            _note(f"{message} ({hint})" if hint else message)
+            hint = _flagged(note.code.hint, "input_format") if note.code.hint else None
+            setting = note.setting or ("input_format" if note.code.hint is not None else None)
+            message = _flagged(note.message, setting) if verbose else note.text(settings=FLAGS)
+            _note(f"{message} ({hint})" if verbose and hint else message)
 
 
 def _inputs_exist(values: Sequence[str]) -> None:
@@ -674,7 +671,27 @@ def _default_output(inputs: Sequence[str]) -> str:
     return f"{name or first.resolve().name}.profile.json"
 
 
-def _thin_warnings(profile: Profile) -> None:
+def _thin_warnings(profile: Profile, *, verbose: bool = False) -> None:
+    if not verbose:
+        thin = [note for note in profile.notes if note.code == NoteCode.THIN_REFERENCE]
+        if thin:
+            report = profile.report
+            variant = "summary"
+            if any(note.setting == "group_field" for note in thin):
+                variant = "summary_group"
+            elif report["document_count"] < 2:
+                variant = "summary_document"
+            elif any(
+                NoteCode.THIN_REFERENCE.forms["dominant"].shorten(note.message) is not None
+                for note in thin
+            ):
+                variant = "summary_dominant"
+            message = NoteCode.THIN_REFERENCE.message(
+                variant, f"{report['chunk_count']:,}", f"{report['word_count']:,}"
+            )
+            message = _flagged(message, "group_field")
+            print(_warn(message, _color(sys.stderr)), file=sys.stderr)
+        return
     for note in profile.notes:
         if note.code == NoteCode.THIN_REFERENCE:
             reason = _flagged(note.message, note.setting)
@@ -699,13 +716,15 @@ def _run_build(args: argparse.Namespace) -> int:
             jobs=args.jobs,
             cache=not args.no_cache,
         )
-    _notes(profile.notes)
+    _notes(profile.notes, verbose=args.verbose)
     # Files found inside a folder are known only once it has been read.
     _refuse_overwrite(args.output, typed, profile.sources)
     profile.save(args.output)
-    print(profile.to_text(color=_color(), full=args.all))
+    print(
+        profile.to_text(color=_color(), full=args.all, verbose=args.verbose, warning_settings=FLAGS)
+    )
     sys.stdout.flush()  # keep the warnings after the summary when both go to one pipe
-    _thin_warnings(profile)
+    _thin_warnings(profile, verbose=args.verbose)
     print(f"\nwrote {args.output}")
     print(f"Next, score a draft against it:\n  {PROG} score <draft> {shell_join([args.output])}")
     return 0
@@ -985,8 +1004,14 @@ def _against_reference(args: argparse.Namespace) -> tuple[Profile, str]:
         f"({report['word_count']:,} words) in {elapsed:.1f} s, not saved. "
         f"To reuse it: {shell_join(command)}"
     )
-    _notes(profile.notes)
-    _thin_warnings(profile)
+    if not args.verbose:
+        summary = (
+            f"Reference: built from {_plural(report['document_count'], 'document')} "
+            f"({report['word_count']:,} words) in {elapsed:.1f} s, not saved.\n"
+            f"To reuse: `{shell_join(command)}`"
+        )
+    _notes(profile.notes, verbose=args.verbose)
+    _thin_warnings(profile, verbose=args.verbose)
     return profile, summary
 
 
@@ -999,10 +1024,7 @@ def _short_text_help(profile: Profile, result: ScoreResult) -> str | None:
     )
     shortest = max(MIN_JUDGED_WORDS, math.ceil(floor))
     if result.documents and all(doc.words < shortest for doc in result.documents):
-        return (
-            f"styleprofile judges {shortest:,} words or more; "
-            "score several short texts together with --pool"
-        )
+        return _flagged(NoteCode.SHORT_TEXTS.message("minimum", f"{shortest:,}"), "pool")
     return None
 
 
@@ -1037,11 +1059,10 @@ def _run_score(args: argparse.Namespace) -> int:
             command += ["--contrast", "CONTRAST_TEXTS"]
         if not profile.has_syntax:
             command += ["--no-syntax"]
-        _note(
-            "Paragraph checks need a profile built with --by-paragraph; "
-            "use your original inputs in: "
-            f"{shell_join(command)}"
-        )
+        guidance = NoteCode.PARAGRAPH_PROFILE.note("default", shell_join(command))
+        _note(guidance.text(verbose=args.verbose))
+        if not args.verbose:
+            print(f"  `{shell_join(command)}`", file=sys.stderr)
         args.by_paragraph = False
     # Flags left out are inherited from the profile.
     overrides: SettingsOverrides = {}
@@ -1075,7 +1096,7 @@ def _run_score(args: argparse.Namespace) -> int:
             "has none; rebuild it with --contrast, or use --fail-above"
         )
     # Window and syntax overrides are warned about in the report itself.
-    _notes(result.notes)
+    _notes(result.notes, verbose=args.verbose)
     failed = _failed(args, result)
     if args.fail_above or args.fail_likeness or args.fail_flagged:
         # Recorded for CI, which reads --json or -o: the levels asked, and who reached them.
@@ -1102,11 +1123,18 @@ def _run_score(args: argparse.Namespace) -> int:
     elif args.quiet:
         print("\n".join(_quiet_lines(result, samples)), flush=True)
         if result.warnings:
-            _note(f"{_plural(len(result.warnings), 'warning')}; run without -q to see them")
+            _note(
+                NoteCode.WARNING_COUNT.message("default", _plural(len(result.warnings), "warning"))
+            )
     else:
         setting = result.report["reference"]["verdict"].get("setting")
         text = result.to_text(
-            color=_color(), full=args.all, width=_width(), by_paragraph=args.by_paragraph
+            color=_color(),
+            full=args.all,
+            width=_width(),
+            by_paragraph=args.by_paragraph,
+            verbose=args.verbose,
+            warning_settings=FLAGS,
         )
         print(_flagged(text, setting))
         if args.output:
@@ -1127,10 +1155,10 @@ def _run_show(args: argparse.Namespace) -> int:
     _notes(version_notes(report))
     color = _color()
     if report["kind"] == EVALUATION:
-        print(format_evaluation(report, color=color))
+        print(format_evaluation(report, color=color, warning_settings=FLAGS))
         return 0
     if report["kind"] == REFERENCE:
-        print(format_summary(report, color=color, full=args.all))
+        print(format_summary(report, color=color, full=args.all, warning_settings=FLAGS))
         return 0
     baseline = report["reference"]["baseline"]
     text = format_summary(
@@ -1140,6 +1168,7 @@ def _run_show(args: argparse.Namespace) -> int:
         full=args.all,
         width=_width(),
         by_paragraph=args.by_paragraph,
+        warning_settings=FLAGS,
     )
     print(text)
     return 0
@@ -1154,7 +1183,7 @@ def _run_metrics(args: argparse.Namespace) -> int:
     width = max(len(row.label) for row in rows) + 2
     unit_width = max(len(row.unit) for row in rows) + 2
     indent = " " * (2 + width + unit_width)
-    columns = shutil.get_terminal_size().columns if sys.stdout.isatty() else 0
+    columns = min(shutil.get_terminal_size().columns, 120) if sys.stdout.isatty() else 120
     group = None
     spacy = "" if args.syntax is False else " Syntax and sentence-opening metrics need spaCy."
     print(f"{len(rows)} metrics.{spacy}")
@@ -1193,7 +1222,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
             jobs=args.jobs,
             cache=not args.no_cache,
         )
-    _notes(result.notes)
+    _notes(result.notes, verbose=args.verbose)
     if args.output:
         _refuse_overwrite(args.output, typed, result.sources)
         result.save(args.output)
@@ -1202,7 +1231,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         if args.output:
             _note(f"wrote {args.output}")
     else:
-        print(result.to_text(color=_color()))
+        print(result.to_text(color=_color(), verbose=args.verbose, warning_settings=FLAGS))
         if args.output:
             print(f"\nwrote {args.output}")
     return 0
@@ -1355,7 +1384,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _dispatch(sys.argv[1:] if argv is None else list(argv))
     except (StyleProfileError, OSError) as error:
-        _notes(getattr(error, "notes", ()))
+        _notes(
+            getattr(error, "notes", ()),
+            verbose="--verbose" in (sys.argv[1:] if argv is None else argv),
+        )
         code = getattr(error, "code", None)
         print(f"error: {_flagged(str(error), getattr(error, 'setting', None))}", file=sys.stderr)
         hint = HINTS.get(code or "")

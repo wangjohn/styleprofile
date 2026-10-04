@@ -174,7 +174,7 @@ def test_removing_the_top_signal_lowers_the_auc_and_shows_it_removed(
     assert "Em dashes" in shown.out and "% gone" in shown.out
     assert "weaker evidence" in shown.out and "Retrained" in shown.out
     # The "same" set is the drafts folder itself, which is worth a note.
-    assert "same: 5 files" in shown.err and "not an edit of them" in shown.err
+    assert "same: 5 files" in shown.err and "give a separate edited set" in shown.err
 
     # The saved report is its own kind: show renders it, and it is no reference.
     assert result["kind"] == "evaluation"

@@ -4,7 +4,9 @@ $ styleprofile build '<tmp>/writer' --no-syntax
 STYLE PROFILE   7 chunks, 4,496 words
 
 As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
-  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7 documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75 words, no verdict.
+  Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7
+  documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75
+  words, no verdict.
 
 Pass --all, or run `styleprofile show` on it, to see the metrics.
 
@@ -12,5 +14,4 @@ wrote writer.profile.json
 Next, score a draft against it:
   styleprofile score <draft> writer.profile.json
 --- stderr
-Thin reference: it has 7 chunks; aim for 15 or more by adding documents or using a smaller --window-words.
-Thin reference: it has 4,496 words; aim for 20,000 or more of the writer's text, in one genre.
+Thin reference: 7 chunks, 4,496 words (aim for 15+ chunks and 20,000+ words); add more of the writer's documents

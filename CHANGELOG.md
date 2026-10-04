@@ -17,6 +17,9 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Changed
 
+- **Short notes by default.** Build, score and evaluation messages use short, actionable
+  text. `--verbose` restores full explanations; JSON keeps full warnings. Small references
+  get one size-and-next-step warning.
 - **Additive report compatibility.** Reports keep the integer `version` as their major and
   add `minor_version`. Existing integers mean minor zero; matching majors load across
   minors, with a note for newer minors. Major changes still require rebuilding; optional

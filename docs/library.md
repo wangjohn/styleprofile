@@ -297,3 +297,9 @@ Additive fields must document a safe default or explain how to enable the featur
 Required summaries, weights, verdicts and calibration ranges are still validated: matching
 versions do not make a missing or malformed scientific value safe to invent. Version
 numbers must be integers (not booleans), with a positive major and nonnegative minor.
+
+
+Human rendering uses short notes and warnings. `Profile.to_text`, `ScoreResult.to_text`
+and `Evaluation.to_text` accept `verbose=True` for full explanations. `Note.message` and
+saved report `warnings` retain their long text; `Note.text()` selects the short form and
+`Note.text(verbose=True)` selects the original message.

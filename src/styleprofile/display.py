@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import textwrap
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,7 @@ from styleprofile.calibration import (
     shortfall,
     too_short_text,
 )
-from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict
+from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict, warning_text
 from styleprofile.drift import DELTA, LIKENESS
 from styleprofile.drift import excerpt as excerpt_text
 from styleprofile.metrics import (
@@ -1231,19 +1232,34 @@ def metric_label(metric: str) -> str:
 
 
 def format_reference_summary(
-    report: ReferenceReport, *, color: bool = False, full: bool = False
+    report: ReferenceReport,
+    *,
+    color: bool = False,
+    full: bool = False,
+    verbose: bool = False,
+    warning_settings: Mapping[str, str] | None = None,
 ) -> str:
     """The short view ``build`` prints: size, held-out range, contrast and warnings; ``full``
     adds every metric (``format_summary`` shows the key ones)."""
     if full:
-        return format_summary(report, color=color, full=True)
+        return format_summary(
+            report, color=color, full=True, verbose=verbose, warning_settings=warning_settings
+        )
     style = _Style(color, truecolor=False)
     lines = [style.bold("STYLE PROFILE") + style.dim(f"   {_size(report)}")]
     lines += _reference_lines(report, style)
     lines += ["", style.dim("Pass --all, or run `styleprofile show` on it, to see the metrics.")]
     if report["warnings"]:
-        lines += ["", *(style.warn(f"Note: {warning}") for warning in report["warnings"])]
-    return "\n".join(lines)
+        lines += [
+            "",
+            *(
+                style.warn(
+                    f"Note: {warning_text(warning, verbose=verbose, settings=warning_settings)}"
+                )
+                for warning in report["warnings"]
+            ),
+        ]
+    return _human_text(lines, verbose=verbose)
 
 
 def _size(report: ReportBase) -> str:
@@ -1260,6 +1276,8 @@ def format_summary(
     width: int = DEFAULT_WIDTH,
     shown: Mapping[str, str] | None = None,
     by_paragraph: bool = False,
+    verbose: bool = False,
+    warning_settings: Mapping[str, str] | None = None,
 ) -> str:
     """Terminal view of a report; ``full`` shows every metric instead of the key ones.
 
@@ -1288,8 +1306,16 @@ def format_summary(
     if not full:
         lines += ["", style.dim("Pass --all to see every metric.")]
     if report["warnings"]:
-        lines += ["", *(style.warn(f"Note: {warning}") for warning in report["warnings"])]
-    return "\n".join(lines)
+        lines += [
+            "",
+            *(
+                style.warn(
+                    f"Note: {warning_text(warning, verbose=verbose, settings=warning_settings)}"
+                )
+                for warning in report["warnings"]
+            ),
+        ]
+    return _human_text(lines, verbose=verbose)
 
 
 def _exact(result: AucResult) -> str | None:
@@ -1334,7 +1360,13 @@ def _survival(entry: Survival, style: _Style) -> str:
     return f"{z:+.1f} " + style.distance(change, level)
 
 
-def format_evaluation(result: EvaluationReport, *, color: bool = False) -> str:
+def format_evaluation(
+    result: EvaluationReport,
+    *,
+    color: bool = False,
+    verbose: bool = False,
+    warning_settings: Mapping[str, str] | None = None,
+) -> str:
     """Terminal view of an evaluation report (``styleprofile evaluate``)."""
     truecolor = os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"}
     style = _Style(color, truecolor=color and truecolor)
@@ -1450,9 +1482,46 @@ def format_evaluation(result: EvaluationReport, *, color: bool = False) -> str:
         ),
     ]
     if result["warnings"]:
-        lines += ["", *(style.warn(f"Note: {warning}") for warning in result["warnings"])]
-    return "\n".join(lines)
+        lines += [
+            "",
+            *(
+                style.warn(
+                    f"Note: {warning_text(warning, verbose=verbose, settings=warning_settings)}"
+                )
+                for warning in result["warnings"]
+            ),
+        ]
+    return _human_text(lines, verbose=verbose)
 
 
 def _strip(text: str) -> str:
     return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+def _human_text(lines: list[str], *, verbose: bool) -> str:
+    """Keep prose readable on a normal terminal; aligned verdict tables keep their layout.
+
+    Verbose retains the original rendering, including its explanatory paragraphs.
+    """
+    if verbose:
+        return "\n".join(lines)
+    rendered = []
+    for line in lines:
+        plain = _strip(line)
+        table = re.search(r"^  .*\S {3,}\S", plain) is not None
+        if len(plain) <= 120 or table:
+            rendered.append(line)
+        else:
+            indent = plain[: len(plain) - len(plain.lstrip(" "))]
+            # A whole-line style must surround the wrapped prose: breaking its escape
+            # sequence would leave terminal control characters visible.
+            styled = re.fullmatch(r"(\033\[[0-9;]*m)([^\033]*)(\033\[[0-9;]*m)", line)
+            wrapped = textwrap.fill(
+                plain if styled else line,
+                width=120,
+                subsequent_indent=indent,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            rendered.append(styled[1] + wrapped + styled[3] if styled else wrapped)
+    return "\n".join(rendered)

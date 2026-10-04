@@ -56,7 +56,7 @@ def test_against_matches_two_step_json(tmp_path, monkeypatch, capsys):
     assert instant["documents"] == saved["documents"]
     assert instant["chunks"] == saved["chunks"]
     assert "Reference: built from 7 documents (4,496 words)" in captured.err
-    assert "not saved. To reuse it:" in captured.err
+    assert "not saved." in captured.err and "To reuse:" in captured.err
     assert not (tmp_path / "writer.profile.json").exists()
 
 

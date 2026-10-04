@@ -1364,7 +1364,7 @@ def test_build_warns_about_thin_references_and_names_the_next_command(
     monkeypatch.chdir(tmp_path)
 
     command = ["build", "posts", "-o", "out/writer.json", "--no-syntax", "--window-words", window]
-    assert main(command) == 0
+    assert main([*command, "--verbose"]) == 0
     out, err = capsys.readouterr()
     assert "Thin reference" not in out
     thin = [line for line in err.splitlines() if line.startswith("Thin reference:")]
@@ -1386,7 +1386,7 @@ def test_missing_spacy_falls_back_with_a_note(
     posts = _write_docs(tmp_path / "posts", _author_docs())
     reference = tmp_path / "writer.json"
 
-    assert main(["build", str(posts), "-o", str(reference)]) == 0
+    assert main(["build", str(posts), "-o", str(reference), "--verbose"]) == 0
     assert "surface metrics only" in capsys.readouterr().err
     report = json.loads(reference.read_text(encoding="utf-8"))
     assert report["settings"]["syntax_used"] is None
@@ -1399,10 +1399,10 @@ def test_missing_spacy_falls_back_with_a_note(
     }
     reference.write_text(json.dumps(report), encoding="utf-8")
     sample = str(_sample(tmp_path))
-    assert main(["score", sample, str(reference)]) == 0
+    assert main(["score", sample, str(reference), "--verbose"]) == 0
     captured = capsys.readouterr()
     assert "syntax is left out" in captured.err
-    assert main(["score", sample, str(reference), "--no-syntax"]) == 0
+    assert main(["score", sample, str(reference), "--no-syntax", "--verbose"]) == 0
     captured = capsys.readouterr()
     assert "syntax is left out" not in captured.err
     assert "the reference has syntax metrics but this run does not" in captured.out
@@ -1459,7 +1459,7 @@ def test_metrics_lists_the_registry_by_area(
     if syntax:
         rows = [row for row in rows if row not in describe(syntax=False)]
     assert out.startswith(f"{len(rows)} metrics.")
-    assert all(row.about in out for row in rows)
+    assert all(" ".join(row.about.split()) in " ".join(out.split()) for row in rows)
     assert ("\nSyntax\n" in out) is (syntax is not False)
     assert ("\nPunctuation\n" in out) is (syntax is not True)
 
@@ -1668,11 +1668,11 @@ def test_repeated_inputs_are_read_once(tmp_path: Path, capsys: pytest.CaptureFix
     one = next(posts.iterdir())
     reference = tmp_path / "writer.json"
     once = tmp_path / "once.json"
-    assert main(["build", str(posts), "-o", str(once), "--no-syntax"]) == 0
+    assert main(["build", str(posts), "-o", str(once), "--no-syntax", "--verbose"]) == 0
     capsys.readouterr()
 
     command = ["build", str(posts), str(one), str(posts), "-o", str(reference), "--no-syntax"]
-    assert main(command) == 0
+    assert main([*command, "--verbose"]) == 0
     err = capsys.readouterr().err
     assert f"note: {one} was already given; using it once" in err
     assert f"note: {posts} was already given; using it once" in err

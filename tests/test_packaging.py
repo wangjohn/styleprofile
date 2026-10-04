@@ -321,7 +321,7 @@ def test_a_missing_model_suggests_setup() -> None:
 def test_the_cli_notes_a_missing_model_with_setup(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["build", str(WRITER), "-o", str(tmp_path / "writer.json")]) == 0
+    assert main(["build", str(WRITER), "-o", str(tmp_path / "writer.json"), "--verbose"]) == 0
     assert "run `styleprofile setup` and build again" in capsys.readouterr().err
 
 

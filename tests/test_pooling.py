@@ -1179,35 +1179,35 @@ def test_cli_flags_group_and_pool(
     _comments(tmp_path / "writer.jsonl")
     _comments(tmp_path / "drafts.jsonl", count=12)
     base = ["build", "writer.jsonl", "--no-syntax", "--window-words", str(WINDOW)]
-    assert main([*base, "-o", "grouped.json", "--group-field", "thread"]) == 0
+    assert main([*base, "-o", "grouped.json", "--group-field", "thread", "--verbose"]) == 0
     err = capsys.readouterr().err
     assert "note: joined 144 records into 24 windows" in err and "thread groups" in err
     grouped = json.loads((tmp_path / "grouped.json").read_text(encoding="utf-8"))
     assert (grouped["settings"]["group_field"], grouped["settings"]["pool"]) == ("thread", "auto")
 
-    assert main([*base, "-o", "plain.json"]) == 0
+    assert main([*base, "-o", "plain.json", "--verbose"]) == 0
     err = capsys.readouterr().err
     assert "With no --group-field, each window counts" in err
     assert "pass --group-field thread if each value" in err
-    assert main([*base, "-o", "unpooled.json", "--no-pool"]) == 0
+    assert main([*base, "-o", "unpooled.json", "--no-pool", "--verbose"]) == 0
     captured = capsys.readouterr()
     assert "joined" not in captured.err and "fewer than 150 words" in captured.out
 
-    assert main(["score", "drafts.jsonl", "unpooled.json", "-q"]) == 0
+    assert main(["score", "drafts.jsonl", "unpooled.json", "-q", "--verbose"]) == 0
     assert "use --pool to judge them as one batch" in capsys.readouterr().err
-    assert main(["score", "drafts.jsonl", "grouped.json", "--pool", "--json"]) == 0
+    assert main(["score", "drafts.jsonl", "grouped.json", "--pool", "--json", "--verbose"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["chunk_count"] == 4 and report["settings"]["pool"] is True
     # The writer's own comments cross no fail level, per record or pooled per thread; each
     # document names its thread.
     for pooling in ([], ["--pool"]):
         argv = ["score", "-q", "--fail-above", "clearly", "--fail-flagged", "1", *pooling]
-        assert main([*argv, "drafts.jsonl", "grouped.json"]) == 0
+        assert main([*argv, "drafts.jsonl", "grouped.json", "--verbose"]) == 0
         assert "drafts.jsonl:thread=t1" in capsys.readouterr().out
 
-    assert main([*base, "-o", "none.json", "--window-words", "0", "--pool"]) == 1
+    assert main([*base, "-o", "none.json", "--window-words", "0", "--pool", "--verbose"]) == 1
     assert "error: --window-words must be above 0 to pool" in capsys.readouterr().err
-    assert main([*base, "-o", "typo.json", "--group-field", "thred"]) == 1
+    assert main([*base, "-o", "typo.json", "--group-field", "thred", "--verbose"]) == 1
     err = capsys.readouterr().err
     assert "have the fields id, thread" in err
     assert "hint: pass --group-field with a JSONL field the records have" in err
