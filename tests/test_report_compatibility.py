@@ -11,7 +11,7 @@ import pytest
 
 import styleprofile as sp
 from styleprofile.cli import main
-from styleprofile.profile import (
+from styleprofile.reports import (
     EVALUATION_VERSION,
     MINOR_VERSION,
     VERSION,

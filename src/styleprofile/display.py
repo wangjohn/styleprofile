@@ -28,6 +28,7 @@ from styleprofile.calibration import (
     too_short_text,
 )
 from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict, warning_text
+from styleprofile.corpus.ids import base_id, document_label
 from styleprofile.drift import DELTA, LIKENESS
 from styleprofile.drift import excerpt as excerpt_text
 from styleprofile.metrics import (
@@ -41,7 +42,6 @@ from styleprofile.metrics import (
     label,
 )
 from styleprofile.metrics import title as group_title
-from styleprofile.profile import average_z, base_id, document_label, summarize
 from styleprofile.schema import (
     AucResult,
     Baseline,
@@ -62,6 +62,8 @@ from styleprofile.schema import (
     VerdictDelta,
     VerdictLikeness,
 )
+from styleprofile.scoring import average_z
+from styleprofile.stats import summarize
 from styleprofile.terminal import glyphs
 from styleprofile.weighting import (
     DISTANCE_WORDS,

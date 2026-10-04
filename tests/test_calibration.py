@@ -44,18 +44,13 @@ from styleprofile.calibration import (
 )
 from styleprofile.cli import EXIT_FAILED, main
 from styleprofile.core import StyleProfileError
-from styleprofile.profile import (
-    VERSION,
-    Chunk,
-    build_reference,
-    load_chunks,
-    load_reference,
-    load_report,
-    score,
-    window,
-    write_report,
-)
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.types import Chunk
+from styleprofile.corpus.windows import window
+from styleprofile.reference import build_reference
+from styleprofile.reports import VERSION, load_reference, load_report, write_report
 from styleprofile.schema import ReferenceReport, ScoredChunk, ScoreReport
+from styleprofile.scoring import score
 from styleprofile.surface import prose, words
 from styleprofile.weighting import (
     DISTANCE_WORDS,

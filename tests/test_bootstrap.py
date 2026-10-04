@@ -9,8 +9,10 @@ from pathlib import Path
 import pytest
 
 from styleprofile import weighting
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.windows import window
 from styleprofile.evaluate import evaluate_rewording
-from styleprofile.profile import build_reference, load_chunks, window
+from styleprofile.reference import build_reference
 from styleprofile.weighting import (
     BOOTSTRAP_CHECKPOINTS,
     auc,

@@ -14,22 +14,17 @@ from typing import Any
 import pytest
 
 import styleprofile as sp
-from styleprofile import api
+from styleprofile import api, runtime
 from styleprofile.cli import _flagged, main
+from styleprofile.corpus import preparation
+from styleprofile.corpus.ids import base_id, document_of
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.types import Chunk
+from styleprofile.corpus.windows import window
 from styleprofile.display import format_evaluation
-from styleprofile.profile import (
-    EVALUATION_VERSION,
-    VERSION,
-    Chunk,
-    base_id,
-    build_reference,
-    document_of,
-    dumps_report,
-    load_chunks,
-    load_report,
-    score,
-    window,
-)
+from styleprofile.reference import build_reference
+from styleprofile.reports import EVALUATION_VERSION, VERSION, dumps_report, load_report
+from styleprofile.scoring import score
 from styleprofile.syntax import SyntaxUnavailableError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -337,7 +332,7 @@ def test_auto_syntax_without_spacy_is_a_note_not_output(
     def unavailable() -> None:
         raise SyntaxUnavailableError("no spaCy")
 
-    monkeypatch.setattr(api, "_default_parser", unavailable)
+    monkeypatch.setattr(runtime, "_default_parser", unavailable)
     profile = sp.build(WRITER)
     assert profile.notes[0].code == sp.NoteCode.NO_SYNTAX
     assert "surface metrics only" in profile.notes[0].message
@@ -483,7 +478,7 @@ def test_os_errors_keep_the_notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             raise PermissionError(13, "Permission denied", str(locked))
         return load_chunks(inputs, text_field, **options)
 
-    monkeypatch.setattr(api, "load_chunks", unreadable)
+    monkeypatch.setattr(preparation, "load_chunks", unreadable)
     with pytest.raises(sp.StyleProfileError, match="Permission denied") as error:
         sp.build([post, post, locked], sp.Settings(syntax=False))
     assert error.value.code == "unreadable"

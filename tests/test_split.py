@@ -14,8 +14,8 @@ import pytest
 
 import styleprofile as sp
 from styleprofile.cli import main
+from styleprofile.corpus.ids import chunk_document, document_label
 from styleprofile.formats import html_to_markdown
-from styleprofile.profile import chunk_document, document_label
 from styleprofile.split import (
     HEADING,
     RULE,
@@ -745,8 +745,8 @@ def test_evaluate_splits_the_writers_file(writer_file: Path, tmp_path: Path) -> 
 
 
 def test_chunks_keep_their_documents_through_windowing(writer_file: Path) -> None:
-    from styleprofile.api import _chunked  # pyright: ignore[reportPrivateUsage]
-    from styleprofile.profile import load_chunks
+    from styleprofile.corpus.preparation import _chunked
+    from styleprofile.corpus.reading import load_chunks
 
     notes: list[sp.Note] = []
     cut = _chunked(load_chunks([str(writer_file)]), SURFACE, False, notes, split="calibrate")

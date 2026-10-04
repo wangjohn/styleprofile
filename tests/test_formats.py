@@ -15,16 +15,14 @@ import pytest
 
 from styleprofile.cli import main
 from styleprofile.core import Note, NoteCode, StyleProfileError
+from styleprofile.corpus.duplicates import drop_duplicates
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.types import Chunk
+from styleprofile.corpus.windows import window
 from styleprofile.formats import html_to_markdown, looks_like_html, looks_like_jsonl
-from styleprofile.profile import (
-    Chunk,
-    build_reference,
-    drop_duplicates,
-    load_chunks,
-    score,
-    window,
-)
+from styleprofile.reference import build_reference
 from styleprofile.schema import ReferenceReport
+from styleprofile.scoring import score
 from styleprofile.surface import prose
 
 WRITER = Path(__file__).resolve().parent.parent / "examples" / "writer"

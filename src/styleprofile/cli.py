@@ -28,17 +28,7 @@ from typing import Any, TextIO
 
 from styleprofile import __version__, api, demo, spacy_model
 from styleprofile import cache as caching
-from styleprofile.api import (
-    AUTO,
-    DEFAULT_TOP_K,
-    DEFAULT_WINDOW_WORDS,
-    INPUT_FORMATS,
-    DocumentResult,
-    Profile,
-    ScoreResult,
-    Settings,
-    SettingsOverrides,
-)
+from styleprofile.api import DocumentResult, Profile, ScoreResult, Settings, SettingsOverrides
 from styleprofile.calibration import MIN_JUDGED_WORDS, Lengths, flagged_text, too_short_text
 from styleprofile.core import (
     LikenessVerdict,
@@ -48,6 +38,8 @@ from styleprofile.core import (
     StyleProfileError,
     Verdict,
 )
+from styleprofile.corpus.preparation import path_exists, require_path
+from styleprofile.corpus.reading import expand_path
 from styleprofile.display import (
     DEFAULT_WIDTH,
     format_evaluation,
@@ -55,19 +47,20 @@ from styleprofile.display import (
     not_judged,
     severity,
 )
+from styleprofile.formats import INPUT_FORMATS
 from styleprofile.measure import AUTO_JOBS
 from styleprofile.metrics import describe
-from styleprofile.profile import (
+from styleprofile.reports import (
     EVALUATION,
     MINOR_VERSION,
     REFERENCE,
     VERSION,
     dumps_report,
-    expand_path,
     load_report,
     version_notes,
 )
 from styleprofile.schema import FailedDocument, FailLevels
+from styleprofile.settings import AUTO, DEFAULT_TOP_K, DEFAULT_WINDOW_WORDS, STDIN_SHOWN
 from styleprofile.split import SPLIT_ON
 from styleprofile.status import StatusLine
 from styleprofile.terminal import prepare_output, shell_join
@@ -608,7 +601,7 @@ def _notes(notes: Sequence[Note], *, verbose: bool = False) -> None:
 def _inputs_exist(values: Sequence[str]) -> None:
     """Refuse a typed input that does not exist, naming it as typed (never as text)."""
     for value in values:
-        api.require_path(value, suggest_text=False)
+        require_path(value, suggest_text=False)
 
 
 def _plural(count: int, word: str) -> str:
@@ -854,7 +847,7 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
     if documents:
         name = documents[0].shown
     elif len(samples) == 1:
-        name = api.STDIN_SHOWN if samples[0] == "-" else samples[0]
+        name = STDIN_SHOWN if samples[0] == "-" else samples[0]
     else:
         name = f"{len(samples)} inputs"
     if result.verdict is Verdict.NOT_COMPARABLE:
@@ -1364,7 +1357,7 @@ def _dispatch(argv: Sequence[str]) -> int:
         parser.print_help(sys.stderr)
         return 2
     if argv[0] not in commands:
-        if not argv[0].startswith("-") and api.path_exists(argv[0]):
+        if not argv[0].startswith("-") and path_exists(argv[0]):
             parser.print_usage(sys.stderr)
             print(
                 f"{PROG}: error: {argv[0]} is not a command; did you mean "

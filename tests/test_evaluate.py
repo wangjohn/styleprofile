@@ -78,7 +78,7 @@ def _edit(drafts: Path, output: Path, edit: Callable[[str], str]) -> None:
 
 
 def _evaluate(author: Path, drafts: Path, edited: dict[str, Path], **options: Any) -> Any:
-    from styleprofile.profile import load_chunks
+    from styleprofile.corpus.reading import load_chunks
 
     return evaluate_rewording(
         load_chunks([str(author)]),
@@ -204,7 +204,7 @@ def test_edited_drafts_are_matched_to_originals_by_name(tmp_path: Path) -> None:
     with pytest.raises(StyleProfileError, match="unedited"):
         _evaluate(author, drafts, {"original": drafts})
 
-    from styleprofile.profile import load_chunks
+    from styleprofile.corpus.reading import load_chunks
 
     twice = [
         *load_chunks([str(drafts)]),
@@ -316,7 +316,7 @@ def test_an_unscorable_set_does_not_stop_the_others(
     assert empty["likeness_median_chunks"] is None and len(empty["too_short"]) == 5
     assert result["sets"]["same"]["auc"] == result["sets"]["original"]["auc"]
     output = tmp_path / "report.json"
-    from styleprofile.profile import write_report
+    from styleprofile.reports import write_report
 
     write_report(result, output)
     assert main(["show", str(output)]) == 0
@@ -324,25 +324,27 @@ def test_an_unscorable_set_does_not_stop_the_others(
 
 
 def test_contrast_is_measured_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from styleprofile import profile
+    from styleprofile import reference, scoring, stats
+    from styleprofile.corpus.reading import load_chunks
 
     author, drafts = _corpus(tmp_path)
     _edit(drafts, tmp_path / "same", _identity)
     measured: list[int] = []
-    original = profile._measure
+    original = stats._measure
 
     def counting(chunks: Any, parser: Any, min_words: int, **options: Any) -> Any:
         measured.append(len(chunks))
         return original(chunks, parser, min_words, **options)
 
-    monkeypatch.setattr(profile, "_measure", counting)
+    monkeypatch.setattr(reference, "_measure", counting)
+    monkeypatch.setattr(scoring, "_measure", counting)
     result = _evaluate(author, drafts, {"same": tmp_path / "same"})
     # The reference, the contrast drafts and the edited set, once each.
     assert measured == [8, 5, 5]
-    reference = profile.build_reference(
-        profile.load_chunks([str(author)]), parser=None, contrast=profile.load_chunks([str(drafts)])
+    baseline = reference.build_reference(
+        load_chunks([str(author)]), parser=None, contrast=load_chunks([str(drafts)])
     )
-    assert result["sets"]["original"]["auc"] == reference["contrast"]["calibration"]["auc"]
+    assert result["sets"]["original"]["auc"] == baseline["contrast"]["calibration"]["auc"]
 
 
 def test_evaluate_rejects_stdin_twice_and_overwriting_an_input(

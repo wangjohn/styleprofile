@@ -25,8 +25,12 @@ from styleprofile import cache as caching
 from styleprofile import measure, metrics
 from styleprofile.cache import MeasurementCache, fingerprint
 from styleprofile.cli import main
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.windows import window
 from styleprofile.measure import Measurer
-from styleprofile.profile import build_reference, dumps_report, load_chunks, score, window
+from styleprofile.reference import build_reference
+from styleprofile.reports import dumps_report
+from styleprofile.scoring import score
 
 ROOT = Path(__file__).resolve().parent.parent
 WRITER, CONTRAST, DRAFT = (
