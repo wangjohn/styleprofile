@@ -59,11 +59,13 @@ from styleprofile.measure import AUTO_JOBS
 from styleprofile.metrics import describe
 from styleprofile.profile import (
     EVALUATION,
+    MINOR_VERSION,
     REFERENCE,
     VERSION,
     dumps_report,
     expand_path,
     load_report,
+    version_notes,
 )
 from styleprofile.schema import FailedDocument, FailLevels
 from styleprofile.split import SPLIT_ON
@@ -173,7 +175,7 @@ def _note(message: str) -> None:
 
 
 def _version_text() -> str:
-    return f"{PROG} {__version__} (report schema {VERSION})"
+    return f"{PROG} {__version__} (report schema {VERSION}.{MINOR_VERSION})"
 
 
 def _help_parser(description: str, example: str, **kwargs: Any) -> dict[str, Any]:
@@ -1122,6 +1124,7 @@ def _run_score(args: argparse.Namespace) -> int:
 def _run_show(args: argparse.Namespace) -> int:
     # Errors name the path as typed: Path() drops a trailing slash or a leading ./
     report = load_report(expand_path(args.report), args.report)
+    _notes(version_notes(report))
     color = _color()
     if report["kind"] == EVALUATION:
         print(format_evaluation(report, color=color))

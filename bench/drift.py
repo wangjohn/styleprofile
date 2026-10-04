@@ -126,7 +126,7 @@ def _concat(texts: list[str]) -> str:
 def _score(profile: sp.Profile, text: str, name: str) -> list[list[Any]] | None:
     """[first line, last line, words, spans, drifts] per paragraph, or None if not read."""
     result = profile.score(sp.Text(text, name=name), passages=True)
-    document = (result.report["passages"] or [None])[0]
+    document = (result.report.get("passages") or [None])[0]
     if not document or not document["judged"]:
         return None
     return [

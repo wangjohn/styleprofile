@@ -30,6 +30,8 @@ class StyleProfileError(ValueError):
 class NoteCode(StrEnum):
     """The kinds of ``Note``. Front ends dispatch on these, so every note has one."""
 
+    NEWER_REPORT_VERSION = "newer_report_version"
+    """A saved report uses a newer additive minor; unknown fields may be ignored."""
     NO_PARAGRAPH_BREAKS = "no_paragraph_breaks"
     """Paragraph structure is omitted for a long single paragraph."""
     OVERSIZE_CHUNK = "oversize_chunk"

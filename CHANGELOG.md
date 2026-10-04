@@ -11,11 +11,16 @@ then `styleprofile setup` for the parser-based metrics.
 
 > [!IMPORTANT]
 > **Rebuild your profiles.** Reports now carry report version 8, and styleprofile refuses
-> any other version with a message saying to rebuild. Run `styleprofile build` again on the
+> any other major with a message saying to rebuild. Existing version-8 reports remain readable. Run `styleprofile build` again on the
 > writer's texts, and `styleprofile score` again for saved score reports. There is no
 > migration: several metrics, the calibration and the report layout all changed.
 
 ### Changed
+
+- **Additive report compatibility.** Reports keep the integer `version` as their major and
+  add `minor_version`. Existing integers mean minor zero; matching majors load across
+  minors, with a note for newer minors. Major changes still require rebuilding; optional
+  fields use documented defaults or explain how to enable their features.
 
 - **Paragraph calibration runs on request.** Use `build --by-paragraph` or
   `build(..., passages=True)` to prepare experimental paragraph checks. Ordinary builds

@@ -1,5 +1,13 @@
 """The shapes of the JSON reports styleprofile writes, as TypedDicts.
 
+Report versions use ``version`` as the major and ``minor_version`` as the minor. A missing
+minor is zero, so existing integer reports remain readable. A major changes when existing
+measurements, calibration, required fields or their meaning become incompatible; additive
+optional fields increment the minor and must document a default or a feature-specific
+remedy. Matching majors load across minors, including newer minors with a note that unknown
+fields may be ignored. Unknown keys are retained on load/save. Required scientific data is
+never invented: a malformed or incomplete required field still requires rebuilding.
+
 There are three kinds of report (``profile.KINDS``): a reference profile
 (``ReferenceReport``, from ``styleprofile build``), a score report (``ScoreReport``, drafts
 scored against a reference) and an evaluation report (``EvaluationReport``, from
@@ -151,6 +159,7 @@ class ReportBase(TypedDict):
     """What reference and score reports share: their own chunks, measured."""
 
     version: int
+    minor_version: NotRequired[int]
     settings: ReportSettings
     chunk_count: int
     # Distinct documents the chunks came from (windows of one file are one document).
@@ -728,7 +737,7 @@ class ScoreReport(ReportBase):
     documents: list[DocumentEntry]
     # Each document read in overlapping spans (``drift``); None when the score did not
     # (by default, a score of several documents).
-    passages: list[DocumentPassages] | None
+    passages: NotRequired[list[DocumentPassages] | None]
     reference: ReferenceScore
     # Only when ``score`` was given --fail-above, --fail-likeness or --fail-flagged.
     fail: NotRequired[FailLevels]
@@ -818,6 +827,7 @@ class EvaluationReport(TypedDict):
 
     kind: Literal["evaluation"]
     version: int
+    minor_version: NotRequired[int]
     settings: EvaluationSettings
     label: str
     reference: EvaluationReference
