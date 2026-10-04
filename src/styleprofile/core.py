@@ -133,6 +133,11 @@ class NoteCode(StrEnum):
         """Choose human prose; verbose output keeps the original long message."""
         if verbose:
             return message
+        if self == NoteCode.NO_SYNTAX:
+            for name in ("missing_spacy", "missing_model"):
+                form = self.forms[name]
+                if _note_pattern(form.long).search(message):
+                    return form.short
         for name, form in self.forms.items():
             if name == "fallback":
                 continue
@@ -1087,6 +1092,14 @@ _NOTE_FORMS: dict[NoteCode, dict[str, NoteForm]] = {
         ),
     },
     NoteCode.NO_SYNTAX: {
+        "missing_spacy": NoteForm(
+            "spaCy is not installed; surface metrics only. Install the syntax extra.",
+            "spaCy is not installed",
+        ),
+        "missing_model": NoteForm(
+            "English model missing; surface metrics only; run `styleprofile setup`.",
+            "spaCy's English model ({0}) is not installed",
+        ),
         "fallback": NoteForm(
             (
                 "syntax is left out; surface metrics only. Install syntax and run "

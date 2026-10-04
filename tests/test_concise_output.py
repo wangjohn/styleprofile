@@ -115,3 +115,25 @@ def test_requested_split_without_boundaries_says_text_was_kept_whole() -> None:
     assert "kept whole" in note.text()
     assert "split into documents" not in note.text()
     assert "no headings" in note.text(verbose=True)
+
+
+@pytest.mark.parametrize("model_missing", [False, True])
+def test_default_syntax_note_names_the_missing_dependency(
+    model_missing, tmp_path, capsys, monkeypatch
+) -> None:
+    from styleprofile import SyntaxUnavailableError
+
+    def unavailable():
+        raise SyntaxUnavailableError("dependency unavailable", model_missing=model_missing)
+
+    monkeypatch.setattr(api, "_default_parser", unavailable)
+    assert main(["build", str(WRITER), "--no-cache", "-o", str(tmp_path / "reference.json")]) == 0
+    lines = capsys.readouterr().err.splitlines()
+    [note] = [line for line in lines if line.startswith("note:")]
+    assert len(note) <= 106
+    if model_missing:
+        assert "English model missing" in note
+        assert "run `styleprofile setup`" in note
+    else:
+        assert "spaCy is not installed" in note
+        assert "Install the syntax extra" in note

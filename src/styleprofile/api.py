@@ -2165,9 +2165,9 @@ def _no_syntax_note(missing: str, error: SyntaxUnavailableError) -> Note:
     installed and ``{fix}`` how to install it, the ``syntax`` extra without spaCy or
     `styleprofile setup` when only spaCy's English model is missing."""
     cause, fix = (
-        (f"spaCy's English model ({DEFAULT_MODEL}) is not installed", SETUP_COMMAND)
+        (NoteCode.NO_SYNTAX.message("missing_model", DEFAULT_MODEL), SETUP_COMMAND)
         if error.model_missing
-        else ("spaCy is not installed", spacy_model.syntax_install())
+        else (NoteCode.NO_SYNTAX.message("missing_spacy"), spacy_model.syntax_install())
     )
     return Note(missing.format(missing=cause, fix=fix), NoteCode.NO_SYNTAX)
 
