@@ -25,6 +25,7 @@ from styleprofile.profile import (
     EVALUATION,
     EVALUATION_VERSION,
     INPUT_SUFFIXES,
+    MINOR_VERSION,
     Chunk,
     ContrastFit,
     StyleProfileError,
@@ -412,6 +413,7 @@ def evaluate_rewording(
     return {
         "kind": EVALUATION,
         "version": VERSION,
+        "minor_version": MINOR_VERSION,
         "settings": recorded,
         "label": label,
         "reference": {

@@ -12,7 +12,15 @@ from styleprofile import Chunk, StyleProfileError
 from styleprofile.calibration import verdict
 from styleprofile.cli import main
 from styleprofile.display import describe_delta, label, value
-from styleprofile.profile import VERSION, _prepare, build_reference, load_chunks, score, window
+from styleprofile.profile import (
+    MINOR_VERSION,
+    VERSION,
+    _prepare,
+    build_reference,
+    load_chunks,
+    score,
+    window,
+)
 from styleprofile.profile import _score as _score_with
 from styleprofile.schema import Baseline, Contrast
 from styleprofile.surface import (
@@ -1476,7 +1484,8 @@ def test_version_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> Non
         main(["--version"])
     assert exit_.value.code == 0
     assert (
-        capsys.readouterr().out.strip() == f"styleprofile {__version__} (report schema {VERSION})"
+        capsys.readouterr().out.strip() == f"styleprofile {__version__} "
+        f"(report schema {VERSION}.{MINOR_VERSION})"
     )
     with pytest.raises(SystemExit) as exit_:
         main(["scor", "draft.md"])
@@ -1682,5 +1691,8 @@ def test_module_entry_point_reports_the_version(tmp_path: Path) -> None:
         text=True,
         check=True,
     )
-    assert result.stdout.strip() == f"styleprofile {__version__} (report schema {VERSION})"
+    assert (
+        result.stdout.strip() == f"styleprofile {__version__} "
+        f"(report schema {VERSION}.{MINOR_VERSION})"
+    )
     assert result.stderr == ""

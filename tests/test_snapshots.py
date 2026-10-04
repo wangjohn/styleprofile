@@ -18,6 +18,7 @@ import difflib
 import importlib
 import importlib.util
 import io
+import json
 import os
 import re
 import shlex
@@ -32,6 +33,7 @@ import pytest
 
 from styleprofile.cache import MeasurementCache
 from styleprofile.cli import main
+from styleprofile.profile import MINOR_VERSION
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
 gen: Any = importlib.import_module("gen")
@@ -57,6 +59,7 @@ COMMANDS: list[tuple[str, list[str]]] = [
     ("score-against", ["score", DRAFT, "--against", WRITER, "--contrast", CONTRAST]),
     ("demo", ["demo", "--dir", f"{TMP}/bundled-demo"]),
     ("build", ["build", WRITER, "--contrast", CONTRAST, "-o", REFERENCE]),
+    ("show-newer-minor", ["show", f"{TMP}/newer-minor.json"]),
     ("score", ["score", DRAFT, REFERENCE, "-o", REPORT]),
     ("score-quiet", ["score", "-q", DRAFT, REFERENCE]),
     ("score-all", ["score", "--all", DRAFT, REFERENCE]),
@@ -211,6 +214,10 @@ def outputs(
         patch.delenv("FORCE_COLOR", raising=False)
         patch.setenv("COLUMNS", "100")
         for name, args in MODES[mode]:
+            if name == "show-newer-minor":
+                newer = json.loads((tmp / "writer.json").read_text(encoding="utf-8"))
+                newer["minor_version"] = MINOR_VERSION + 1
+                (tmp / "newer-minor.json").write_text(json.dumps(newer), encoding="utf-8")
             if mode == "surface" and (args[0] in ("build", "demo") or "--against" in args):
                 args = [*args, "--no-syntax"]
             if name == "build-default":
