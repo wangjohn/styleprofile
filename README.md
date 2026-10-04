@@ -52,7 +52,7 @@ styleprofile score draft.md book.profile.json
 ```
 
 **A folder of essays or posts.** Build once, then reuse the profile. Without `-o`, the
-output is `<folder-name>.profile.json` beside the input folder.
+output is `<folder-name>.profile.json` in the current directory.
 
 ```bash
 styleprofile build posts/
