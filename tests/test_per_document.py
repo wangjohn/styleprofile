@@ -19,7 +19,7 @@ import styleprofile as sp
 from styleprofile.cli import EXIT_FAILED, _failed, main
 from styleprofile.core import NoteCode
 from styleprofile.display import CLOSE_ROWS, format_summary, shorten
-from styleprofile.profile import load_report, write_report
+from styleprofile.reports import load_report, write_report
 from styleprofile.schema import DocumentEntry
 
 ROOT = Path(__file__).resolve().parent.parent

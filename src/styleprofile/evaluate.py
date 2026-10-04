@@ -20,21 +20,13 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from styleprofile.core import NoteCode
+from styleprofile.core import NoteCode, StyleProfileError
+from styleprofile.corpus.ids import bare_key, pair_key
+from styleprofile.corpus.reading import INPUT_SUFFIXES
+from styleprofile.corpus.types import Chunk
 from styleprofile.measure import Measurer
-from styleprofile.profile import (
-    EVALUATION,
-    EVALUATION_VERSION,
-    INPUT_SUFFIXES,
-    MINOR_VERSION,
-    Chunk,
-    ContrastFit,
-    StyleProfileError,
-    bare_key,
-    build_contrast_reference,
-    pair_key,
-    z_against_reference,
-)
+from styleprofile.reference import ContrastFit, build_contrast_reference
+from styleprofile.reports import EVALUATION, EVALUATION_VERSION, MINOR_VERSION
 from styleprofile.schema import (
     ContrastCalibration,
     DraftVerdict,
@@ -47,6 +39,7 @@ from styleprofile.schema import (
     Signal,
     Survival,
 )
+from styleprofile.scoring import z_against_reference
 from styleprofile.surface import prose, words
 from styleprofile.syntax import Parser
 from styleprofile.weighting import (

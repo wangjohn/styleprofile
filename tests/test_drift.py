@@ -36,7 +36,7 @@ from styleprofile.drift import (
     threshold,
     thresholds,
 )
-from styleprofile.profile import load_report
+from styleprofile.reports import load_report
 from styleprofile.surface import classify
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -419,8 +419,8 @@ def test_the_command_line_shows_passages_and_lists_paragraphs(
 
 @pytest.mark.skipif(not HAS_SPACY, reason="spaCy is not installed")
 def test_spans_across_windows_use_the_documents_parse() -> None:
-    from styleprofile.api import _default_parser
-    from styleprofile.profile import _Joined
+    from styleprofile.measure import JoinedParse as _Joined
+    from styleprofile.runtime import _default_parser
 
     parser = _default_parser()
     texts = ["One sentence here. Another one.", "A second window starts. It ends."]

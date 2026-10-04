@@ -17,6 +17,9 @@ then `styleprofile setup` for the parser-based metrics.
 
 ### Changed
 
+- **Smaller domain modules.** Corpus preparation, reference construction, scoring and
+  report I/O now live in separate modules behind the same public library API.
+
 - **Short notes by default.** Build, score and evaluation messages use short, actionable
   text. `--verbose` restores full explanations; JSON keeps full warnings. Small references
   get one size-and-next-step warning.

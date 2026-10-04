@@ -27,19 +27,11 @@ from styleprofile.calibration import (
     whole_parts,
 )
 from styleprofile.cli import main
-from styleprofile.profile import (
-    Chunk,
-    _pack,  # pyright: ignore[reportPrivateUsage]
-    base_id,
-    chunk_document,
-    drop_duplicates,
-    group_id,
-    load_chunks,
-    pair_key,
-    pool,
-    pools_by_default,
-    window,
-)
+from styleprofile.corpus.duplicates import drop_duplicates
+from styleprofile.corpus.ids import base_id, chunk_document, group_id, pair_key
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.types import Chunk
+from styleprofile.corpus.windows import _pack, pool, pools_by_default, window
 from styleprofile.surface import words as prose_words
 
 ROOT = Path(__file__).resolve().parent.parent

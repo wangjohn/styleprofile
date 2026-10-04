@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from styleprofile import api
+from styleprofile import api, runtime
 from styleprofile.cli import main
 from styleprofile.core import Note, NoteCode, warning_text
 
@@ -218,7 +218,7 @@ def test_default_syntax_note_names_the_missing_dependency(
     def unavailable():
         raise SyntaxUnavailableError("dependency unavailable", model_missing=model_missing)
 
-    monkeypatch.setattr(api, "_default_parser", unavailable)
+    monkeypatch.setattr(runtime, "_default_parser", unavailable)
     assert main(["build", str(WRITER), "--no-cache", "-o", str(tmp_path / "reference.json")]) == 0
     lines = capsys.readouterr().err.splitlines()
     [note] = [line for line in lines if line.startswith("note:")]

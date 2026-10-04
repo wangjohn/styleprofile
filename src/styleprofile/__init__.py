@@ -33,8 +33,8 @@ from styleprofile.core import (
     StyleProfileError,
     Verdict,
 )
+from styleprofile.corpus.types import Chunk
 from styleprofile.drift import Passage, Trait
-from styleprofile.profile import Chunk
 from styleprofile.syntax import SyntaxUnavailableError
 
 try:

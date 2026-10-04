@@ -8,21 +8,17 @@ from typing import Any
 
 import pytest
 
-from styleprofile import Chunk, StyleProfileError
+from styleprofile import Chunk, StyleProfileError, runtime
 from styleprofile.calibration import verdict
 from styleprofile.cli import main
+from styleprofile.corpus.reading import load_chunks
+from styleprofile.corpus.windows import window
 from styleprofile.display import describe_delta, label, value
-from styleprofile.profile import (
-    MINOR_VERSION,
-    VERSION,
-    _prepare,
-    build_reference,
-    load_chunks,
-    score,
-    window,
-)
-from styleprofile.profile import _score as _score_with
+from styleprofile.reference import build_reference
+from styleprofile.reports import MINOR_VERSION, VERSION
 from styleprofile.schema import Baseline, Contrast
+from styleprofile.scoring import _prepare, score
+from styleprofile.scoring import _score as _score_with
 from styleprofile.surface import (
     Metrics,
     char_trigrams,
@@ -725,8 +721,8 @@ def test_contrast_views_show_likeness(tmp_path: Path, capsys: pytest.CaptureFixt
 
 
 def test_weighting_without_calibration_and_level_thresholds() -> None:
+    from styleprofile.corpus.ids import document_of
     from styleprofile.display import delta_level, likeness_level
-    from styleprofile.profile import document_of
     from styleprofile.weighting import auc
 
     # Two single-chunk documents: no held-out spread, so no calibration and no crash.
@@ -806,7 +802,7 @@ def test_rare_habit_cannot_dominate_delta() -> None:
     assert 3 < scored["z"]["punctuation"]["semicolons_per_1k"] < 15
     assert scored["delta_by_group"]["punctuation"] < 2
 
-    from styleprofile.profile import document_of
+    from styleprofile.corpus.ids import document_of
 
     assert document_of("f.jsonl", "faq#what") != document_of("f.jsonl", "faq#why")
 
@@ -1377,12 +1373,12 @@ def test_build_warns_about_thin_references_and_names_the_next_command(
 def test_missing_spacy_falls_back_with_a_note(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from styleprofile import SyntaxUnavailableError, api
+    from styleprofile import SyntaxUnavailableError
 
     def unavailable() -> None:
         raise SyntaxUnavailableError("no spaCy")
 
-    monkeypatch.setattr(api, "_default_parser", unavailable)
+    monkeypatch.setattr(runtime, "_default_parser", unavailable)
     posts = _write_docs(tmp_path / "posts", _author_docs())
     reference = tmp_path / "writer.json"
 
@@ -1521,7 +1517,7 @@ def test_color_honors_no_color_and_force_color(
 
 
 def test_reports_carry_their_kind_and_scores_a_baseline() -> None:
-    from styleprofile.profile import report_kind
+    from styleprofile.reports import report_kind
 
     reference = build_reference(_author_docs(), parser=None)
     assert report_kind(reference) == "reference"
