@@ -9,7 +9,7 @@ import sys
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 
 from styleprofile.core import Note, NoteCode, StyleProfileError
 from styleprofile.corpus.ids import _GROUPED, _PART_SUFFIX, _RECORD, document_of, group_id
@@ -256,7 +256,17 @@ def expand_path(value: str) -> Path:
     """A path as typed with ``~`` expanded, as an error rather than a crash when it names an
     unknown user (``~other``)."""
     try:
-        return Path(value).expanduser()
+        expanded = Path(value).expanduser()
+        user = re.split(r"[/\\]", value, maxsplit=1)[0]
+        # Windows infers another user's path without checking that home exists.
+        if (
+            os.name == "nt"
+            and user.startswith("~")
+            and len(user) > 1
+            and not Path(user).expanduser().is_dir()
+        ):
+            raise StyleProfileError(f"{value}: cannot find that user's home", code="not_found")
+        return expanded
     except RuntimeError as error:
         raise StyleProfileError(f"{value}: {error}", code="not_found") from error
 
@@ -286,11 +296,14 @@ HOME_PARENTS = (Path("/home"), Path("/Users"))
 OTHER_HOMES = (Path("/root"),)
 
 
-def _is_home(absolute: Path) -> bool:
+def _is_home(absolute: PurePath) -> bool:
     """Whether ``absolute`` is a home directory, whose name is a user name."""
-    if absolute == Path(os.path.abspath(Path.home())) or absolute in OTHER_HOMES:
+    root = absolute.parents[-1] if absolute.parents else absolute
+    if absolute == Path(os.path.abspath(Path.home())) or absolute in (
+        root / home.name for home in OTHER_HOMES
+    ):
         return True
-    return absolute.parent in HOME_PARENTS
+    return absolute.parent in (root / parent.name for parent in HOME_PARENTS)
 
 
 @dataclass
@@ -502,7 +515,7 @@ def _walk(path: Path) -> tuple[list[Path], list[Path], list[str]]:
     readable: list[Path] = []
     skipped: list[Path] = []
     generated: list[str] = []
-    for item in sorted(path.rglob("*")):
+    for item in sorted(path.rglob("*"), key=lambda item: item.parts):
         parts = item.relative_to(path).parts
         if not item.is_file() or any(
             part.startswith(".") or part in SKIPPED_DIRS for part in parts[:-1]
@@ -618,7 +631,7 @@ def load_chunks(
                 )
             sources = _name_sources(value, path, files, names)
             for item, source in zip(files, sources, strict=True):
-                chunk_id = str(item.relative_to(path))
+                chunk_id = item.relative_to(path).as_posix()
                 label = str(Path(value) / chunk_id)
                 chunks.extend(
                     _file_chunks(

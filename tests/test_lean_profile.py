@@ -165,6 +165,7 @@ def test_home_and_filesystem_roots_save_as_input(
     home = corpus / user  # a home directory named like the user, as on most systems
     shutil.copytree(corpus / "writer", home)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     assert root_name("~") == root_name(str(home)) == root_name("/") == "input"
     assert root_name("~/old-maps.md") == "old-maps.md"
 
