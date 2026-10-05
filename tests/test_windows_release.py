@@ -189,6 +189,67 @@ def test_cache_reader_and_writer_keep_the_persistent_journal(tmp_path: Path) -> 
     assert again.problem is None, again.problem
 
 
+@pytest.mark.parametrize("failure", ["open", "write", "reader"])
+def test_failed_cache_writer_stops_and_closes_its_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import sqlite3
+    import threading
+
+    store = caching.MeasurementCache(tmp_path / "cache.sqlite3")
+    opened = threading.Event()
+    closed = threading.Event()
+    failed = threading.Event()
+    fail = store._fail
+
+    def record_failure(error: BaseException | str) -> None:
+        fail(error)
+        failed.set()
+
+    monkeypatch.setattr(store, "_fail", record_failure)
+
+    class Connection:
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def executemany(self, *args: object) -> None:
+            if failure == "write":
+                raise sqlite3.OperationalError("cache write denied")
+
+        def close(self) -> None:
+            closed.set()
+
+    def opening() -> Connection:
+        opened.set()
+        if failure == "open":
+            raise PermissionError("cannot protect the cache ACL")
+        return Connection()
+
+    monkeypatch.setattr(store, "_open", opening)
+    store.put(b"one", 3, {"value": 1})
+    store.flush()
+    writer = store._writer
+    assert writer is not None
+    try:
+        assert opened.wait(2), "cache writer did not open"
+        if failure == "reader":
+            store._fail("cache read denied")
+        assert failed.wait(2), "cache writer did not record the failure"
+        assert store.problem is not None
+        store.close()
+        writer.join(2)
+        assert not writer.is_alive(), "failed cache writer survived close"
+        assert failure == "open" or closed.is_set(), "writer connection was not closed"
+    finally:
+        # Also reap the writer on the unfixed source, retaining a useful failing test.
+        if writer.is_alive():
+            store._writes.put(None, timeout=2)
+            writer.join(2)
+
+
 @pytest.mark.parametrize("linked", ["directory", "database", "journal"])
 def test_cache_acl_refuses_links_before_touching_unrelated_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, linked: str

@@ -429,8 +429,10 @@ class MeasurementCache:
 
         self.flush()
         if self._writer is not None:
-            # A writer already given up on is not waited for (it is a daemon thread).
-            if self.problem is None and self._hand(None):
+            # A failed writer still drains its queue. Give it the stop signal too,
+            # so it closes its connection instead of waiting forever for another batch.
+            # Both handing off and waiting remain bounded for an unresponsive writer.
+            if self._hand(None):
                 self._wait_for_writer(self._writer)
             self._writer = None
         if self._connection is not None:
