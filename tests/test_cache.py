@@ -125,7 +125,7 @@ def test_a_cache_hit_gives_a_byte_identical_report(
 
     monkeypatch.setattr(measure, "measure_spans", counting_spans)
     warm = sp.build(WRITER, settings, contrast=CONTRAST, cache=True, passages=True)
-    assert counting.texts == []  # every chunk and piece came from the cache
+    assert counting.texts == [], (cold.notes, warm.notes)  # every chunk and piece came from cache
     assert spans == []  # and every document read in parts for drift calibration
     assert "drift" in (warm.report.get("calibration") or {})
     cold.save(tmp_path / "cold.json")
@@ -200,7 +200,7 @@ def test_adding_a_document_measures_only_the_new_one(
     counting = Counting(monkeypatch)
     grown = sp.build(corpus, settings, cache=True)
     new_windows = window(load_chunks([str(new)]), settings.window_words)
-    assert len(counting.texts) == len(new_windows)
+    assert len(counting.texts) == len(new_windows), grown.notes
     # And the profile is the one a build without the cache gives.
     cold = sp.build(corpus, settings, cache=False)
     assert dumps_report(grown.report) == dumps_report(cold.report)
@@ -261,8 +261,18 @@ def test_a_relative_xdg_cache_home_is_ignored(monkeypatch: pytest.MonkeyPatch) -
 
 def test_the_cache_file_is_private(cache_home: Path) -> None:
     sp.build(WRITER, sp.Settings(syntax=False), cache=True)
-    assert cache_home.stat().st_mode & 0o077 == 0
-    assert cache_home.parent.stat().st_mode & 0o077 == 0
+    if sys.platform == "win32":
+        from styleprofile.cache_acl import _WindowsACL
+
+        acl = _WindowsACL()
+        acl.verify(cache_home)
+        acl.verify(cache_home.parent)
+        journal = Path(f"{cache_home}-journal")
+        if journal.exists():
+            acl.verify(journal)
+    else:
+        assert cache_home.stat().st_mode & 0o077 == 0
+        assert cache_home.parent.stat().st_mode & 0o077 == 0
 
 
 # Size and sharing.
@@ -441,19 +451,19 @@ def test_scoring_leaves_nothing_in_the_cache_unless_asked(
     assert caching.describe(cache_home)[2] > entries
 
 
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0,
-    reason="root can write to folders regardless of permission bits",
-)
 def test_the_cache_command_says_when_the_cache_is_unavailable(
-    cache_home: Path, capsys: pytest.CaptureFixture[str]
+    cache_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache_home.parent.mkdir(parents=True)
-    cache_home.parent.chmod(0o500)
-    try:
-        assert main(["cache"]) == 0
-    finally:
-        cache_home.parent.chmod(0o700)
+    # Windows chmod changes the read-only flag, not directory write access. Inject
+    # the access-check result to exercise the same unavailable-command contract.
+    access = caching.os.access
+    monkeypatch.setattr(
+        caching.os,
+        "access",
+        lambda path, mode: False if Path(path) == cache_home.parent else access(path, mode),
+    )
+    assert main(["cache"]) == 0
     out = capsys.readouterr().out
     assert "unavailable:" in out and "not writable" in out
 

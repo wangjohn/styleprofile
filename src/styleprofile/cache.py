@@ -29,6 +29,7 @@ import sys
 import time
 import zlib
 from collections.abc import Callable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from functools import cache
 from importlib import import_module
@@ -199,6 +200,7 @@ class MeasurementCache:
         import queue
 
         self.path = path if path is not None else cache_dir() / FILENAME
+        self._owned_directory = path is None or self.path.parent == cache_dir()
         self.max_bytes = max_bytes
         self.clock = clock
         self.problem: str | None = None
@@ -250,7 +252,15 @@ class MeasurementCache:
     def _open(self) -> sqlite3.Connection:
         import sqlite3
 
+        if sys.platform == "win32":
+            from styleprofile.cache_acl import check_cache_paths
+
+            check_cache_paths(self.path, owned_directory=self._owned_directory)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if sys.platform == "win32":
+            from styleprofile.cache_acl import protect_cache
+
+            protect_cache(self.path, owned_directory=self._owned_directory)
         # The file holds pattern counts of the user's texts: private, as they are.
         if not self.path.exists():
             os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT, 0o600))
@@ -526,9 +536,10 @@ def describe(path: Path | None = None) -> tuple[Path, int, int, str | None]:
         problem = f"{existing} is not writable"
     if base.exists():
         try:
-            with sqlite3.connect(f"file:{base}?mode=ro", uri=True, timeout=TIMEOUT_S) as db:
+            with closing(
+                sqlite3.connect(base.absolute().as_uri() + "?mode=ro", uri=True, timeout=TIMEOUT_S)
+            ) as db:
                 entries = db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-            db.close()
         except sqlite3.Error as error:
             problem = problem or str(error)
             entries = 0

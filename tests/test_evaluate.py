@@ -233,7 +233,9 @@ def test_an_edit_of_a_duplicate_draft_file_pairs_with_the_copy_kept(tmp_path: Pa
     import styleprofile as sp
 
     author, drafts = _corpus(tmp_path)
-    (drafts / "draft5.md").write_text((drafts / "draft1.md").read_text(encoding="utf-8"))
+    (drafts / "draft5.md").write_text(
+        (drafts / "draft1.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     edited = tmp_path / "edited"
     _edit(drafts, edited, _strip_dashes)
     (edited / "draft1.md").unlink()
