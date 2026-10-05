@@ -29,6 +29,7 @@ import sys
 import time
 import zlib
 from collections.abc import Callable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from functools import cache
 from importlib import import_module
@@ -199,6 +200,7 @@ class MeasurementCache:
         import queue
 
         self.path = path if path is not None else cache_dir() / FILENAME
+        self._owned_directory = path is None or self.path.parent == cache_dir()
         self.max_bytes = max_bytes
         self.clock = clock
         self.problem: str | None = None
@@ -250,7 +252,15 @@ class MeasurementCache:
     def _open(self) -> sqlite3.Connection:
         import sqlite3
 
+        if sys.platform == "win32":
+            from styleprofile.cache_acl import check_cache_paths
+
+            check_cache_paths(self.path, owned_directory=self._owned_directory)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if sys.platform == "win32":
+            from styleprofile.cache_acl import protect_cache
+
+            protect_cache(self.path, owned_directory=self._owned_directory)
         # The file holds pattern counts of the user's texts: private, as they are.
         if not self.path.exists():
             os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT, 0o600))
@@ -262,13 +272,16 @@ class MeasurementCache:
             # time (4 KB at a time took several times longer on a busy macOS disk), and
             # pages freed by pruning go back to the file system.
             connection.execute(f"PRAGMA page_size={PAGE_SIZE}")
+            # Set the connection's journal policy before auto_vacuum, which can write
+            # even when its value is unchanged. A new connection defaults to DELETE:
+            # on Windows it cannot delete a journal another PERSIST connection holds.
+            connection.execute("PRAGMA journal_mode=PERSIST")
             connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
             new = connection.execute("PRAGMA user_version").fetchall()[0][0] != FORMAT
             # A rollback journal kept between writes rather than deleted: a run that only
             # reads opens one file and writes none, and writes don't create a file each time.
             # On a busy disk, creating and growing files is what is slow: a write-ahead log
             # made reading a warm cache 0.1-0.3 s slower.
-            connection.execute("PRAGMA journal_mode=PERSIST")
             connection.execute(f"PRAGMA journal_size_limit={JOURNAL_LIMIT}")
             # A cache need not survive a power cut, so writes are never synced to disk; a
             # file damaged that way is started afresh (``_open_or_reset``).
@@ -416,8 +429,10 @@ class MeasurementCache:
 
         self.flush()
         if self._writer is not None:
-            # A writer already given up on is not waited for (it is a daemon thread).
-            if self.problem is None and self._hand(None):
+            # A failed writer still drains its queue. Give it the stop signal too,
+            # so it closes its connection instead of waiting forever for another batch.
+            # Both handing off and waiting remain bounded for an unresponsive writer.
+            if self._hand(None):
                 self._wait_for_writer(self._writer)
             self._writer = None
         if self._connection is not None:
@@ -526,9 +541,10 @@ def describe(path: Path | None = None) -> tuple[Path, int, int, str | None]:
         problem = f"{existing} is not writable"
     if base.exists():
         try:
-            with sqlite3.connect(f"file:{base}?mode=ro", uri=True, timeout=TIMEOUT_S) as db:
+            with closing(
+                sqlite3.connect(base.absolute().as_uri() + "?mode=ro", uri=True, timeout=TIMEOUT_S)
+            ) as db:
                 entries = db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-            db.close()
         except sqlite3.Error as error:
             problem = problem or str(error)
             entries = 0

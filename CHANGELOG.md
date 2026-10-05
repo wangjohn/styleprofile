@@ -184,6 +184,10 @@ generic contrast remain deferred.
 
 ### Fixed
 
+- **Windows paths and cache privacy.** Directory IDs and ordering are portable, home
+  directory names stay out of saved reports, and cache files use native private ACLs.
+  A cache that cannot be protected is left out while measurements continue.
+
 - **References need at least two chunks.** Build refuses smaller references and suggests
   adding documents or reducing the window size. Incomparable library results are not
   judged, and any CLI fail flag rejects them with exit status 3. Too-short texts still
