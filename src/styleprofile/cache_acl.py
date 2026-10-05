@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -60,6 +59,7 @@ class _WindowsACL:
                 wintypes.DWORD,
             ),
             "SetFileSecurityW": ([wintypes.LPCWSTR, wintypes.DWORD, pointer], wintypes.BOOL),
+            "GetAce": ([pointer, wintypes.DWORD, ctypes.POINTER(pointer)], wintypes.BOOL),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.api, name)
@@ -93,13 +93,24 @@ class _WindowsACL:
         finally:
             self.kernel.LocalFree(text)
 
-    def read(self, path: Path) -> tuple[str, str]:
-        owner, descriptor = ctypes.c_void_p(), ctypes.c_void_p()
+    def _read(self, path: Path) -> tuple[Any, Any, Any]:
+        owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
         status = self.api.GetNamedSecurityInfoW(
-            str(path), 1, 5, ctypes.byref(owner), None, None, None, ctypes.byref(descriptor)
+            str(path),
+            1,
+            5,
+            ctypes.byref(owner),
+            None,
+            ctypes.byref(dacl),
+            None,
+            ctypes.byref(descriptor),
         )
         if status:
             raise _native.WinError(status)
+        return owner, dacl, descriptor
+
+    def read(self, path: Path) -> tuple[str, str]:
+        owner, _, descriptor = self._read(path)
         text = ctypes.c_void_p()
         try:
             self._check(
@@ -131,27 +142,47 @@ class _WindowsACL:
             self._check(self.api.SetFileSecurityW(str(path), 0x80000004, descriptor))
         finally:
             self.kernel.LocalFree(descriptor)
-        self.verify(path)
+        self.verify(path, directory=directory)
 
-    def verify(self, path: Path) -> None:
-        owner, dacl = self.read(path)
+    def _entries(self, path: Path) -> tuple[str, list[tuple[int, int, int, str]]]:
+        """Read numeric SIDs and access masks, without SDDL's account aliases."""
+        owner, dacl, descriptor = self._read(path)
+        try:
+            if not dacl.value:  # A null DACL grants everyone full access.
+                raise PermissionError(f"the cache has no access control list: {path}")
+            # ACL's AceCount is a WORD at offset 4 (the fixed ACL header is 8 bytes).
+            count = ctypes.c_uint16.from_address(dacl.value + 4).value
+            entries = []
+            for index in range(count):
+                ace = ctypes.c_void_p()
+                self._check(self.api.GetAce(dacl, index, ctypes.byref(ace)))
+                address = ace.value
+                if address is None:
+                    raise PermissionError(f"the cache ACL cannot be verified: {path}")
+                kind = ctypes.c_ubyte.from_address(address).value
+                flags = ctypes.c_ubyte.from_address(address + 1).value
+                if kind != 0:  # Only ordinary ACCESS_ALLOWED_ACE has this layout.
+                    raise PermissionError(f"the cache ACL cannot be verified: {path}")
+                mask = ctypes.c_uint32.from_address(address + 4).value
+                entries.append((kind, flags, mask, self._sid(address + 8)))
+            return self._sid(owner), entries
+        finally:
+            self.kernel.LocalFree(descriptor)
+
+    def verify(self, path: Path, *, directory: bool = False) -> None:
+        owner, entries = self._entries(path)
         if owner not in {self.user, "S-1-5-18", "S-1-5-32-544"}:
             raise PermissionError(f"the cache path belongs to another user: {path}")
-        allowed = {self.user, "SY", "BA", "S-1-5-18", "S-1-5-32-544"}
-        entries = re.findall(r"\(([^()]*)\)", dacl)
+        allowed = {self.user, "S-1-5-18", "S-1-5-32-544"}
         user_access = False
-        for entry in entries:
-            fields = entry.split(";")
-            if len(fields) != 6:
-                raise PermissionError(f"the cache ACL cannot be verified: {path}")
-            kind, flags, rights, _, _, sid = fields
-            if kind == "D":
-                continue
-            if kind != "A" or sid not in allowed:
+        user_inheritance = False
+        for kind, flags, rights, sid in entries:
+            if kind != 0 or sid not in allowed:
                 raise PermissionError(f"the cache ACL grants access beyond this user: {path}")
-            if sid == self.user and "IO" not in flags and rights in {"FA", "GA", "0x1f01ff"}:
+            if sid == self.user and not flags & 8 and rights in {0x1F01FF, 0x10000000}:
                 user_access = True
-        if not entries or not user_access:
+                user_inheritance |= flags & 3 == 3
+        if not entries or not user_access or (directory and not user_inheritance):
             raise PermissionError(f"the cache ACL does not grant this user full access: {path}")
 
 
@@ -169,13 +200,16 @@ def check_cache_paths(path: Path, *, owned_directory: bool) -> list[Path]:
         for suffix in ("", "-journal", "-wal", "-shm")
         if os.path.lexists(f"{path}{suffix}")
     ]
-    for item in [*directories, *files]:
+    # Check the entire path chain: lstat of a leaf does not expose a linked ancestor.
+    for item in dict.fromkeys([*directories, *path.parent.parents, *files]):
         try:
             info = item.lstat()
         except FileNotFoundError:
             continue
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
             raise PermissionError(f"the cache path is a link or reparse point: {item}")
+        if item in files and info.st_nlink != 1:
+            raise PermissionError(f"the cache path has multiple hard links: {item}")
     return files
 
 
@@ -188,6 +222,6 @@ def protect_cache(path: Path, *, owned_directory: bool) -> None:
             acl.protect(path.parent.parent, directory=True)
         acl.protect(path.parent, directory=True)
     else:
-        acl.verify(path.parent)
+        acl.verify(path.parent, directory=True)
     for item in files:
         acl.protect(item, directory=False)

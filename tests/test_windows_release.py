@@ -41,10 +41,35 @@ def test_acl_validation_rejects_other_principals(sid: str, monkeypatch: pytest.M
     acl = object.__new__(_WindowsACL)
     acl.user = "S-1-5-21-1-2-3-1000"
     monkeypatch.setattr(
-        acl, "read", lambda path: (acl.user, f"D:(A;;FA;;;{acl.user})(A;;FR;;;{sid})")
+        acl,
+        "_entries",
+        lambda path: (acl.user, [(0, 0, 0x1F01FF, acl.user), (0, 0, 0x120089, sid)]),
     )
     with pytest.raises(PermissionError, match="beyond this user"):
         acl.verify(Path("cache"))
+
+
+def test_acl_validation_rejects_denied_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    acl = object.__new__(_WindowsACL)
+    acl.user = "S-1-5-21-1-2-3-1000"
+    monkeypatch.setattr(
+        acl,
+        "_entries",
+        lambda path: (acl.user, [(1, 0, 0x1F01FF, acl.user), (0, 0, 0x1F01FF, acl.user)]),
+    )
+    with pytest.raises(PermissionError):
+        acl.verify(Path("cache"))
+
+
+def test_explicit_cache_parent_requires_private_inheritance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acl = object.__new__(_WindowsACL)
+    acl.user = "S-1-5-21-1-2-3-1000"
+    monkeypatch.setattr(acl, "_entries", lambda path: (acl.user, [(0, 0, 0x1F01FF, acl.user)]))
+    acl.verify(Path("cache"))
+    with pytest.raises(PermissionError):
+        acl.verify(Path("cache"), directory=True)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="native Windows ACL integration")
@@ -74,7 +99,7 @@ def test_windows_cache_override_is_private_without_changing_parent(
     assert dumps_report(cold.report) == dumps_report(warm.report)
     assert not any(
         note.code is sp.NoteCode.CACHE_UNAVAILABLE for note in (*cold.notes, *warm.notes)
-    )
+    ), (cold.notes, warm.notes)
     path = caching.cache_dir() / caching.FILENAME
     acl.verify(path.parent)
     if environment == "LOCALAPPDATA":
@@ -93,6 +118,7 @@ def test_cache_description_handles_uri_characters_and_relative_paths(
     path = Path("cache #1?.sqlite3") if sys.platform != "win32" else Path("cache #1.sqlite3")
     with caching.MeasurementCache(path) as store:
         store.put(b"one", 3, {"value": 1})
+    assert store.problem is None, store.problem
     assert caching.describe(path)[2:] == (1, None)
     assert caching.clear(path)
 
@@ -193,3 +219,75 @@ def test_home_identity_does_not_depend_on_current_drive(home: str) -> None:
 
     assert _is_home(PureWindowsPath(home))
     assert not _is_home(PureWindowsPath(home) / "posts")
+
+
+@pytest.mark.parametrize("suffix", ["", "-journal", "-wal", "-shm"])
+def test_cache_hard_links_are_refused_before_acl_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    import os
+
+    from styleprofile import cache_acl
+
+    original = tmp_path / "unrelated.txt"
+    original.write_text("unrelated data", encoding="utf-8")
+    folder = tmp_path / "styleprofile"
+    folder.mkdir()
+    path = folder / caching.FILENAME
+    os.link(original, Path(f"{path}{suffix}"))
+    monkeypatch.setattr(cache_acl, "_WindowsACL", lambda: pytest.fail("must refuse before ACL"))
+    with pytest.raises(PermissionError, match="multiple hard links"):
+        cache_acl.protect_cache(path, owned_directory=True)
+    assert original.read_text(encoding="utf-8") == "unrelated data"
+
+
+def test_cache_linked_ancestor_is_refused_before_creating_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "unrelated"
+    target.mkdir()
+    (tmp_path / "override").symlink_to(target, target_is_directory=True)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "override"))
+    monkeypatch.setattr(caching.sys, "platform", "win32")
+    with caching.MeasurementCache() as store:
+        assert store.fetch(b"one") is None
+    assert store.problem and "link or reparse point" in store.problem
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="native Windows ACL integration")
+def test_native_acl_preserves_unrelated_children_and_reads_numeric_user(tmp_path: Path) -> None:
+    acl = _WindowsACL()
+    folder = tmp_path / "styleprofile"
+    folder.mkdir()
+    child = folder / "unrelated.txt"
+    child.write_text("unrelated data", encoding="utf-8")
+    before = acl.read(child)
+    acl.protect(folder, directory=True)
+    assert acl.read(child) == before
+    owner, entries = acl._entries(folder)
+    assert owner == acl.user
+    assert {entry[3] for entry in entries} == {acl.user, "S-1-5-18", "S-1-5-32-544"}
+    acl.verify(folder, directory=True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="native Windows ACL integration")
+def test_native_denied_acl_is_not_reported_as_usable(tmp_path: Path) -> None:
+    acl = _WindowsACL()
+    path = tmp_path / "denied.txt"
+    path.touch()
+    descriptor = ctypes.c_void_p()
+    acl._check(
+        acl.api.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            f"D:P(D;;FW;;;{acl.user})(A;;FA;;;{acl.user})", 1, ctypes.byref(descriptor), None
+        )
+    )
+    try:
+        acl._check(acl.api.SetFileSecurityW(str(path), 0x80000004, descriptor))
+    finally:
+        acl.kernel.LocalFree(descriptor)
+    try:
+        with pytest.raises(PermissionError):
+            acl.verify(path)
+    finally:
+        acl.protect(path, directory=False)
