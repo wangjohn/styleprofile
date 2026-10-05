@@ -272,13 +272,16 @@ class MeasurementCache:
             # time (4 KB at a time took several times longer on a busy macOS disk), and
             # pages freed by pruning go back to the file system.
             connection.execute(f"PRAGMA page_size={PAGE_SIZE}")
+            # Set the connection's journal policy before auto_vacuum, which can write
+            # even when its value is unchanged. A new connection defaults to DELETE:
+            # on Windows it cannot delete a journal another PERSIST connection holds.
+            connection.execute("PRAGMA journal_mode=PERSIST")
             connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
             new = connection.execute("PRAGMA user_version").fetchall()[0][0] != FORMAT
             # A rollback journal kept between writes rather than deleted: a run that only
             # reads opens one file and writes none, and writes don't create a file each time.
             # On a busy disk, creating and growing files is what is slow: a write-ahead log
             # made reading a warm cache 0.1-0.3 s slower.
-            connection.execute("PRAGMA journal_mode=PERSIST")
             connection.execute(f"PRAGMA journal_size_limit={JOURNAL_LIMIT}")
             # A cache need not survive a power cut, so writes are never synced to disk; a
             # file damaged that way is started afresh (``_open_or_reset``).

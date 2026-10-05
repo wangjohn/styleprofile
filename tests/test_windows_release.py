@@ -158,6 +158,27 @@ def test_cache_description_closes_a_connection_when_a_query_fails(
     assert closed == [True]
 
 
+def test_cache_reader_and_writer_keep_the_persistent_journal(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"
+    with caching.MeasurementCache(path) as store:
+        assert store.fetch(b"one") is None  # Keep the reader connection open.
+        store.put(b"one", 3, {"value": 1})
+    assert store.problem is None, store.problem
+    with caching.MeasurementCache(path) as warm:
+        assert warm.fetch(b"one") is not None
+        warm.put(b"two", 4, {"value": 2})
+    assert warm.problem is None, warm.problem
+    with caching.MeasurementCache(path) as again:
+        assert again.fetch(b"one") is not None
+        assert again.fetch(b"two") is not None
+        db = again._connection
+        assert db is not None
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "persist"
+        assert db.execute("PRAGMA page_size").fetchone()[0] == caching.PAGE_SIZE
+        assert db.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+    assert again.problem is None, again.problem
+
+
 @pytest.mark.parametrize("linked", ["directory", "database", "journal"])
 def test_cache_acl_refuses_links_before_touching_unrelated_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, linked: str
