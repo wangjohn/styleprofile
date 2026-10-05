@@ -5,6 +5,45 @@ implement in parallel. Each WP is one agent and one pull request. The plan is th
 truth: every agent reads **Rules for every work package** and then its own WP, and implements
 only that.
 
+## Release status — 2026-10-04
+
+Twelve of the fourteen work packages are complete, independently reviewed and merged.
+WP-1 and WP-10 were explicitly deferred; their draft PRs and failed acceptance evidence
+remain available. No metric z-score cap or bundled generic contrast set is in 0.2.0.
+LLM-likeness still requires contrast drafts supplied by the caller; see the
+[own-brief recipe](../docs/contrast.md).
+
+| WP | Delivered scope | PR | Status |
+|---|---|---|---|
+| 1 | Metric z-score cap | [#30](https://github.com/wangjohn/styleprofile/pull/30) | Deferred; not shipped |
+| 2 | Unjudgeable inputs fail requested CI gates | [#29](https://github.com/wangjohn/styleprofile/pull/29) | Complete |
+| 3 | Encoding, shell hints and platform paths | [#28](https://github.com/wangjohn/styleprofile/pull/28) | Complete |
+| 4 | CI and test hygiene | [#31](https://github.com/wangjohn/styleprofile/pull/31) | Complete |
+| 5 | Input robustness and flattened paragraphs | [#32](https://github.com/wangjohn/styleprofile/pull/32) | Complete |
+| 6 | Installed demo and packaged original samples | [#34](https://github.com/wangjohn/styleprofile/pull/34) | Complete |
+| 7 | Default output paths and one-shot scoring | [#36](https://github.com/wangjohn/styleprofile/pull/36) | Complete |
+| 8 | String-first library and cache opt-in | [#35](https://github.com/wangjohn/styleprofile/pull/35) | Complete |
+| 9 | Build performance and opt-in paragraph calibration | [#38](https://github.com/wangjohn/styleprofile/pull/38) | Complete |
+| 10 | Bundled generic contrast drafts | [#37](https://github.com/wangjohn/styleprofile/pull/37) | Deferred; empirical acceptance failed |
+| 11 | Short default notes, verbose explanations | [#40](https://github.com/wangjohn/styleprofile/pull/40) | Complete |
+| 12 | Additive report compatibility | [#39](https://github.com/wangjohn/styleprofile/pull/39) | Complete |
+| 13 | Domain modules behind the public API | [#41](https://github.com/wangjohn/styleprofile/pull/41) | Complete |
+| 14 | First-screen README and reference guides | [#42](https://github.com/wangjohn/styleprofile/pull/42) | Complete |
+
+The completed onboarding source at `cbae1295c757e22c20369aaf2b192f8d3fa1f225`
+passed all ten required CI jobs in [run 37188793902](https://github.com/wangjohn/styleprofile/actions/runs/37188793902).
+Its advisory full Windows suite still had fourteen known failures; that suite is not
+represented as passing. A separate release-readiness audit owns those failures. Paragraph
+checks remain experimental, with the existing false-drift and synthetic-corpus limitations.
+Performance completion preserves the measured timing and memory caveats, not a guarantee
+for every machine or corpus.
+
+The specifications below preserve the original plan and pre-refactor source locations;
+completed and deferred WPs are not instructions to rerun or to advertise unshipped work.
+The first public 0.2.0 release follows the completed work through wave 4. Index publication
+and installation are verified separately by the maintainer; a prepared release date is not
+proof that an upload succeeded.
+
 ## Goals
 
 A new user should get from `pip install` to a verdict they trust, quickly, on whatever texts
@@ -14,14 +53,14 @@ they have: one essay, a folder of posts, a book, or a pile of comments. Success 
 |---|---|---|
 | 1 | A first verdict within 60 seconds of installing, with no files of your own | `pip install styleprofile && styleprofile demo` |
 | 2 | A first verdict on your own texts in one command, without managing a profile file | `styleprofile score draft.md --against posts/` |
-| 3 | A useful LLM-likeness score without having to write contrast drafts first | `build --generic-contrast` |
+| 3 | Deferred: LLM-likeness without caller-provided contrast (WP-10) | Not shipped; current `--contrast` uses your own drafts |
 | 4 | Formatting alone never flips a verdict | the writer's own essays, blank lines removed, read "close" |
 | 5 | A CI gate never passes when nothing could be judged | `--fail-*` exits 3 on a document that can't be compared |
 | 6 | Works on Windows and macOS, including piped output | CI jobs on both |
 | 7 | Large corpora build within the repo's own targets | 1M words without spaCy in under 8 s, 200k words with spaCy in under 12 s (`make bench`) |
 | 8 | The README gets a newcomer running in one screen | the quickstart is at most 40 lines; reference material moves to `docs/` |
 
-## How to run it
+## Original execution sequence
 
 The WPs run in four waves. Start a wave once the previous wave's PRs are merged. WPs in the
 same wave touch different code, so they merge with few conflicts; the conflicts that remain are
@@ -31,9 +70,9 @@ in `CHANGELOG.md` and `tests/snapshots/`, and the rules below say how to handle 
 |---|---|---|
 | 1 | WP-1 z-cap, WP-2 unjudgeable, WP-3 cross-platform, WP-4 CI hygiene, WP-5 input robustness | Correctness first: the fixes later waves' output depends on |
 | 2 | WP-6 demo, WP-7 one-command paths, WP-8 library, WP-9 speed, WP-10 generic contrast | The onboarding features, on a correct base |
-| — | **Release 0.2.0** (maintainer, by hand; see below) | The first public release gets the onboarding features |
 | 3 | WP-11 concise output, WP-12 profile compatibility | Output wording settles after the features that print things |
 | 4 | WP-13 refactor, WP-14 README and docs | The refactor last, so it doesn't conflict with everything; the docs last, so they describe what shipped |
+| — | **Release 0.2.0** (maintainer; see below) | Publish the twelve completed WPs, with WP-1 and WP-10 deferred |
 
 Size: S is under a day of agent work, M one to two, L more.
 
@@ -52,10 +91,13 @@ You can also ask the Claude session that wrote this plan to launch a wave for yo
 
 ### Release 0.2.0 (maintainer)
 
-PyPI returns 404 for `styleprofile`, so the README's `pip install` fails today. After wave 2
-merges, follow [docs/releasing.md](../docs/releasing.md): a TestPyPI dry run, then tag
-`v0.2.0`. If you're worried about someone taking the name first, release after wave 1
-instead; the onboarding features then ship as 0.3.0.
+The package remains version 0.2.0 for its first public release. PyPI had no project on
+2026-10-04; the README therefore retains a verified GitHub installation fallback. Follow
+[docs/releasing.md](../docs/releasing.md) after release preparation and the Windows audit
+are reviewed, merged and validated: verify a TestPyPI rehearsal, then tag the exact release
+commit `v0.2.0` and verify the PyPI artifacts and a fresh index installation. Do not bump to
+0.3.0 before 0.2.0 is published. Switch the README to verified index instructions and start
+the next development version in a follow-up after publication.
 
 ## Rules for every work package
 
@@ -65,9 +107,8 @@ instead; the onboarding features then ship as 0.3.0.
    and why in the PR body.
 2. **Reproduce first.** Where the WP gives a "Reproduce" block, run it on `main` before you
    change anything, and put the before and after output in the PR body.
-3. **Setup.** Run `uv sync --extra syntax`; `make check` runs pytest, ruff and pyright. Tests
-   at `tests/test_cache.py:363` and `:438` fail when you run as root (a container); ignore
-   those two until WP-4 lands.
+3. **Setup.** Run `uv sync --extra syntax`; `make check` runs pytest, ruff and pyright. Permission tests detect and skip a root process where the
+   permission contract cannot be exercised; do not ignore new failures.
 4. **Validate before every push:**
    - `make check` passes;
    - `make demo` runs;
@@ -75,17 +116,18 @@ instead; the onboarding features then ship as 0.3.0.
      wheel ships;
    - `make bench-quick BENCH="--against origin/main --repeat 5"` when you touched
      measuring, calibration or scoring. If your change is meant to cost more, declare it
-     in `bench/accepted.toml` as the README's "The benchmark gate in CI" describes.
+     in `bench/accepted.toml` as CONTRIBUTING.md's "The benchmark gate in CI" describes.
 5. **Snapshots.** When the CLI's output changes, run `make snapshots` and review the diff in
    `tests/snapshots/`. When you merge `main` and snapshot files conflict, never resolve them
    by hand: take either side, then run `make snapshots` again.
-6. **Report version.** `VERSION` in `src/styleprofile/profile.py` is the report version,
-   and it is 7 for the unreleased 0.2.0. If your change alters what a profile stores, or how
-   the ranges it stores are computed, compare it with the latest release (`git tag`; with no
-   tag, the release is 0.2.0 at version 7):
-   - if `main`'s `VERSION` still equals that release's, bump it by one and update the
-     CHANGELOG's "Rebuild your profiles" note;
-   - otherwise another WP has already bumped it for this release, so leave it.
+6. **Report version.** `VERSION` and `MINOR_VERSION` in `src/styleprofile/reports.py`
+   are currently 8 and 1 for references and scores; evaluation reports use 2 and 1.
+   Saved integer majors without `minor_version` mean minor zero. Matching majors load
+   across additive minor changes; different majors require rebuilding. If measurement,
+   calibration or an incompatible layout changes, compare with the latest public release
+   and bump the major once for that development release, updating the rebuild note.
+   Additive compatible fields use a minor bump and documented defaults. Do not bump report
+   versions for release bookkeeping, docs or movement of unchanged code.
 7. **CHANGELOG.** Add your entry to the topmost section that has no release date: under
    Added, Changed, Fixed or Breaking changes. If the top section is released, start
    `## [Unreleased]` above it. Match the existing entries' style: a bold lead-in, then plain
@@ -111,6 +153,9 @@ instead; the onboarding features then ship as 0.3.0.
 ## Wave 1: correctness
 
 ### WP-1: Cap each metric's z-score in Delta and LLM-likeness (S)
+
+**Deferred; not shipped.** PR #30 failed the statistical acceptance controls. The original
+specification below is retained for future research, without a cap in the public release.
 
 **Why.** One metric that is far outside the writer's range decides the whole verdict. When
 the writer's own sample essays have their blank lines removed, they read "very different"
@@ -424,6 +469,11 @@ and `make dist-check` passes.
 
 ### WP-10: LLM-likeness without writing your own contrast drafts (L)
 
+**Deferred; not shipped.** PR #37's frozen original corpus failed held-out acceptance.
+No generic flag or corpus ships in 0.2.0. The commands below are the historical proposal,
+not available commands. Keep the bars and failed evidence; use caller-provided contrast
+drafts and the own-brief recipe instead.
+
 **Why.** LLM-likeness, the headline feature, needs a folder of LLM drafts, and a new user
 has none. A small bundled generic set, clearly labelled as weaker than drafts made from the
 writer's own briefs, gets people to a first LLM-likeness score. A recipe gets them to the
@@ -561,7 +611,7 @@ benchmark gate) sits in the user README.
      - a folder of essays or posts;
      - tweets, comments or emails (JSONL, `--group-field`, `--pool`);
      - one-shot checks with `--against`;
-     - LLM-likeness with `--generic-contrast`, then your own contrast drafts.
+     - LLM-likeness with your own `--contrast` drafts (WP-10 is deferred).
   5. **How much text you need**: one table, merging `README.md:338-381` and the drift
      guidance.
 

@@ -4,14 +4,18 @@ All notable changes to styleprofile. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version numbers follow
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may break things.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-04
 
-The first release on PyPI: `pip install styleprofile`, or `pip install "styleprofile[syntax]"`
-then `styleprofile setup` for the parser-based metrics.
+Prepared for the first public release. After PyPI publication, install with
+`pip install styleprofile`, or `pip install "styleprofile[syntax]"` then
+`styleprofile setup` for the parser-based metrics. Until then, the README has a GitHub
+installation fallback. Twelve onboarding work packages ship; the z-score cap and bundled
+generic contrast remain deferred.
 
 > [!IMPORTANT]
-> **Rebuild your profiles.** Reports now carry report version 8, and styleprofile refuses
-> any other major with a message saying to rebuild. Existing version-8 reports remain readable. Run `styleprofile build` again on the
+> **Rebuild your profiles.** References and scores now carry report version 8.1; evaluations use 2.1.
+> Different majors require rebuilding. Existing integer version-8 references and scores
+> remain readable as 8.0. Run `styleprofile build` again on the
 > writer's texts, and `styleprofile score` again for saved score reports. There is no
 > migration: several metrics, the calibration and the report layout all changed.
 
