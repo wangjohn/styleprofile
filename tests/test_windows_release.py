@@ -16,6 +16,16 @@ from styleprofile.reports import dumps_report
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_portable_walk_preserves_posix_component_order(tmp_path: Path) -> None:
+    from styleprofile.corpus.reading import load_chunks
+
+    (tmp_path / "a").mkdir()
+    for name in ("a/inside.md", "a.md", "Z.md", "b.md"):
+        (tmp_path / name).write_text("A short document to read.", encoding="utf-8")
+    chunks = load_chunks([str(tmp_path)])
+    assert [chunk.id for chunk in chunks] == ["Z.md", "a/inside.md", "a.md", "b.md"]
+
+
 def test_cache_protection_failure_leaves_measurements_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

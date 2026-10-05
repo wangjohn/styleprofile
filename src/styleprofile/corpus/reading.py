@@ -515,7 +515,7 @@ def _walk(path: Path) -> tuple[list[Path], list[Path], list[str]]:
     readable: list[Path] = []
     skipped: list[Path] = []
     generated: list[str] = []
-    for item in sorted(path.rglob("*"), key=lambda item: item.as_posix()):
+    for item in sorted(path.rglob("*"), key=lambda item: item.parts):
         parts = item.relative_to(path).parts
         if not item.is_file() or any(
             part.startswith(".") or part in SKIPPED_DIRS for part in parts[:-1]
