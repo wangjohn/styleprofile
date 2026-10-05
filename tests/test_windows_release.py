@@ -91,11 +91,20 @@ def test_windows_cache_override_is_private_without_changing_parent(
     finally:
         acl.kernel.LocalFree(descriptor)
     before = acl.read(tmp_path)
+    failures: list[str] = []
+    fail = caching.MeasurementCache._fail
+
+    def capture_failure(self: caching.MeasurementCache, error: BaseException | str) -> None:
+        failures.append(f"{error!r}: {getattr(error, 'sqlite_errorname', '')}")
+        fail(self, error)
+
+    monkeypatch.setattr(caching.MeasurementCache, "_fail", capture_failure)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.setenv(environment, str(tmp_path))
     settings = sp.Settings(syntax=False)
     cold = sp.build(ROOT / "examples/writer", settings, cache=True)
     warm = sp.build(ROOT / "examples/writer", settings, cache=True)
+    assert failures == [], "\n".join(failures)
     assert dumps_report(cold.report) == dumps_report(warm.report)
     assert (
         "\n".join(
