@@ -54,9 +54,6 @@ jobs:
     name: test (Python 3.11, ${{ matrix.os }}, syntax=${{ matrix.syntax }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    # Pre-existing Windows full-suite failures are listed in this PR; WP-3 and WP-5 regressions
-    # remain required in windows-platforms below.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
