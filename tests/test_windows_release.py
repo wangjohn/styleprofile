@@ -97,9 +97,14 @@ def test_windows_cache_override_is_private_without_changing_parent(
     cold = sp.build(ROOT / "examples/writer", settings, cache=True)
     warm = sp.build(ROOT / "examples/writer", settings, cache=True)
     assert dumps_report(cold.report) == dumps_report(warm.report)
-    assert not any(
-        note.code is sp.NoteCode.CACHE_UNAVAILABLE for note in (*cold.notes, *warm.notes)
-    ), (cold.notes, warm.notes)
+    assert (
+        "\n".join(
+            note.message
+            for note in (*cold.notes, *warm.notes)
+            if note.code is sp.NoteCode.CACHE_UNAVAILABLE
+        )
+        == ""
+    )
     path = caching.cache_dir() / caching.FILENAME
     acl.verify(path.parent)
     if environment == "LOCALAPPDATA":
@@ -262,11 +267,12 @@ def test_native_acl_preserves_unrelated_children_and_reads_numeric_user(tmp_path
     folder.mkdir()
     child = folder / "unrelated.txt"
     child.write_text("unrelated data", encoding="utf-8")
+    original_owner = acl.read(folder)[0]
     before = acl.read(child)
     acl.protect(folder, directory=True)
     assert acl.read(child) == before
     owner, entries = acl._entries(folder)
-    assert owner == acl.user
+    assert owner == original_owner  # Elevated Windows creation can choose Administrators.
     assert {entry[3] for entry in entries} == {acl.user, "S-1-5-18", "S-1-5-32-544"}
     acl.verify(folder, directory=True)
 
