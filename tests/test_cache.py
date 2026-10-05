@@ -379,13 +379,20 @@ def test_a_damaged_cache_in_a_read_only_folder_is_left_out(
     settings = sp.Settings(syntax=False)
     expected = dumps_report(sp.build(WRITER, settings, cache=False).report)
     cache_home.parent.mkdir(parents=True)
-    cache_home.write_bytes(b"\x00garbage" * 1000)  # not a database, and cannot be replaced
+    damaged = b"\x00garbage" * 1000
+    cache_home.write_bytes(damaged)  # not a database, and cannot be replaced
     cache_home.parent.chmod(0o500)
+    if sys.platform == "win32":
+        # Windows directory chmod does not deny writes. A read-only file cannot be
+        # deleted to reset this damaged database, regardless of its parent's mode.
+        cache_home.chmod(0o400)
     try:
         profile = sp.build(WRITER, settings, cache=True)
     finally:
         cache_home.parent.chmod(0o700)
+        cache_home.chmod(0o600)
     assert dumps_report(profile.report) == expected
+    assert cache_home.read_bytes() == damaged
     [note] = _notes(profile)
     assert str(cache_home) in note.message
 
