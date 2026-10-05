@@ -76,7 +76,7 @@ The separate Windows release-readiness audit must have its reviewed disposition 
 selecting the release commit.
 
 1. On reviewed, validated `main`, keep `version` in `pyproject.toml` at 0.2.0 and
-   `CHANGELOG.md` headed `## [0.2.0] - 2026-10-04`. Required CI and the current package
+   `CHANGELOG.md` headed `## [0.2.0] - 2026-10-05`. Required CI and the current package
    smoke checks must pass for the exact selected commit. Complete the TestPyPI rehearsal
    above and record its index-install evidence. A dated changelog is preparation, not
    evidence that the public release already exists.

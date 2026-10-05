@@ -5,7 +5,7 @@ implement in parallel. Each WP is one agent and one pull request. The plan is th
 truth: every agent reads **Rules for every work package** and then its own WP, and implements
 only that.
 
-## Release status — 2026-10-04
+## Release status — 2026-10-05
 
 Twelve of the fourteen work packages are complete, independently reviewed and merged.
 WP-1 and WP-10 were explicitly deferred; their draft PRs and failed acceptance evidence
@@ -31,10 +31,14 @@ LLM-likeness still requires contrast drafts supplied by the caller; see the
 | 14 | First-screen README and reference guides | [#42](https://github.com/wangjohn/styleprofile/pull/42) | Complete |
 
 The completed onboarding source at `cbae1295c757e22c20369aaf2b192f8d3fa1f225`
-passed all ten required CI jobs in [run 37188793902](https://github.com/wangjohn/styleprofile/actions/runs/37188793902).
-Its advisory full Windows suite still had fourteen known failures; that suite is not
-represented as passing. A separate release-readiness audit owns those failures. Paragraph
-checks remain experimental, with the existing false-drift and synthetic-corpus limitations.
+passed all ten then-required CI jobs in [run 37188793902](https://github.com/wangjohn/styleprofile/actions/runs/37188793902).
+Its advisory full Windows suite had fourteen known failures. The subsequent independently
+reviewed [release-readiness audit (#44)](https://github.com/wangjohn/styleprofile/pull/44)
+repaired platform paths, cache privacy and concurrency, and portable test assumptions.
+The resulting main commit `fbafabba5a9d0361469eb3c42698b1ac22fa67d9` passed all eleven
+required jobs, including the full Windows suite and native regressions, in
+[run 37275647444](https://github.com/wangjohn/styleprofile/actions/runs/37275647444).
+Paragraph checks remain experimental, with the existing false-drift and synthetic-corpus limitations.
 Performance completion preserves the measured timing and memory caveats, not a guarantee
 for every machine or corpus.
 
