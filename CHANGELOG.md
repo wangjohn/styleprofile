@@ -4,7 +4,7 @@ All notable changes to styleprofile. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version numbers follow
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may break things.
 
-## [0.2.0] - 2026-10-05
+## [0.2.0] - 2026-10-08
 
 Prepared for the first public release. After PyPI publication, install with
 `pip install styleprofile`, or `pip install "styleprofile[syntax]"` then

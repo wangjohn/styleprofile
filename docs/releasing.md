@@ -10,9 +10,9 @@ started by hand (a dry run to TestPyPI), never on ordinary pushes or pull reques
 ## One-time setup
 
 For the first upload, each index needs a *pending* publisher, which creates the project
-on that upload. Both project endpoints returned 404 on 2026-10-04. Recheck before
-publishing: a pending publisher does not reserve the name. Once a project exists, inspect
-its normal trusted publisher instead of adding another pending one.
+on that upload. Both project endpoints returned 404 on 2026-10-04 and again on 2026-10-08.
+Recheck before publishing: a pending publisher does not reserve the name. Once a project
+exists, inspect its normal trusted publisher instead of adding another pending one.
 
 1. **PyPI.** Sign in at <https://pypi.org> (with two-factor authentication on), open
    *Your account > Publishing* (<https://pypi.org/manage/account/publishing/>), and add a
@@ -76,7 +76,7 @@ The separate Windows release-readiness audit must have its reviewed disposition 
 selecting the release commit.
 
 1. On reviewed, validated `main`, keep `version` in `pyproject.toml` at 0.2.0 and
-   `CHANGELOG.md` headed `## [0.2.0] - 2026-10-05`. Required CI and the current package
+   `CHANGELOG.md` headed `## [0.2.0] - 2026-10-08`. Required CI and the current package
    smoke checks must pass for the exact selected commit. Complete the TestPyPI rehearsal
    above and record its index-install evidence. A dated changelog is preparation, not
    evidence that the public release already exists.

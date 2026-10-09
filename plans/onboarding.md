@@ -5,7 +5,7 @@ implement in parallel. Each WP is one agent and one pull request. The plan is th
 truth: every agent reads **Rules for every work package** and then its own WP, and implements
 only that.
 
-## Release status — 2026-10-05
+## Release status — 2026-10-08
 
 Twelve of the fourteen work packages are complete, independently reviewed and merged.
 WP-1 and WP-10 were explicitly deferred; their draft PRs and failed acceptance evidence
@@ -96,8 +96,8 @@ You can also ask the Claude session that wrote this plan to launch a wave for yo
 ### Release 0.2.0 (maintainer)
 
 The package remains version 0.2.0 for its first public release. PyPI had no project on
-2026-10-04; the README therefore retains a verified GitHub installation fallback. Follow
-[docs/releasing.md](../docs/releasing.md) after release preparation and the Windows audit
+2026-10-04 or on the 2026-10-08 recheck; the README therefore retains a verified GitHub
+installation fallback. Follow [docs/releasing.md](../docs/releasing.md) after release preparation and the Windows audit
 are reviewed, merged and validated: verify a TestPyPI rehearsal, then tag the exact release
 commit `v0.2.0` and verify the PyPI artifacts and a fresh index installation. Do not bump to
 0.3.0 before 0.2.0 is published. Switch the README to verified index instructions and start
