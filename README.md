@@ -6,8 +6,8 @@ drafts. Scores describe this comparison; they do not prove who wrote a text.
 
 ## Install
 
-Python 3.11+; CI tests 3.11–3.14. The first PyPI release is still pending, so install the
-GitHub development version. Choose pip in an activated virtual environment, or uv:
+Python 3.11+; CI tests 3.11–3.14. While a PyPI release is unavailable, use the verified
+GitHub installation below. Choose pip in an activated virtual environment, or uv:
 
 ```bash
 python -m pip install "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile.git"

@@ -9,10 +9,10 @@ started by hand (a dry run to TestPyPI), never on ordinary pushes or pull reques
 
 ## One-time setup
 
-The project doesn't exist on PyPI yet, so each index gets a *pending* publisher, which
-creates the project on its first upload. The name `styleprofile` was free on both indexes
-on 2026-09-29; a pending publisher doesn't reserve it, so do this shortly before the first
-release.
+For the first upload, each index needs a *pending* publisher, which creates the project
+on that upload. Both project endpoints returned 404 on 2026-10-04 and again on 2026-10-08.
+Recheck before publishing: a pending publisher does not reserve the name. Once a project
+exists, inspect its normal trusted publisher instead of adding another pending one.
 
 1. **PyPI.** Sign in at <https://pypi.org> (with two-factor authentication on), open
    *Your account > Publishing* (<https://pypi.org/manage/account/publishing/>), and add a
@@ -32,28 +32,54 @@ release.
 3. **GitHub environments.** In the repository's *Settings > Environments*, create `pypi`
    and `testpypi`. For `pypi`, add yourself under *Required reviewers*, so every release
    waits for your approval before it uploads, and under *Deployment branches and tags*
-   allow only tags matching `v*`.
+   allow only tags matching `v*`. For `testpypi`, allow only the `main` branch, so rehearsal
+   artifacts come from the reviewed release source. Verify the publisher environment
+   names exactly match the workflow; the two indexes have separate registrations.
 
 ## Dry run on TestPyPI
 
 *Actions > Release > Run workflow* on `main`. The workflow runs the tests, builds the sdist
-and wheel as `<version>.dev<run number>` (so the dry run can be repeated; an index never
-accepts the same version twice), checks them, smoke-tests the wheel on Python 3.11, and
-uploads to TestPyPI. To try the result:
+and wheel as `<version>.dev<run number>`, checks those exact archives, smoke-tests the
+wheel on Python 3.11 with syntax and setup, and uploads them to TestPyPI. Each new dispatch
+has a new run number. A rerun has the same number; if an upload already happened, start a
+new dispatch instead of trying to replace that version.
+
+Record the workflow run, source commit, development version, artifact names and SHA-256
+hashes. Confirm both wheel and sdist appear on TestPyPI and match the checked workflow
+artifacts. Then use a new directory and fresh Python 3.11+ virtual environment, replacing
+`<N>` below with the actual run number. These commands require the completed upload; a
+local wheel smoke test does not prove index publication:
 
 ```bash
-python -m venv /tmp/sp && . /tmp/sp/bin/activate
+python -m venv .venv
+. .venv/bin/activate
 pip install --index-url https://test.pypi.org/simple/ \
   --extra-index-url https://pypi.org/simple/ "styleprofile[syntax]==0.2.0.dev<N>"
 styleprofile setup
 styleprofile --version
+styleprofile demo
+styleprofile score styleprofile-demo/draft.md styleprofile-demo/writer.profile.json
 ```
+
+Expect the requested development package version and report version 8.1. The demo should
+say `Overall: close`, with its thin-reference warning; the explicit score should agree.
+Record the installed location/version and parser use as well as exit statuses. Do not
+proceed to a release tag until this index-install rehearsal passes. See the README's
+installation details for Windows activation.
 
 ## Cutting a release
 
-1. On `main`, make sure `version` in `pyproject.toml` is the version to release, and
-   `CHANGELOG.md` has its section. Replace "Unreleased" in the heading with today's date
-   (`## [0.2.0] - 2026-10-01`) and commit that ("Release 0.2.0").
+The first public release includes twelve completed onboarding WPs. WP-1's z-score cap
+and WP-10's generic contrast are deferred. Paragraph checks remain experimental; do not
+turn the release into a claim of authorship detection or stronger statistical guarantees.
+The separate Windows release-readiness audit must have its reviewed disposition before
+selecting the release commit.
+
+1. On reviewed, validated `main`, keep `version` in `pyproject.toml` at 0.2.0 and
+   `CHANGELOG.md` headed `## [0.2.0] - 2026-10-08`. Required CI and the current package
+   smoke checks must pass for the exact selected commit. Complete the TestPyPI rehearsal
+   above and record its index-install evidence. A dated changelog is preparation, not
+   evidence that the public release already exists.
 2. Tag that commit and push the tag:
 
    ```bash
@@ -63,16 +89,37 @@ styleprofile --version
 
 3. The workflow checks that the tag matches the version, runs the tests and the package
    checks, and waits for your approval of the `pypi` environment. Approve it, and it
-   uploads to PyPI.
-4. Optionally, create a GitHub release from the tag with the CHANGELOG section as its notes
+   uploads the exact checked artifacts to PyPI. No token is stored in the repository.
+   Wait for a successful upload, then verify version 0.2.0, both archive hashes and a
+   fresh installation from PyPI before calling the release complete.
+4. After verified publication, optionally create a GitHub release from the tag with the
+   CHANGELOG section as its notes
    (`gh release create v0.2.0 --notes-file <file>`). The CHANGELOG links each version to
    its tag, not to a GitHub release, so this step is never required.
-5. Start the next version: bump `version` in `pyproject.toml` (with `uv version --bump
+5. Only after 0.2.0 is published and its index installation verified, replace the README
+   GitHub fallback with tested PyPI instructions in a follow-up. Start the next version:
+   bump `version` in `pyproject.toml` (with `uv version --bump
    minor`, which updates `uv.lock` too) and add its section to the top of the CHANGELOG,
    headed exactly `## [0.3.0] - Unreleased`: `tests/test_packaging.py` checks the CHANGELOG
    has a `## [<version>]` heading for the version in `pyproject.toml`, so the tests fail
    until it does. Add its link at the bottom too
    (`[0.3.0]: https://github.com/wangjohn/styleprofile/tree/v0.3.0`).
+
+For the public index check, use another new directory and fresh environment:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --index-url https://pypi.org/simple/ "styleprofile[syntax]==0.2.0"
+styleprofile setup
+styleprofile --version
+styleprofile demo
+styleprofile score styleprofile-demo/draft.md styleprofile-demo/writer.profile.json
+```
+
+The expected package version is 0.2.0, with reports 8.1. Keep the TestPyPI and PyPI evidence
+separate. Until this succeeds, retain the README's GitHub fallback; do not report index
+installation as passing merely because the local wheel worked.
 
 A release can't be replaced: PyPI never accepts the same file name twice, even after a
 delete. Fix a bad release with a new version (0.2.1), and yank the bad one on PyPI.
