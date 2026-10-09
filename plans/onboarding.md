@@ -44,9 +44,9 @@ for every machine or corpus.
 
 The specifications below preserve the original plan and pre-refactor source locations;
 completed and deferred WPs are not instructions to rerun or to advertise unshipped work.
-The first public 0.2.0 release follows the completed work through wave 4. Index publication
-and installation are verified separately by the maintainer; a prepared release date is not
-proof that an upload succeeded.
+The first public 0.2.0 release includes the completed work through wave 4. Publication
+and a fresh PyPI installation were verified separately from local wheel checks; see the
+[release record](../docs/releasing.md#first-public-release-020).
 
 ## Goals
 
@@ -95,13 +95,20 @@ You can also ask the Claude session that wrote this plan to launch a wave for yo
 
 ### Release 0.2.0 (maintainer)
 
-The package remains version 0.2.0 for its first public release. PyPI had no project on
-2026-10-04 or on the 2026-10-08 recheck; the README therefore retains a verified GitHub
-installation fallback. Follow [docs/releasing.md](../docs/releasing.md) after release preparation and the Windows audit
-are reviewed, merged and validated: verify a TestPyPI rehearsal, then tag the exact release
-commit `v0.2.0` and verify the PyPI artifacts and a fresh index installation. Do not bump to
-0.3.0 before 0.2.0 is published. Switch the README to verified index instructions and start
-the next development version in a follow-up after publication.
+The first public [0.2.0 release](https://github.com/wangjohn/styleprofile/releases/tag/v0.2.0)
+is published on [PyPI](https://pypi.org/project/styleprofile/0.2.0/), from tag `v0.2.0`
+at source commit `687da439b90ad2b07450623e1c9ce7beeb26a20a`. All eleven source CI jobs
+passed in [run 37885395568](https://github.com/wangjohn/styleprofile/actions/runs/37885395568),
+including the full Windows suite and native regressions without spaCy. The
+[publication run](https://github.com/wangjohn/styleprofile/actions/runs/37887071239)
+succeeded; both downloaded archive hashes matched the checked release artifacts.
+
+A fresh Python 3.11.16 PyPI installation passed model setup, repeated setup, version,
+demo and explicit scoring: package 0.2.0, report 8.1, `Overall: close`, with the thin-reference
+warning and parser use confirmed. TestPyPI was skipped; no TestPyPI upload or install is
+claimed. The README now uses PyPI instructions. Package 0.2.0 and report versions remain
+unchanged in this documentation follow-up; selecting the next development version is
+separate maintenance work. See [docs/releasing.md](../docs/releasing.md) for future releases.
 
 ## Rules for every work package
 

@@ -6,16 +6,17 @@ drafts. Scores describe this comparison; they do not prove who wrote a text.
 
 ## Install
 
-Python 3.11+; CI tests 3.11–3.14. While a PyPI release is unavailable, use the verified
-GitHub installation below. Choose pip in an activated virtual environment, or uv:
+Python 3.11+; CI tests 3.11–3.14. The first public release,
+[0.2.0](https://pypi.org/project/styleprofile/0.2.0/), is available on PyPI.
+Choose pip in an activated virtual environment, or uv:
 
 ```bash
-python -m pip install "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile.git"
+python -m pip install "styleprofile[syntax]"
 styleprofile setup
 ```
 
 ```bash
-uv tool install --python 3.11 "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile.git"
+uv tool install --python 3.11 "styleprofile[syntax]"
 styleprofile setup
 ```
 
@@ -172,7 +173,7 @@ Match the message below; identifiers name existing library `StyleProfileError.co
 
 | What happened | What to do |
 |---|---|
-| “No matching distribution” | Use Python 3.11+ and the GitHub install above while the PyPI release is pending. |
+| “No matching distribution” | Use Python 3.11+ and check that pip is using PyPI; upgrade pip in your virtual environment. |
 | “Externally managed environment” (PEP 668) | Use an activated virtual environment or `uv tool install`; don't replace system Python packages. |
 | spaCy/model versions differ (`code=setup_spacy_version`, `code=syntax_model_mismatch`) | Run `styleprofile setup` in the same environment, then rebuild the profile. If spaCy itself is outside the required range, reinstall the syntax extra there. |
 | Syntax metrics left out (`code=no_syntax`, `code=syntax_unavailable`) | Install the syntax extra and run `styleprofile setup`, or choose `--no-syntax`. Scoring a surface-only reference stays surface-only; rebuild to add syntax. |
