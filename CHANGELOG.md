@@ -6,11 +6,10 @@ All notable changes to styleprofile. The format follows
 
 ## [0.2.0] - 2026-10-08
 
-Prepared for the first public release. After PyPI publication, install with
-`pip install styleprofile`, or `pip install "styleprofile[syntax]"` then
-`styleprofile setup` for the parser-based metrics. Until then, the README has a GitHub
-installation fallback. Twelve onboarding work packages ship; the z-score cap and bundled
-generic contrast remain deferred.
+The first public release is [available on PyPI](https://pypi.org/project/styleprofile/0.2.0/).
+Install with `pip install styleprofile`, or `pip install "styleprofile[syntax]"` then
+`styleprofile setup` for the parser-based metrics. Twelve onboarding work packages ship;
+the z-score cap and bundled generic contrast remain deferred.
 
 > [!IMPORTANT]
 > **Rebuild your profiles.** References and scores now carry report version 8.1; evaluations use 2.1.

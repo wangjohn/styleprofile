@@ -5,8 +5,8 @@ format, corpus and execution details used by the command and Python library.
 
 ## Installation details
 
-The unreleased development version is available from GitHub, using pip or uv as shown in
-the README. Use an isolated environment; do not add the package to an externally managed
+The public release is available on PyPI, using pip or uv as shown in the README.
+Use an isolated environment; do not add the package to an externally managed
 system Python. For pip on macOS/Linux, create and activate a virtual environment first:
 
 ```bash
@@ -26,12 +26,14 @@ working pip installer, `styleprofile setup` can use uv for the model installatio
 For surface metrics only, omit the syntax extra:
 
 ```bash
-python -m pip install "styleprofile @ git+https://github.com/wangjohn/styleprofile.git"
+python -m pip install styleprofile
 styleprofile demo --no-syntax
 ```
 
-No model setup is needed for that installation. `python -m styleprofile` runs the same
-command as the installed executable. From a source clone, `uv sync --extra syntax` installs
+No model setup is needed for that installation. To install the GitHub development version
+instead, use `python -m pip install "styleprofile[syntax] @ git+https://github.com/wangjohn/styleprofile.git"`
+and run `styleprofile setup` (omit `[syntax]` for surface metrics only).
+`python -m styleprofile` runs the same command as the installed executable. From a source clone, `uv sync --extra syntax` installs
 the development dependencies and English model, then `uv run styleprofile` runs it.
 See [Contributing](../CONTRIBUTING.md) for repository commands and package smoke tests.
 
