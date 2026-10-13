@@ -75,7 +75,7 @@ def test_against_accepts_draft_folder_named_json(tmp_path, capsys):
     drafts.mkdir()
     (drafts / "draft.md").write_text(Path(DRAFT).read_text(encoding="utf-8"), encoding="utf-8")
     assert main(["score", str(drafts), "--against", WRITER, "--no-syntax", "-q"]) == 0
-    assert "close (Delta 0.85)" in capsys.readouterr().out
+    assert "close (Delta 0.87)" in capsys.readouterr().out
 
 
 def test_default_parent_folder_output(tmp_path, monkeypatch, capsys):

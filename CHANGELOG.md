@@ -4,6 +4,24 @@ All notable changes to styleprofile. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version numbers follow
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may break things.
 
+## [Unreleased]
+
+> [!IMPORTANT]
+> **Rebuild your profiles.** References and scores now carry report version 9.0. Different
+> majors require rebuilding: run `styleprofile build` again on the writer's texts, and
+> `styleprofile score` again for saved score reports.
+
+### Fixed
+
+- **Typography no longer changes a verdict.** Converting a writer's straight quotes and
+  apostrophes to curly ones, as Word, Google Docs and most blog editors do, moved all seven
+  sample essays from "close" to "somewhat different" or "clearly different". The metric
+  `curly_apostrophe_pct`, which only recorded how the text was typed, is removed, and
+  quotation marks, dashes and ellipses are counted alike in either form. A new test suite
+  applies eleven transforms (quotes, line endings, wrapping, dashes, ellipses, spacing,
+  paragraph separators, an HTML round trip) and checks the verdicts. See "What styleprofile
+  ignores" in `docs/method.md`.
+
 ## [0.2.0] - 2026-10-08
 
 The first public release is [available on PyPI](https://pypi.org/project/styleprofile/0.2.0/).

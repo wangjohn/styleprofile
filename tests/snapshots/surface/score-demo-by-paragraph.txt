@@ -3,9 +3,9 @@ $ styleprofile score --by-paragraph examples/draft.md '<tmp>/demo-writer.json' -
 --- stdout
 STYLE COMPARISON   1 chunk, 542 words   vs demo-writer.json (55 chunks)
 
-Overall: close   Delta 0.65
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.54 typically (95% under
-  0.84).
+Overall: close   Delta 0.66
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.55 typically (95% under
+  0.85).
 
 LLM-likeness: a few LLM traits   0.75
   The reference's own writing at this length (542 words) scores 0.16 typically (95% under 0.44); the LLM drafts 7.68.
@@ -22,7 +22,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Formatting                   0.27x  █░░░░░░░░░░░░░░░░░░░  close
 
 Where it drifts (experimental)   2 of 8 paragraphs drift, read in spans of at least 100 words
-  Line 9          a few LLM traits (1.21), close (Delta 1.22)
+  Line 9          a few LLM traits (1.21), close (Delta 1.27)
                   "But the store is more than a place to buy things — it's a…"
                   Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
   Line 15         a few LLM traits (0.89), close (Delta 0.83)

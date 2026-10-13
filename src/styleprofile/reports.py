@@ -41,9 +41,11 @@ from styleprofile.schema import (
 # 7 (0.2.0): nominalizations_per_1k no longer counts words such as fence, city or sentence
 # (see ``syntax.is_nominalization``), so a version 6 profile's values would not match.
 # 8 (0.2.0): long plain blocks split at sentences; long single paragraphs omit structure.
-VERSION = 8
+# 9: typography never changes a verdict: curly_apostrophe_pct is gone (it recorded how the
+# text was typed), and trigrams and the apostrophe count fold quote glyphs.
+VERSION = 9
 # Additive report fields increment this; legacy integer versions have minor zero.
-MINOR_VERSION = 1
+MINOR_VERSION = 0
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
 REFERENCE: Final = "reference"

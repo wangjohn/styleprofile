@@ -5,9 +5,9 @@ Reference: built from 7 documents (4,496 words) in <time> s, not saved.
 To reuse: `styleprofile build examples/writer --contrast examples/llm-drafts --no-syntax -o writer.profile.json`
 STYLE COMPARISON   1 chunk, 542 words   vs reference (7 chunks)
 
-Overall: close   Delta 0.85
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under
-  0.99).
+Overall: close   Delta 0.87
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.73 typically (95% under
+  1.00).
 
 LLM-likeness: like the reference   0.71
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.

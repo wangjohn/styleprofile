@@ -80,6 +80,7 @@ _SENTENCE_BREAK = re.compile(
 _ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|vs|mr|mrs|ms|dr|st|jr|sr|fig|approx)\.$", re.I)
 # Abbreviations that are also ordinary words, only before a number ("No. 5", not "said no.").
 _NUMBER_ABBREVIATION = re.compile(r"\b(?:No|Nos|[Vv]ol|pp|[Cc]h)\.$")
+_SINGLE_QUOTES = ("'", "\N{LEFT SINGLE QUOTATION MARK}", "\N{RIGHT SINGLE QUOTATION MARK}")
 _EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
 _ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
 _FUNCTION_SET = frozenset(FUNCTION_WORDS)
@@ -536,7 +537,7 @@ def surface_metrics(
     mean_length = _mean(lengths)
     length_sd = statistics.pstdev(lengths) if lengths else None
 
-    apostrophes = text.count("'") + text.count("\N{RIGHT SINGLE QUOTATION MARK}")
+    apostrophes = sum(text.count(mark) for mark in _SINGLE_QUOTES)
     straight_double = text.count('"')
     function_counts = Counter(token for token in tokens if token in _FUNCTION_SET)
 
@@ -581,7 +582,6 @@ def surface_metrics(
         "quotations_per_1k": rate(
             text.count("\N{LEFT DOUBLE QUOTATION MARK}") + straight_double // 2
         ),
-        "curly_apostrophe_pct": _pct(text.count("\N{RIGHT SINGLE QUOTATION MARK}"), apostrophes),
         "contractions_per_1k": rate(
             sum(
                 token in S_CONTRACTIONS or bool(CONTRACTION_SUFFIX.search(token))
@@ -632,9 +632,23 @@ def masked_bigrams(text: str, tokens: list[str] | None = None) -> Counter[str]:
     )
 
 
+# Glyphs that only record how a text was typed, folded to one form so trigrams don't count them.
+_TRIGRAM_GLYPHS = str.maketrans(
+    {
+        "\N{LEFT SINGLE QUOTATION MARK}": "'",
+        "\N{RIGHT SINGLE QUOTATION MARK}": "'",
+        "\N{LEFT DOUBLE QUOTATION MARK}": '"',
+        "\N{RIGHT DOUBLE QUOTATION MARK}": '"',
+        "\N{EM DASH}": "-",
+        "\N{EN DASH}": "-",
+        "\N{HORIZONTAL ELLIPSIS}": "...",
+    }
+)
+
+
 def char_trigrams(text: str) -> Counter[str]:
     """Character trigrams of prose text (``prose(markdown).text``), case-folded."""
-    text = re.sub(r"\s+", " ", text.casefold())
+    text = re.sub(r"\s+", " ", text.casefold().translate(_TRIGRAM_GLYPHS))
     return Counter(map("".join, zip(text, text[1:], text[2:], strict=False)))
 
 

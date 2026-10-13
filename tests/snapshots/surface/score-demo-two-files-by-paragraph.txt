@@ -6,12 +6,12 @@ STYLE COMPARISON   2 documents, 2 chunks, 1,182 words   vs demo-writer.json (55 
 By document   furthest from the reference first
   2 documents: 2 close
   document                      words  verdict             Delta  LLM-likeness
-  examples/draft.md               542  close                0.65  a few traits
+  examples/draft.md               542  close                0.66  a few traits
   examples/writer/old-maps.md     640  close                0.48  like reference
 
-Across 2 documents: close   Delta 0.56
-  Lower is closer. The reference's own held-out writing at these lengths (542-640 words per chunk) scores 0.54 typically
-  (a mean over 2 chunks, up to 0.78).
+Across 2 documents: close   Delta 0.57
+  Lower is closer. The reference's own held-out writing at these lengths (542-640 words per chunk) scores 0.55 typically
+  (a mean over 2 chunks, up to 0.79).
   Pooled over every document from here on; the table above has each one's own.
 
 LLM-likeness: a few LLM traits   0.47
@@ -30,7 +30,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Formatting                   0.21x  █░░░░░░░░░░░░░░░░░░░  close
 
 Where it drifts (experimental)   2 of 15 paragraphs drift, read in spans of at least 100 words
-  examples/draft.md, line 9   a few LLM traits (1.21), close (Delta 1.22)
+  examples/draft.md, line 9   a few LLM traits (1.21), close (Delta 1.27)
                               "But the store is more than a place to buy things — it's a…"
                               Em dashes ▲▲▲, LLM marker words (delve, crucial) ▲▲▲, Long words (7+ letters) ▲▲▲
   examples/draft.md, line 15  a few LLM traits (0.89), close (Delta 0.83)
