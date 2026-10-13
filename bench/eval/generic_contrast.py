@@ -41,6 +41,7 @@ def _rows(profile: sp.Profile, folder: Path) -> list[dict]:
             "leans": d.likeness_verdict in LEANS,
         }
         for d in profile.score(folder).documents
+        if Path(d.name).name != "README.md"
     ]
 
 

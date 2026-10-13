@@ -859,3 +859,50 @@ documents are remixed from the writer samples at a single length, so this says l
 real writers.
 
 The dev and writer sets were scored once the code was in place; the test set was not read.
+
+### Results
+
+Produced by `python bench/eval/generic_contrast.py dev|writer|test` (spaCy on, default
+settings). The corpus and code were frozen in commit 7bceb21 before the test set was read.
+
+| Bar | Result | |
+|---|---|---|
+| Dev: 5 of 5 `examples/llm-drafts` lean LLM or beyond | 5 of 5 (likeness 11.5–14.6, all "like the drafts") | met |
+| Test: at least 13 of 16 lean LLM or beyond | 14 of 16 | met |
+| Test: AUC of test drafts vs writer held-out documents at least 0.90 | 1.000 | met |
+| Test: length alone at most 0.70 | 0.850 (0.545 against the 7 essays alone) | **not met** |
+| Writer: at least 95% read "like the reference" | 45 of 47 (95.7%) | met |
+
+The length bar fails because the writer held-out set includes 40 `medium` documents of
+about 1,000 words, against test drafts with a median of 667; against the seven essays alone
+(610–672 words) length gives 0.545. The same synthetic-corpus length gap made the 0.70
+corpus check unreachable (see above). The likeness AUC of 1.000 is therefore not evidence
+that the test drafts are separated by style alone, but the verdict counts do not depend on
+length against the essays. Writer misses: `the-woodstove.md` (0.94, "a few traits") and
+medium `doc-0035.md` (0.57). The first run of the test script also scored the folder's
+`README.md` as a 17th draft (15 of 17); the script skips it now and the figures above are
+from the rerun, with no other change.
+
+Test drafts against the full seven-essay profile with generic contrast:
+
+| Draft | Words | Likeness | Verdict |
+|---|---:|---:|---|
+| 01-old-maps.md | 594 | 2.79 | like the drafts |
+| 02-stone-walls.md | 850 | 1.99 | leans |
+| 03-mud-season.md | 447 | 1.20 | a few traits |
+| 04-woodstove.md | 702 | 1.45 | a few traits |
+| 05-library.md | 832 | 1.92 | leans |
+| 06-walking-rain.md | 375 | 1.71 | leans |
+| 07-sharpening-tools.md | 973 | 2.22 | like the drafts |
+| 08-hardware-store.md | 602 | 2.13 | leans |
+| 09-remote-work.md | 840 | 1.96 | leans |
+| 10-sourdough.md | 536 | 1.74 | leans |
+| 11-used-car.md | 904 | 5.39 | like the drafts |
+| 12-park-cleanup.md | 303 | 2.73 | like the drafts |
+| 13-piano.md | 646 | 2.76 | like the drafts |
+| 14-budgeting.md | 688 | 6.03 | like the drafts |
+| 15-train-journey.md | 986 | 3.06 | like the drafts |
+| 16-vegetable-garden.md | 631 | 3.40 | like the drafts |
+
+Because one bar is missed, the PR stays a draft. Corpus, anchor and bars were not changed
+after seeing the test set.
