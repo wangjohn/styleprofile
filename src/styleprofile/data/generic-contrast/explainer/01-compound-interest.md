@@ -28,17 +28,17 @@ Put $1,000 in an account earning 5% a year, compounded annually:
 - Year 10: about $1,629
 - Year 30: about $4,322
 
-Simple interest would give only $2,500 after 30 years. The difference, nearly $1,800, comes entirely from interest earning interest.
+Simple interest would give only $2,500 after 30 years.
 
 ## What changes the outcome
 
-- **Time:** The longest-running factor. Starting earlier matters more than most people expect.
-- **Rate:** Higher rates speed growth, and the gap widens over time.
-- **Compounding frequency:** Monthly beats annual, though the difference is usually small.
-- **Regular contributions:** Adding money each month adds new principal that also begins compounding.
+- **Time:** Starting earlier matters most.
+- **Rate:** Higher rates speed growth.
+- **Frequency:** Monthly beats annual, slightly.
+- **Contributions:** Each deposit also compounds.
 
 ## The flip side
 
-Compounding works against you with debt. Credit card balances that compound daily can grow quickly if you only pay the minimum.
+Compounding works against you with debt, such as credit card balances.
 
 A handy shortcut is the Rule of 72: divide 72 by your annual rate to estimate how many years it takes to double your money. At 6%, that is about 12 years.

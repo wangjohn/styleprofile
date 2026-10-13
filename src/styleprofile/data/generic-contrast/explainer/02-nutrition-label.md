@@ -1,14 +1,13 @@
 ## Reading a Nutrition Label: A Quick Guide
 
-Nutrition labels pack a lot of information into a small box. Knowing where to look makes it easy to compare foods and spot what matters for your goals.
+Knowing where to look makes it easy to compare foods.
 
 ### Start with serving size
 
-Everything on the label is based on one serving, not the whole package. If a bag lists three servings and you eat it all, multiply every number by three. Check "servings per container" and compare it to how much you actually eat.
-
+Everything on the label is based on one serving, not the whole package. If a bag lists three servings and you eat it all, multiply every number by three. 
 ### Check the calories
 
-Calories measure the energy in one serving. As a rough guide, 40 calories is low, 100 is moderate, and 400 or more is high for a single food item.
+Calories measure the energy in one serving. Roughly, 40 is low, 100 is moderate, and 400 is high.
 
 ### Look at the nutrients
 
