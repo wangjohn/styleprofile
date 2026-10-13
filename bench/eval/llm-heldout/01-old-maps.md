@@ -1,0 +1,17 @@
+# An Old Map from the Attic
+
+I found it wedged behind a loose board in my aunt's attic, rolled tightly and held with a rubber band that crumbled to dust when I touched it. The map itself was hand-drawn on heavy paper that had yellowed to the color of old cream, and the ink had faded to pale blue and brown. It showed the roads around the town where my grandmother had grown up, with penciled notes in the margins and small crosses marking what I assumed were important places.
+
+The precision of it struck me first. Someone had spent hours on this, measuring distances and drawing the roads to actual scale. Not a printed map with its standardized symbols, but someone's deliberate effort to capture this particular landscape. I could see the hesitation in some of the lines where they'd gone over them multiple times, trying to get something right. The lettering was careful, practiced. This was work that mattered to whoever had made it.
+
+The roads don't match the current maps. Some are gone entirely. The state highway that runs through the center now doesn't appear, and I had to cross-reference with satellite imagery to understand what landscape this represented. According to the dates scribbled in the corner, it was from 1952, which would make it older than my grandmother's earliest child. Perhaps she had drawn it herself, or someone had drawn it for her. There was no name.
+
+What struck me most was what the mapmaker had chosen to mark. Roads, certainly, but also wells, an old schoolhouse, what looked like a railroad crossing that's long been removed, and several houses marked with small squares. One house had a circle around it and a note: "Gram's?" Another had a line drawn through it with "gone" written beside. These weren't administrative boundaries or population centers. These were the features that mattered to the person making the map. This was how they understood the place.
+
+I started to recognize some of the names. The corners and crossroads had the family surnames of people I'd heard about my whole life but never met. There was a place marked "Miller farm," another "Orchard." Someone had drawn a small tree symbol near what would now be the edge of town. The effort to represent a landscape so personally, so selectively, revealed something about what that place had meant.
+
+Studying the map, I realized how much information we lose when we discard these personal records. The printed maps of that era would show roads and town names, but they would never show which houses people considered significant, or which buildings had already vanished even then. They wouldn't show the mapmaker's uncertainty—those crossed-out roads, the question mark beside a place name. They wouldn't reveal that someone's home life was worth the careful work of documentation.
+
+I've copied it since then, photographed it carefully and stored the original in a climate-controlled folder. Sometimes I look at it and trace the roads with my finger, trying to imagine driving them as they existed in 1952. I wonder who the mapmaker was, and whether they knew that decades later, someone they'd never meet would hold their work and feel, suddenly and unexpectedly, connected to a place and a time they'd never experienced.
+
+The map still raises questions I can't answer. But that uncertainty is part of what makes it valuable. It's a direct connection to someone's effort and attention, preserved through decades. And in a time when maps are generated instantly and forgotten just as quickly, that deliberate, careful work feels like an act of love.
