@@ -1188,15 +1188,21 @@ def cross_validate(
     reference_sources: Sequence[str],
     contrast_z: Sequence[ZScores],
     contrast_sources: Sequence[str],
+    contrast_groups: Sequence[str] | None = None,
 ) -> CrossValidated:
     """Leave-one-document-out likeness scores for the reference and the contrast chunks.
 
     Each reference chunk is scored with weights learned without its own source, and each
     contrast chunk with weights learned without its own source, so calibration shows how the
-    score behaves on text the weights have not seen. (Contrast z-scores are measured against
+    score behaves on text the weights have not seen. ``contrast_groups`` (one per contrast
+    chunk, by default the sources) leaves out a whole group at a time instead and keys
+    ``contrast_folds`` by group: a register of generic drafts, say, so that a draft is scored
+    with weights learned without any draft of its style. (Contrast z-scores are measured against
     the full reference, so a held-out reference source still shapes them slightly; with many
     sources the effect is negligible.)
     """
+    if contrast_groups is not None:
+        contrast_sources = contrast_groups
     reference_total, reference_parts = _sums(reference_held, reference_sources)
     contrast_total, contrast_parts = _sums(contrast_z, contrast_sources)
     effects, rms = _fold(reference_total, contrast_total)

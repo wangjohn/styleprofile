@@ -16,6 +16,9 @@ dist/
 profiles/
 corpora/
 data/
+# The bundled generic contrast drafts are package data, not a personal corpus.
+!src/styleprofile/data/
+!src/styleprofile/data/generic-contrast/
 
 .DS_Store
 

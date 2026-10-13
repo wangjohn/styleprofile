@@ -1,0 +1,19 @@
+# On Keeping Houseplants Alive
+
+I have killed more plants than I care to count. A fern in my first apartment, two basil pots, a succulent that supposedly could survive anything, and a fiddle-leaf fig that dropped its leaves one by one like a slow insult. For years I assumed I simply had a black thumb, some fixed trait like being left-handed. Then a neighbor who kept a jungle in her living room told me otherwise, and I have been thinking about plants differently ever since.
+
+Her point was that plants do not die because of bad luck or bad character. They die because they are given the wrong conditions, and most people never learn what those conditions are. I had been buying plants the way I buy decorations, based on how they looked in the store, and then placing them wherever they happened to fit. A fern wants humidity and indirect light; I put mine on a dry, sunny windowsill. No wonder it crisped.
+
+So the first thing I learned was to look at my space before choosing a plant. Where does the light actually fall, and for how many hours? Is the window facing north, south, east, or west? I spent a week checking the apartment at different times of day, which felt silly but was genuinely useful. My living room gets bright afternoon light but little in the morning. My bathroom has a small frosted window and almost no direct sun. Each location suits a different kind of plant, and matching them is most of the work.
+
+The second lesson was about water, where nearly everyone goes wrong. Overwatering kills far more houseplants than neglect does. I used to water on a schedule, every Sunday, as though plants were bills. But a plant's needs shift with the season, the light, and the pot size. Now I stick a finger an inch or two into the soil. If it is damp, I wait. If it is dry, I water thoroughly until it drains out the bottom, then empty the saucer so the roots do not sit in a puddle. It is a simple habit, and it solved roughly half my problems.
+
+Drainage matters just as much. I once repotted a lovely pothos into a decorative ceramic pot with no hole in the bottom, and within a month the roots had rotted. Now I keep plants in plain nursery pots with drainage and slip them inside prettier containers. It is less elegant, but the plants survive, which I have come to value above elegance.
+
+Third, I learned to start with forgiving species. Pothos, snake plants, and ZZ plants tolerate low light and irregular watering. They are the training wheels of the plant world. Succeeding with them gave me confidence, and confidence made me observant. I began to notice small signals, such as yellowing leaves, drooping stems, and pale new growth, and to connect each to a cause. Yellow lower leaves usually meant too much water. Leggy, stretching growth meant too little light. The plants were communicating all along; I just had not been paying attention.
+
+That, I think, is the real shift. Keeping plants alive is less about knowledge than about attention. A few minutes each morning looking at what is changing is worth more than any fertilizer. I now walk through the apartment with my coffee and glance at each pot, much as I might check on a pet. Most days nothing needs doing. Occasionally I spot a curling leaf or a bit of new growth, and it makes my morning.
+
+I should admit I still lose plants. A calathea sulked and died last winter, apparently offended by the dry air from my radiator. I did not take it personally. I took notes, decided calatheas were beyond me for now, and moved on.
+
+Today I have about a dozen plants, and the apartment feels different. It is softer and a little greener, and there is a quiet pleasure in having living things to look after. If you have given up on plants because of past failures, I would gently suggest the problem was probably not you. Start with something hardy, learn your light, and water less than you think you should.

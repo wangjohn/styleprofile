@@ -1,0 +1,11 @@
+My father believed that anything worth learning should be learned in an empty parking lot on a Sunday morning. So that is where, at sixteen, I first sat behind the wheel of his ten-year-old Buick, gripping the steering wheel at ten and two while the engine idled beneath us like a large, patient animal.
+
+He was not a talkative man. He worked in a machine shop for thirty years and communicated mostly through small adjustments, a nod, a raised eyebrow, a hand lifted slightly from his knee. In the passenger seat he was just as spare. "Easy," he would say when I pressed the gas too hard. "Look farther ahead," when I stared at the hood. That was nearly all, and somehow it was enough.
+
+I remember the first time I stalled out, or rather the first of many times. The car lurched and died in the middle of the lot, and I felt my face burn. I expected a lecture. Instead my father reached over, turned the key himself, and said, "Everybody does that. I did it in front of your grandfather and he laughed so hard he had to sit down." That story, which I had never heard, changed something. I was no longer failing at a test. I was joining a line of people who had stalled out and tried again.
+
+We graduated to quiet streets, then to the county road behind the reservoir. He taught me to check mirrors, to anticipate other drivers, to treat a yellow light as a question rather than an answer. Every lesson was brief. He never raised his voice, though once, when I drifted toward a mailbox, his hand shot out and gripped the dashboard so hard his knuckles went white. We both laughed about that later.
+
+I passed my road test on the first try. When I came out of the DMV holding the temporary license, he didn't say much. He simply handed me the keys and sat in the passenger seat, and I drove us home.
+
+He has been gone six years now. I drive a different car, in a different city, but whenever traffic gets heavy and my shoulders creep upward, I hear him say "Easy." My hands loosen on the wheel, and I look farther ahead.

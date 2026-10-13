@@ -45,7 +45,8 @@ from styleprofile.schema import (
 # text was typed), and trigrams and the apostrophe count fold quote glyphs.
 VERSION = 9
 # Additive report fields increment this; legacy integer versions have minor zero.
-MINOR_VERSION = 0
+# 9.1: settings.generic_contrast, set when the bundled generic drafts were in the contrast.
+MINOR_VERSION = 1
 # The version of evaluation reports (``styleprofile evaluate``), counted separately.
 EVALUATION_VERSION = 2
 REFERENCE: Final = "reference"

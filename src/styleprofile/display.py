@@ -265,6 +265,13 @@ def _reference_lines(report: ReferenceReport, style: _Style) -> list[str]:
     contrast = report.get("contrast")
     if contrast:
         lines += _contrast_summary(contrast, style)
+        if report["settings"].get("generic_contrast"):
+            lines.append(
+                style.dim(
+                    "  Generic drafts are a weaker comparison; drafts of your own briefs are "
+                    "better (docs/contrast.md)."
+                )
+            )
     return lines
 
 

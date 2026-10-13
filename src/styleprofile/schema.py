@@ -118,6 +118,8 @@ class ReportSettings(InputSettings):
     contrast: NotRequired[list[str] | None]
     # How a reference's contrast set was split, as ``split_used`` (empty without one).
     contrast_split_used: NotRequired[list[str]]
+    # Set when the bundled generic drafts were part of the contrast set.
+    generic_contrast: NotRequired[bool]
 
 
 class EvaluationSettings(InputSettings):
