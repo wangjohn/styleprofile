@@ -780,3 +780,63 @@ a profile built without it), to the 40 held-out documents of the synthetic `medi
 (every fifth, sorted), and to the sample LLM drafts, with and without spaCy. A writer's
 verdicts must not change and its Delta may move by at most 0.25; an LLM draft's verdicts must
 not move toward the writer. `python bench/invariance.py` prints the table.
+
+## Generic contrast, second attempt
+
+This section was committed before any measurement on the test set and before the corpus
+existed. It states what is built, how it is judged and what counts as passing. The result is
+reported in the section after it, whatever it shows.
+
+**The first attempt.** The 24 drafts of the first candidate were all 447–492 words long and
+shared their framing, so length alone told them apart from the writer (AUC 1.0), and the
+anchor ("LLM drafts typically score ...") was computed leaving out one draft at a time while
+near-twins of the left-out draft stayed in training. LLM text from outside the set scored
+below half way to that anchor.
+
+**Corpus.** Sixty original drafts in `src/styleprofile/data/generic-contrast/<register>/`,
+under 400 KB, with a README giving provenance and the MIT licence.
+
+- *Length:* 15 drafts each of 150–300, 300–600, 600–1,000 and 1,000–1,500 words. Before any
+  likeness evaluation, the AUC of word count alone, corpus against `examples/writer` and
+  against the `medium` writer documents, must be at most 0.70. If it is not, only lengths
+  change.
+- *Registers,* 10 drafts each: a headed or bulleted explainer (`explainer`); a plain-prose
+  blog post (`blog`); a personal essay written on request (`essay`); a newsletter or email
+  (`newsletter`); an opinion piece (`opinion`); a "make it sound human" rewrite style with
+  no em dashes, varied sentence lengths and no stock phrases (`humanlike`).
+- *Topics:* no two drafts share a topic and at least half are everyday or personal.
+- *Variety:* no opening or closing formula appears in more than two drafts. The largest
+  number of drafts sharing any 8-word sequence is reported.
+- The held-out set was not read while the corpus was written, and no topic was chosen from
+  it.
+
+**Anchor.** For generic contrast the profile's contrast calibration (the contrast median and
+minimum, and the AUC) comes from folds that leave out a whole register at a time, so it
+describes LLM text in a style the weights have not seen. A generic draft's *group* is its
+register folder. For contrast the caller supplies with `--contrast`, the group is the
+document, as before; a profile built without generic contrast is byte-identical to the one
+`main` builds. Combined with `--contrast`, the caller's drafts keep their own document folds
+and the generic drafts keep register folds.
+
+**Data sets.**
+
+- *Dev* (may be iterated on): `examples/llm-drafts`, and the `medium` corpus's contrast
+  documents.
+- *Test* (used once, after the corpus and code are committed and frozen):
+  `bench/eval/llm-heldout/`, 16 drafts written by a different model before the corpus.
+- *Writer held-out:* each `examples/writer` essay held out in turn, and every fifth sorted
+  `medium` writer document, scored against a profile built without them. Every profile uses
+  the generic contrast.
+
+**Bars,** fixed here:
+
+1. Dev: all 5 drafts in `examples/llm-drafts` read "leans LLM" or beyond.
+2. Test: at least 13 of 16 read "leans LLM" or beyond; the AUC of the test drafts against the
+   writer held-out documents' likeness is at least 0.90; the AUC of word count alone between
+   the same two sets is at most 0.70.
+3. Writer: at least 95% of the held-out writer documents, both sets together, read "like the
+   reference".
+4. `make check`, the bench gate and `make dist-check` pass.
+
+If the test run misses a bar, the corpus, the anchor and the bars stay as they are and the
+results are published as they are.
