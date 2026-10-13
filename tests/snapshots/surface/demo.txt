@@ -3,7 +3,7 @@ $ styleprofile demo --dir '<tmp>/bundled-demo' --no-syntax
 --- stdout
 STYLE PROFILE   7 chunks, 4,496 words
 
-As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
+As a reference   held-out Delta 0.70 typically, 95% under 0.90 (7 documents)
   Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7
   documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75
   words, no verdict.
@@ -21,9 +21,9 @@ Next, score a draft against it:
   styleprofile score <draft> <tmp>/bundled-demo/writer.profile.json
 STYLE COMPARISON   1 chunk, 542 words   vs writer.profile.json (7 chunks)
 
-Overall: close   Delta 0.85
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under
-  0.99).
+Overall: close   Delta 0.87
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.73 typically (95% under
+  1.00).
 
 LLM-likeness: like the reference   0.71
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.

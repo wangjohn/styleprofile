@@ -36,7 +36,6 @@ Punctuation
   Exclamation marks                                  0.0 /1k   0.0 - 0.0 /1k
   Ellipses                                           0.0 /1k   0.0 - 0.0 /1k
   Quotations                                         0.9 /1k   0.0 - 2.1 /1k
-  Curly apostrophes (vs straight)                       0.0%   0.0% - 0.0%
 
 Voice and stance
   Contractions                                      34.6 /1k   26.6 - 42.5 /1k
@@ -172,7 +171,7 @@ How sentences open
   Opener: noun                                          5.1%   1.5% - 8.7%
   Opener: verb                                          0.7%   0.0% - 1.8%
 
-As a reference   held-out Delta 0.82 typically, 95% under 0.97 (7 documents)
+As a reference   held-out Delta 0.82 typically, 95% under 0.98 (7 documents)
   Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7
   documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75
   words, no verdict.

@@ -96,7 +96,6 @@ class Count(StrEnum):
     WORDS = "words"
     SENTENCES = "sentences"
     PARAGRAPHS = "paragraphs"
-    APOSTROPHES = "apostrophes"
 
 
 @dataclass(frozen=True)
@@ -120,7 +119,7 @@ class Metric:
         """Half of one occurrence per chunk, in this metric's units: the smallest meaningful
         spread.
 
-        ``counts`` are the reference's typical words, sentences, paragraphs and apostrophes
+        ``counts`` are the reference's typical words, sentences and paragraphs
         per chunk. A rate per 1,000 words moves by 1000 / words per occurrence; a percentage
         by 100 / (whatever it is a share of). Other metrics have no count resolution.
         """
@@ -315,14 +314,6 @@ METRICS: tuple[Metric, ...] = (
         "quotations_per_1k",
         "Quotations",
         "Quotations: opening curly double quotes, or pairs of straight ones.",
-    ),
-    Metric(
-        "punctuation",
-        "curly_apostrophe_pct",
-        "Curly apostrophes (vs straight)",
-        PCT,
-        Count.APOSTROPHES,
-        about="Share of apostrophes that are curly.",
     ),
     _rate(
         "voice",

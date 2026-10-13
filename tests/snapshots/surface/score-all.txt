@@ -3,9 +3,9 @@ $ styleprofile score --all examples/draft.md '<tmp>/writer.json'
 --- stdout
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
-Overall: close   Delta 0.85
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.71 typically (95% under
-  0.99).
+Overall: close   Delta 0.87
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.73 typically (95% under
+  1.00).
 
 LLM-likeness: like the reference   0.71
   The reference's own writing at this length (542 words) scores 0.20 typically (95% under 0.86); the LLM drafts 14.20.
@@ -40,7 +40,7 @@ Delta by area   (the reference's held-out median, and the top of its usual range
   Voice and stance                                      1.37        0.77        1.04
   Vocabulary                                            0.65        0.59        0.90
   Function words                                        0.88        1.03        1.34
-  Punctuation                                           0.65        0.45        0.99
+  Punctuation                                           0.75        0.51        1.13
   Sentence shape                                        1.27        0.81        2.59
   Rhythm                                                1.07        1.09        2.30
   Formatting                                            0.07        0.01        0.50
@@ -79,7 +79,6 @@ Punctuation
   Exclamation marks                                  0.0 /1k     0.0 /1k
   Ellipses                                           0.0 /1k     0.0 /1k
   Quotations                                         0.0 /1k     0.9 /1k
-  Curly apostrophes (vs straight)                       0.0%        0.0%
 
 Voice and stance
   Contractions                                      36.9 /1k    34.6 /1k

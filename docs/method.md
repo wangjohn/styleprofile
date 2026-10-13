@@ -738,3 +738,45 @@ contain fewer than 5% of fifty common English function words. It is deliberately
 conservative: it does not identify a language or refuse text. Names, specialist vocabulary
 and mixed languages can confuse it. English metrics and the optional English parser can
 be unreliable on other languages. The check runs on original inputs for build and score.
+
+## What styleprofile ignores
+
+How a text was typed or converted is not style. These changes to a text must not change its
+verdicts, so a writer's essays read the same pasted from Word, saved from a blog editor, or
+read from a rendered page:
+
+- straight quotes and apostrophes turned typographic, and the reverse;
+- CRLF line endings, and hard wrapping within paragraphs;
+- `—` written `--`, and the reverse; `...` written `…`, and the reverse;
+- two spaces, or a non-breaking space, after a sentence;
+- trailing spaces and tabs;
+- Markdown rendered to simple HTML (paragraphs, headings, lists, emphasis) and read back
+  with `--input-format html`.
+
+Two more changes remove information rather than re-type it, and may only make a text look
+closer, never further: paragraph breaks written as one newline, and blank lines removed. A
+text with no paragraph breaks has no paragraph evidence, so those metrics are left out (see
+"Input structure and language"), and the rest of the comparison stands.
+
+Three things make this hold:
+
+- Counts treat the glyphs alike. Quotations count opening curly double quotes and straight
+  pairs, apostrophes count `'`, `‘` and `’`, em dashes and ellipses count either form, and
+  every word list reads a curly apostrophe as a straight one. Character trigrams fold quotes,
+  dashes and ellipses to one form.
+- Nothing is scored that only records encoding. `curly_apostrophe_pct`, the share of
+  apostrophes that were curly, is removed rather than listed as "not scored": it records the
+  editor a text passed through, not the writing, so it only ever added a false alarm to a
+  writer's converted text, and a metric nobody scores would still invite a reader to ask what it means. Removing
+  it leaves the contrast AUC where it was (1.0 on `examples/` and on the `medium` corpus,
+  with and without spaCy), and the sample LLM drafts score the same with their quotes
+  straightened.
+- No score is capped to make up for a metric that misbehaves. A cap on z cost detection of
+  short LLM text and widened the writer's own range when it was tried, so every transform has
+  to be fixed where the metric reads the text.
+
+`tests/test_invariance.py` applies each transform to every essay in `examples/writer` (against
+a profile built without it), to the 40 held-out documents of the synthetic `medium` corpus
+(every fifth, sorted), and to the sample LLM drafts, with and without spaCy. A writer's
+verdicts must not change and its Delta may move by at most 0.25; an LLM draft's verdicts must
+not move toward the writer. `python bench/invariance.py` prints the table.

@@ -95,7 +95,6 @@ def test_surface_metrics_are_rates_and_shares() -> None:
     assert metrics["voice"]["and_but_so_openers_pct"] == pytest.approx(100 / 6)
     assert metrics["voice"]["llm_markers_per_1k"] == 0
     assert metrics["vocabulary"]["mattr_100"] is None
-    assert metrics["punctuation"]["curly_apostrophe_pct"] == 0
 
     generic = surface_metrics(GENERIC)
     assert (generic["voice"]["llm_markers_per_1k"] or 0) > 0
@@ -825,7 +824,6 @@ def test_list_continuations_percentage_floors_and_upper_case_extensions(tmp_path
     # Each percentage's floor comes from what it is a share of.
     counts = {"words": 480.0, "sentences": 25.0, "paragraphs": 6.0, "apostrophes": 10.0}
     assert resolution("one_sentence_paragraphs_pct", counts) == pytest.approx(50 / 6)
-    assert resolution("curly_apostrophe_pct", counts) == pytest.approx(5.0)
     assert resolution("short_sentences_pct", counts) == pytest.approx(2.0)
     assert resolution("commas_per_1k", counts) == pytest.approx(500 / 480)
     assert surface_metrics("It's here, isn't it.")["size"]["apostrophes"] == 2

@@ -3,7 +3,7 @@ $ styleprofile build --by-paragraph '<tmp>/demo/writer' --contrast '<tmp>/demo/c
 --- stdout
 STYLE PROFILE   55 chunks, 29,312 words
 
-As a reference   held-out Delta 0.59 typically, 95% under 0.91 (40 documents)
+As a reference   held-out Delta 0.59 typically, 95% under 0.92 (40 documents)
   Shorter texts: calibrated at 75 words (393 pieces), 150 words (197 pieces), 300 words (85 pieces). Under 75 words, no
   verdict.
 

@@ -1,7 +1,7 @@
 $ styleprofile metrics
 [exit 0]
 --- stdout
-153 metrics. Syntax and sentence-opening metrics need spaCy.
+152 metrics. Syntax and sentence-opening metrics need spaCy.
 
 Size
   Words                                               Prose words, after code, tables and markup are removed.
@@ -41,7 +41,6 @@ Punctuation
   Ellipses                                     /1k    Ellipses (... or the single glyph).
   Quotations                                   /1k    Quotations: opening curly double quotes, or pairs of straight
                                                       ones.
-  Curly apostrophes (vs straight)              %      Share of apostrophes that are curly.
 
 Voice and stance
   Contractions                                 /1k    Contractions such as don't, we're and it's (not possessives).

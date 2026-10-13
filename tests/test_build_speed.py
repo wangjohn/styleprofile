@@ -27,7 +27,7 @@ DRAFT = ROOT / "examples" / "draft.md"
 def test_paragraph_calibration_is_opt_in_and_other_profile_bytes_stay_identical() -> None:
     plain = sp.build(WRITER, syntax=False, contrast=CONTRAST)
     asked = sp.build(WRITER, syntax=False, contrast=CONTRAST, passages=True)
-    assert plain.report["version"] == asked.report["version"] == 8
+    assert plain.report["version"] == asked.report["version"] == 9
     assert "drift" not in plain.report["calibration"]
     assert asked.report["calibration"].pop("drift")["documents"] == 7
     assert json.dumps(plain.report) == json.dumps(asked.report)
