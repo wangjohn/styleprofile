@@ -315,8 +315,7 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
     build.add_argument(
         "--generic-contrast",
         action="store_true",
-        help="also contrast with the bundled generic LLM drafts (drafts of your own briefs "
-        "are better)",
+        help="also contrast with 60 bundled generic LLM drafts",
     )
     build.add_argument(
         "--contrast-label",

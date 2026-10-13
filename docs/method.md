@@ -840,3 +840,22 @@ and the generic drafts keep register folds.
 
 If the test run misses a bar, the corpus, the anchor and the bars stay as they are and the
 results are published as they are.
+
+### Corpus checks, before any likeness evaluation
+
+Measured on the 60 drafts as written (prose words, as the package counts them; headings and
+list items are not prose): 15 drafts in each of the four length bands, 224 KB in all. No
+opening or closing formula (first three words of the first and last sentence) is shared by
+more than two drafts, and the largest number of drafts sharing any 8-word sequence is 2.
+Length alone gives an AUC of 0.50 against `examples/writer` (reference 610–672 words, corpus
+median 504). Against the `medium` writer documents it gives 0.81 (the larger of AUC and
+1 - AUC), above the 0.70 limit above, and **no choice of lengths can meet that limit**: every
+`medium` document has 711–1,363 words, the plan asks for 30 drafts under 600 words and 15
+under 1,000, and those 45 drafts are shorter than almost every `medium` document, which
+puts the AUC at 0.77 even if every draft in the top two bands were as long as its band
+allows. The band split was kept, since changing it would be a different design, and the
+number is reported with the results instead of being tuned away. The synthetic `medium`
+documents are remixed from the writer samples at a single length, so this says little about
+real writers.
+
+The dev and writer sets were scored once the code was in place; the test set was not read.

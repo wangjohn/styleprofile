@@ -151,4 +151,6 @@ If compost is not fully finished, it can compete with plants for nitrogen, so al
 - Check moisture and adjust as needed.
 - Harvest finished compost from the bottom when it is ready.
 
+A small pile is also easier to forgive. If it turns out too wet or too dry, you can fix it with a handful of dry leaves or a splash of water, and nothing is lost but a week of progress. Many people find that the first season is mostly about learning what their own pile wants, and that the second goes much more smoothly.
+
 Composting rewards patience more than precision. Start small, pay attention to how the pile looks and smells, and adjust as you learn. Within a season, you will likely have a dependable supply of homemade soil booster.

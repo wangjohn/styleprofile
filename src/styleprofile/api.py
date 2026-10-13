@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Unpack
 
 from styleprofile.core import Note, NoteCode, Phase, StyleProfileError
+from styleprofile.corpus.ids import chunk_document
 from styleprofile.corpus.preparation import (
     _chunked,
     _covered,
@@ -23,7 +24,6 @@ from styleprofile.corpus.preparation import (
     _typed,
 )
 from styleprofile.corpus.reading import Records, SourceNames
-from styleprofile.corpus.ids import chunk_document
 from styleprofile.corpus.types import Text as Text
 from styleprofile.corpus.windows import pool, window
 from styleprofile.evaluate import evaluate_rewording
@@ -90,7 +90,9 @@ def _generic_folders() -> list[str]:
     """The register folders of the bundled generic drafts, one input each so that drafts are
     only ever pooled with others of their register."""
     root = files("styleprofile").joinpath("data", "generic-contrast")
-    return [str(folder) for folder in sorted(root.iterdir(), key=lambda p: p.name) if folder.is_dir()]
+    return [
+        str(folder) for folder in sorted(root.iterdir(), key=lambda p: p.name) if folder.is_dir()
+    ]
 
 
 def _register_of(folders: list[str]) -> Callable[[Chunk], str] | None:
