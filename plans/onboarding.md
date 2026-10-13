@@ -10,6 +10,8 @@ only that.
 Twelve of the fourteen work packages are complete, independently reviewed and merged.
 WP-1 and WP-10 were explicitly deferred; their draft PRs and failed acceptance evidence
 remain available. No metric z-score cap or bundled generic contrast set is in 0.2.0.
+A second attempt at both, redesigned from that evidence, is in
+[retry-wp1-wp10.md](retry-wp1-wp10.md).
 LLM-likeness still requires contrast drafts supplied by the caller; see the
 [own-brief recipe](../docs/contrast.md).
 
