@@ -496,3 +496,18 @@ def test_the_cache_fingerprint_covers_the_nominalization_code(
     monkeypatch.setattr(cache, "_source", edited)
     after = [cache.fingerprint(None), cache.fingerprint(spacy_used)]
     assert after[0] != before[0] and after[1] != before[1]
+
+
+def test_evaluation_drafts_not_in_wheel() -> None:
+    """The held-out LLM evaluation set (bench/eval/llm-heldout/) must not be included in the
+    wheel distribution. The wheel includes only src/ and examples/; the sdist includes bench/
+    but explicitly excludes bench/eval/. This test verifies that evaluation files do not exist
+    in an installed package."""
+    wheel_pyproject = PYPROJECT["tool"]["hatch"]["build"]["targets"]["wheel"]
+    # Wheel only force-includes examples, not bench
+    assert "bench" not in str(wheel_pyproject.get("force-include", {}))
+    assert "bench" not in wheel_pyproject.get("include", [])
+
+    sdist_pyproject = PYPROJECT["tool"]["hatch"]["build"]["targets"]["sdist"]
+    # Sdist includes bench but should exclude eval
+    assert "bench/eval" in sdist_pyproject.get("exclude", [])

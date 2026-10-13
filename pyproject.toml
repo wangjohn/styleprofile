@@ -87,7 +87,7 @@ packages = ["src/styleprofile"]
 # files. pyproject.toml, README.md and LICENSE are always included.
 [tool.hatch.build.targets.sdist]
 only-include = ["src", "tests", "docs", "examples", "bench", "CHANGELOG.md"]
-exclude = ["bench/corpora", "bench/work", "bench/results.json"]
+exclude = ["bench/corpora", "bench/work", "bench/results.json", "bench/eval"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
