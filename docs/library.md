@@ -31,7 +31,12 @@ windows, and loads spaCy the same way. Scores inherit the profile's settings.
 `result.verdict` is a `Verdict` and `result.likeness_verdict` a `LikenessVerdict`
 (`.words(label)` names the contrast set). Both are string enums with the same words as the
 CLI (see [Reading the output](../README.md#reading-the-output)). A score with no metric in
-common with the profile is `Verdict.NOT_COMPARABLE`. Delta and the verdicts are pooled over
+common with the profile is `Verdict.NOT_COMPARABLE`. When the profile was built with
+`generic_contrast=True`, `result.indicative` (and each document's `indicative`) is True: the
+likeness figures and `likeness_verdict` are then indicative only, the evaluation of the
+bundled drafts having missed a bar ([Method](method.md#generic-contrast-second-attempt)),
+and the command line shows the number without verdict words. The verdicts are still
+computed and saved in the report. Delta and the verdicts are pooled over
 every input you score at once, each chunk read against the writer's range at its own length
 (see [Several documents at once](#several-documents-at-once) for each document's own).
 `result.to_text()` is what `styleprofile score` prints, and `result.report` is the full JSON

@@ -11,6 +11,18 @@ All notable changes to styleprofile. The format follows
 > majors require rebuilding: run `styleprofile build` again on the writer's texts, and
 > `styleprofile score` again for saved score reports.
 
+### Added
+
+- **Bundled generic contrast drafts.** `build --generic-contrast` and the library's
+  `generic_contrast=True` add 60 original assistant-style drafts in six registers, alone or
+  with your own `--contrast` drafts. Their likeness range is learned leaving out a whole
+  register at a time. Their likeness is shown as an indicative number, without verdict words (also with
+  `score -q`), `--fail-likeness` refuses such a profile, and library results have an
+  `indicative` flag. Reports gain the optional
+  `settings.generic_contrast` (version 9.1).
+  Drafts from your own briefs are still the better comparison; see `docs/contrast.md` and
+  the evaluation in `docs/method.md`.
+
 ### Fixed
 
 - **Typography no longer changes a verdict.** Converting a writer's straight quotes and

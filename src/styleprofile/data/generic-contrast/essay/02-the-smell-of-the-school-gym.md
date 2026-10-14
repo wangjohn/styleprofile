@@ -1,0 +1,7 @@
+Rubber, floor wax, and something faintly sour underneath: that was the gym at Jefferson Middle School, and I could identify it blindfolded. Last month I walked into a community center to vote, and a gym stood behind the folding tables. The smell hit me before I'd signed my name, and suddenly I was thirteen again, standing in a line of kids waiting to be picked for dodgeball.
+
+It is strange that a smell can carry so much. I remember the squeak of sneakers, the hollow thump of a ball on varnished maple, the bleachers pulled out like a wooden canyon. But memory of sound and sight is fuzzy compared to the smell, which arrives whole, all at once, with the feelings attached.
+
+And the feelings were mixed. I was not an athletic kid. Gym class meant a few minutes of dread before every unit, whether it was volleyball or the mile run. Yet that same smell also meant pep rallies, where the whole school shook the rafters, and the winter concert, when my mother sat in the third row holding a camera she barely knew how to use.
+
+Standing in the voting line, I breathed in deliberately. A woman behind me asked if I was all right. I told her I was just remembering something. She smiled, as if she understood, and maybe she did. Then I filled in my ballot and walked back outside into the cold, a little lighter than I'd gone in.

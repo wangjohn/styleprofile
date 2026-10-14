@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -215,6 +215,9 @@ class ContrastFit:
     contrast_chunks: list[Chunk]
     contrast_z: list[ZScores]
     contrast_documents: list[str]
+    # What each contrast chunk is left out with: its document, or a register of generic
+    # drafts. ``learned.contrast_folds`` is keyed by these.
+    contrast_groups: list[str]
     learned: CrossValidated
 
 
@@ -227,6 +230,7 @@ def _learn_contrast(
     parser: Parser | None,
     min_words: int,
     measurer: Measurer | None = None,
+    group: Callable[[Chunk], str] | None = None,
 ) -> tuple[Contrast, ContrastFit]:
     if calibrated is None:
         raise StyleProfileError(
@@ -257,6 +261,7 @@ def _learn_contrast(
     floor = floors(report["summary"])
     contrast_z = [_z_against(metrics, report["summary"], floor) for metrics in measured.metrics]
     contrast_sources = _documents(measured.chunks)
+    contrast_groups = [group(chunk) for chunk in measured.chunks] if group else contrast_sources
     reference_sources = _documents(reference.chunks)
     fit = ContrastFit(
         reference_held=held,
@@ -264,7 +269,10 @@ def _learn_contrast(
         contrast_chunks=measured.chunks,
         contrast_z=contrast_z,
         contrast_documents=contrast_sources,
-        learned=cross_validate(held, reference_sources, contrast_z, contrast_sources),
+        contrast_groups=contrast_groups,
+        learned=cross_validate(
+            held, reference_sources, contrast_z, contrast_sources, contrast_groups
+        ),
     )
     learned = summarize_contrast(
         fit.learned,
@@ -315,7 +323,7 @@ def _calibrate_contrast_lengths(
             piece_held,
             piece_documents,
             [_z_against(piece.metrics, summary, floor) for piece in chosen],
-            [fit.contrast_documents[piece.chunk] for piece in chosen],
+            [fit.contrast_groups[piece.chunk] for piece in chosen],
             fit.learned,
             icc=calibrated.icc,
         )
@@ -330,6 +338,7 @@ def build_reference(
     settings: Mapping[str, Any] | None = None,
     contrast: Sequence[Chunk] | None = None,
     contrast_label: str = "LLM",
+    contrast_group: Callable[[Chunk], str] | None = None,
     keep_chunks: bool = False,
     passages: bool = False,
     measurer: Measurer | None = None,
@@ -347,7 +356,9 @@ def build_reference(
     Scoring needs only the summary, so the per-chunk metrics are left out, which keeps the
     profile small however large the corpus; ``keep_chunks`` saves them too, for debugging.
     ``measurer`` sets how chunks are measured (a cache, worker processes, progress); by
-    default everything is measured in this process, with nothing cached."""
+    default everything is measured in this process, with nothing cached. ``contrast_group``
+    names the group a contrast chunk is left out with when the contrast is cross-validated
+    (by default its document)."""
     return _build_reference(
         chunks,
         parser=parser,
@@ -356,6 +367,7 @@ def build_reference(
         settings={"window_words": 0, **(settings or {})},
         contrast=contrast,
         contrast_label=contrast_label,
+        contrast_group=contrast_group,
         keep_chunks=keep_chunks,
         passages=passages,
         measurer=measurer,
@@ -403,6 +415,7 @@ def _build_reference(
     contrast: Sequence[Chunk] | None,
     contrast_label: str,
     keep_chunks: bool,
+    contrast_group: Callable[[Chunk], str] | None = None,
     calibrate_lengths: bool = True,
     passages: bool = False,
     measurer: Measurer | None = None,
@@ -441,7 +454,15 @@ def _build_reference(
     fit: ContrastFit | None = None
     if contrast is not None:
         report["contrast"], fit = _learn_contrast(
-            report, measured, calibrated, contrast, contrast_label, parser, min_words, measurer
+            report,
+            measured,
+            calibrated,
+            contrast,
+            contrast_label,
+            parser,
+            min_words,
+            measurer,
+            contrast_group,
         )
     if chosen and calibrated is not None:
         _calibrate_drift(report, measured, fit, parser, chosen, measurer)

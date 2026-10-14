@@ -136,6 +136,10 @@ def check_wheel(wheel: Path, version: str) -> None:
         _fail(f"wheel has files outside the package: {stray}")
     if "styleprofile/py.typed" not in names:
         _fail("wheel lacks styleprofile/py.typed")
+    prefix = "styleprofile/data/generic-contrast/"
+    drafts = [n for n in names if n.startswith(prefix) and n.endswith(".md") and n.count("/") == 4]
+    if len(drafts) != 60 or prefix + "README.md" not in names:
+        _fail("wheel lacks the 60 generic contrast drafts or their provenance README")
     required_samples = {
         f"styleprofile/_examples/{path.relative_to(ROOT / 'examples').as_posix()}"
         for path in (ROOT / "examples").rglob("*")
@@ -271,6 +275,20 @@ def smoke_test(wheel: Path, work: Path, *, syntax: bool) -> None:
     _run([cli, "show", "draft.json"], cwd=run, env=env)
     out = _run([python, "-c", _readme_example()], cwd=run, env=env)
     print(f"README library example: {out.strip()}")
+    out = _run(
+        [
+            python,
+            "-c",
+            "import styleprofile as sp; "
+            "p = sp.build('examples/writer', generic_contrast=True, syntax=False); "
+            "assert p.report['contrast']['label'] == 'generic LLM'; "
+            "assert p.report['contrast']['sources'] == 60; "
+            "print('installed generic contrast: 60 drafts')",
+        ],
+        cwd=run,
+        env=env,
+    )
+    print(out.strip())
 
     if not syntax:
         return

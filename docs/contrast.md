@@ -37,3 +37,15 @@ check all of them. A high training AUC does not ensure that unseen drafts reach 
 verdicts. Edited model drafts can also lose the habits that the score measures; see
 [stress-testing likeness](usage.md#stress-testing-llm-likeness). A like-reference score is
 not evidence that a human wrote the text.
+
+## No briefs to hand: the bundled generic drafts
+
+`styleprofile build posts/ --generic-contrast` (library: `generic_contrast=True`) adds 60
+bundled assistant-style drafts in six registers, alone or alongside your own `--contrast`
+drafts. The report calls the set "generic LLM". It is a weaker comparison than drafts
+of your own briefs: the topics and lengths do not match your writer's. Its likeness range
+leaves out one register at a time, so the figures describe LLM text in a style the weights
+have not seen. Because the held-out test missed one of its bars, the likeness is shown as an
+**indicative** number without verdict words, and `--fail-likeness` refuses such a profile.
+How it was designed and judged is in
+[Method](method.md#generic-contrast-second-attempt).

@@ -237,6 +237,12 @@ DISTANCES = (
 )
 
 
+# The contrast label of a profile built with the bundled generic drafts. Its likeness is
+# shown as an indicative number, without verdict words (``display``), and refused by
+# ``--fail-likeness``.
+GENERIC_LABEL = "generic LLM"
+
+
 class LikenessVerdict(StrEnum):
     """Likeness to the contrast set in words, from the writer's own range up to the contrast
     drafts' typical score. ``words(label)`` names the contrast set, as reports print it."""

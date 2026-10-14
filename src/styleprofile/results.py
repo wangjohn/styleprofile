@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, Unpack
 from styleprofile.calibration import MIN_JUDGED_WORDS, too_short_text
 from styleprofile.core import (
     DISTANCES,
+    GENERIC_LABEL,
     LIKENESSES,
     LikenessVerdict,
     Note,
@@ -389,12 +390,16 @@ class DocumentResult:
     path: str | None = None
     # Its judged chunks that are flagged on their own (``ScoreResult.flagged``).
     flagged: int = 0
+    # True when the contrast set is the bundled generic drafts (``ScoreResult.indicative``).
+    indicative: bool = False
     location: str | None = field(default=None, compare=False)
 
     @classmethod
-    def from_report(cls, entry: DocumentEntry, location: str | None = None) -> DocumentResult:
+    def from_report(
+        cls, entry: DocumentEntry, location: str | None = None, indicative: bool = False
+    ) -> DocumentResult:
         """A document from a score report's ``documents``; ``location`` is where its
-        file was typed, if known."""
+        file was typed, if known; ``indicative`` that its likeness is (``ScoreResult``)."""
         likeness = entry["likeness_verdict"]
         return cls(
             name=entry["name"],
@@ -418,6 +423,7 @@ class DocumentResult:
             ),
             path=entry["path"],
             flagged=entry["flagged"],
+            indicative=indicative,
             location=location,
         )
 
@@ -470,7 +476,7 @@ class ScoreResult(_Result[ScoreReport]):
         """Each scored document's own result, in the order the inputs gave them. The CLI
         lists them furthest from the reference first."""
         return tuple(
-            DocumentResult.from_report(entry, self._locations.get(entry["path"]))
+            DocumentResult.from_report(entry, self._locations.get(entry["path"]), self.indicative)
             for entry in self._report["documents"]
         )
 
@@ -558,6 +564,13 @@ class ScoreResult(_Result[ScoreReport]):
         """The contrast set's name (``LLM``) when the profile was built with one."""
         contrast = self._reference["contrast"]
         return contrast["label"] if contrast else None
+
+    @property
+    def indicative(self) -> bool:
+        """True when the contrast set is the bundled generic drafts: the likeness figures and
+        ``likeness_verdict`` are then indicative only (the evaluation in ``docs/method.md``
+        missed a bar), and the CLI shows a number without verdict words."""
+        return self.contrast_label == GENERIC_LABEL
 
     @property
     def likeness(self) -> float | None:

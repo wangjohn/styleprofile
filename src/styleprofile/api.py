@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import functools
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from importlib.resources import files
+from pathlib import Path
 from typing import TYPE_CHECKING, Unpack
 
-from styleprofile.core import Note, NoteCode, Phase, StyleProfileError
+from styleprofile.core import GENERIC_LABEL, Note, NoteCode, Phase, StyleProfileError
+from styleprofile.corpus.ids import chunk_document
 from styleprofile.corpus.preparation import (
     _chunked,
     _covered,
@@ -56,6 +59,7 @@ def build_texts(
     *,
     contrast: Iterable[str] | None = None,
     contrast_label: str = "LLM",
+    generic_contrast: bool = False,
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
     passages: bool = False,
@@ -72,6 +76,7 @@ def build_texts(
         _strings(texts),
         contrast=_strings(contrast) if contrast is not None else None,
         contrast_label=contrast_label,
+        generic_contrast=generic_contrast,
         progress=progress,
         keep_chunks=keep_chunks,
         passages=passages,
@@ -81,12 +86,31 @@ def build_texts(
     )
 
 
+def _generic_folders() -> list[str]:
+    """The register folders of the bundled generic drafts, one input each so that drafts are
+    only ever pooled with others of their register."""
+    root = files("styleprofile").joinpath("data", "generic-contrast")
+    return [
+        str(folder) for folder in sorted(root.iterdir(), key=lambda p: p.name) if folder.is_dir()
+    ]
+
+
+def _register_of(folders: list[str]) -> Callable[[Chunk], str] | None:
+    """The group a contrast chunk is left out with: its register for a generic draft, else
+    its own document. None without generic drafts, so such a build is the build it was."""
+    if not folders:
+        return None
+    registers = {folder: f"generic:{Path(folder).name}" for folder in folders}
+    return lambda chunk: registers.get(chunk.folder or "") or chunk_document(chunk)
+
+
 def build(
     inputs: Inputs,
     settings: Settings = DEFAULTS,
     *,
     contrast: Inputs | None = None,
     contrast_label: str = "LLM",
+    generic_contrast: bool = False,
     progress: ProgressCallback | None = None,
     keep_chunks: bool = False,
     passages: bool = False,
@@ -98,7 +122,11 @@ def build(
 
     Given ``contrast`` texts (LLM drafts of the same briefs, say), the profile also learns
     what separates the writer from them and scores likeness to them. A file or folder given
-    twice, in ``inputs`` or ``contrast``, is read once, with a note. A reference too small
+    twice, in ``inputs`` or ``contrast``, is read once, with a note. ``generic_contrast``
+    adds the bundled generic assistant drafts, alone or alongside ``contrast``, labelled
+    "generic LLM". Their likeness is indicative: shown as a number without verdict
+    words, with a range learned leaving out one register at a time. Drafts from the writer's
+    own briefs are a better comparison (``docs/contrast.md``). A reference too small
     to trust gets one ``NoteCode.THIN_REFERENCE`` note per reason.
 
     The profile keeps summaries only; ``keep_chunks`` also saves every chunk's metrics, for
@@ -128,6 +156,10 @@ def build(
         step(Phase.READ)
         items = _items(inputs)
         contrast_items = _items(contrast) if contrast is not None else None
+        generic = _generic_folders() if generic_contrast else []
+        if generic_contrast:
+            contrast_items = [*(contrast_items or []), *generic]
+            contrast_label = GENERIC_LABEL
         _stdin_once([*items, *(contrast_items or [])])
         seen: set[str] = set()
         names = SourceNames()
@@ -192,6 +224,7 @@ def build(
                 min_words=settings.min_words,
                 contrast=contrast_windows,
                 contrast_label=contrast_label,
+                contrast_group=_register_of(generic),
                 settings={
                     "inputs": _described(items, names),
                     "contrast": (
@@ -201,6 +234,7 @@ def build(
                     "pool_used": cut.pooled is not None,
                     "split_used": list(cut.split),
                     "contrast_split_used": list(contrast_cut.split) if contrast_cut else [],
+                    **({"generic_contrast": True} if generic_contrast else {}),
                 },
                 keep_chunks=keep_chunks,
                 passages=passages,

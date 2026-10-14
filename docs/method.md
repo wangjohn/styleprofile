@@ -780,3 +780,131 @@ a profile built without it), to the 40 held-out documents of the synthetic `medi
 (every fifth, sorted), and to the sample LLM drafts, with and without spaCy. A writer's
 verdicts must not change and its Delta may move by at most 0.25; an LLM draft's verdicts must
 not move toward the writer. `python bench/invariance.py` prints the table.
+
+## Generic contrast, second attempt
+
+This section was committed before any measurement on the test set and before the corpus
+existed. It states what is built, how it is judged and what counts as passing. The result is
+reported in the section after it, whatever it shows.
+
+**The first attempt.** The 24 drafts of the first candidate were all 447–492 words long and
+shared their framing, so length alone told them apart from the writer (AUC 1.0), and the
+anchor ("LLM drafts typically score ...") was computed leaving out one draft at a time while
+near-twins of the left-out draft stayed in training. LLM text from outside the set scored
+below half way to that anchor.
+
+**Corpus.** Sixty original drafts in `src/styleprofile/data/generic-contrast/<register>/`,
+under 400 KB, with a README giving provenance and the MIT licence.
+
+- *Length:* 15 drafts each of 150–300, 300–600, 600–1,000 and 1,000–1,500 words. Before any
+  likeness evaluation, the AUC of word count alone, corpus against `examples/writer` and
+  against the `medium` writer documents, must be at most 0.70. If it is not, only lengths
+  change.
+- *Registers,* 10 drafts each: a headed or bulleted explainer (`explainer`); a plain-prose
+  blog post (`blog`); a personal essay written on request (`essay`); a newsletter or email
+  (`newsletter`); an opinion piece (`opinion`); a "make it sound human" rewrite style with
+  no em dashes, varied sentence lengths and no stock phrases (`humanlike`).
+- *Topics:* no two drafts share a topic and at least half are everyday or personal.
+- *Variety:* no opening or closing formula appears in more than two drafts. The largest
+  number of drafts sharing any 8-word sequence is reported.
+- The held-out set was not read while the corpus was written, and no topic was chosen from
+  it.
+
+**Anchor.** For generic contrast the profile's contrast calibration (the contrast median and
+minimum, and the AUC) comes from folds that leave out a whole register at a time, so it
+describes LLM text in a style the weights have not seen. A generic draft's *group* is its
+register folder. For contrast the caller supplies with `--contrast`, the group is the
+document, as before; a profile built without generic contrast is byte-identical to the one
+`main` builds. Combined with `--contrast`, the caller's drafts keep their own document folds
+and the generic drafts keep register folds.
+
+**Data sets.**
+
+- *Dev* (may be iterated on): `examples/llm-drafts`, and the `medium` corpus's contrast
+  documents.
+- *Test* (used once, after the corpus and code are committed and frozen):
+  `bench/eval/llm-heldout/`, 16 drafts written by a different model before the corpus.
+- *Writer held-out:* each `examples/writer` essay held out in turn, and every fifth sorted
+  `medium` writer document, scored against a profile built without them. Every profile uses
+  the generic contrast.
+
+**Bars,** fixed here:
+
+1. Dev: all 5 drafts in `examples/llm-drafts` read "leans LLM" or beyond.
+2. Test: at least 13 of 16 read "leans LLM" or beyond; the AUC of the test drafts against the
+   writer held-out documents' likeness is at least 0.90; the AUC of word count alone between
+   the same two sets is at most 0.70.
+3. Writer: at least 95% of the held-out writer documents, both sets together, read "like the
+   reference".
+4. `make check`, the bench gate and `make dist-check` pass.
+
+If the test run misses a bar, the corpus, the anchor and the bars stay as they are and the
+results are published as they are.
+
+### Corpus checks, before any likeness evaluation
+
+Measured on the 60 drafts as written (prose words, as the package counts them; headings and
+list items are not prose): 15 drafts in each of the four length bands, 224 KB in all. No
+opening or closing formula (first three words of the first and last sentence) is shared by
+more than two drafts, and the largest number of drafts sharing any 8-word sequence is 2.
+Length alone gives an AUC of 0.50 against `examples/writer` (reference 610–672 words, corpus
+median 504). Against the `medium` writer documents it gives 0.81 (the larger of AUC and
+1 - AUC), above the 0.70 limit above, and **no choice of lengths can meet that limit**: every
+`medium` document has 711–1,363 words, the plan asks for 30 drafts under 600 words and 15
+under 1,000, and those 45 drafts are shorter than almost every `medium` document, which
+puts the AUC at 0.77 even if every draft in the top two bands were as long as its band
+allows. The band split was kept, since changing it would be a different design, and the
+number is reported with the results instead of being tuned away. The synthetic `medium`
+documents are remixed from the writer samples at a single length, so this says little about
+real writers.
+
+The dev and writer sets were scored once the code was in place; the test set was not read.
+
+### Results
+
+Produced by `python bench/eval/generic_contrast.py dev|writer|test` (spaCy on, default
+settings). The corpus and code were frozen in commit 7bceb21 before the test set was read.
+
+| Bar | Result | |
+|---|---|---|
+| Dev: 5 of 5 `examples/llm-drafts` lean LLM or beyond | 5 of 5 (likeness 11.5–14.6, all "like the drafts") | met |
+| Test: at least 13 of 16 lean LLM or beyond | 14 of 16 | met |
+| Test: AUC of test drafts vs writer held-out documents at least 0.90 | 1.000 | met |
+| Test: length alone at most 0.70 | 0.850 (0.545 against the 7 essays alone) | **not met** |
+| Writer: at least 95% read "like the reference" | 45 of 47 (95.7%) | met |
+
+The length bar fails because the writer held-out set includes 40 `medium` documents of
+about 1,000 words, against test drafts with a median of 667; against the seven essays alone
+(610–672 words) length gives 0.545. The same synthetic-corpus length gap made the 0.70
+corpus check unreachable (see above). The likeness AUC of 1.000 is therefore not evidence
+that the test drafts are separated by style alone, but the verdict counts do not depend on
+length against the essays. Writer misses: `the-woodstove.md` (0.94, "a few traits") and
+medium `doc-0035.md` (0.57). The first run of the test script also scored the folder's
+`README.md` as a 17th draft (15 of 17); the script skips it now and the figures above are
+from the rerun, with no other change.
+
+Test drafts against the full seven-essay profile with generic contrast:
+
+| Draft | Words | Likeness | Verdict |
+|---|---:|---:|---|
+| 01-old-maps.md | 594 | 2.79 | like the drafts |
+| 02-stone-walls.md | 850 | 1.99 | leans |
+| 03-mud-season.md | 447 | 1.20 | a few traits |
+| 04-woodstove.md | 702 | 1.45 | a few traits |
+| 05-library.md | 832 | 1.92 | leans |
+| 06-walking-rain.md | 375 | 1.71 | leans |
+| 07-sharpening-tools.md | 973 | 2.22 | like the drafts |
+| 08-hardware-store.md | 602 | 2.13 | leans |
+| 09-remote-work.md | 840 | 1.96 | leans |
+| 10-sourdough.md | 536 | 1.74 | leans |
+| 11-used-car.md | 904 | 5.39 | like the drafts |
+| 12-park-cleanup.md | 303 | 2.73 | like the drafts |
+| 13-piano.md | 646 | 2.76 | like the drafts |
+| 14-budgeting.md | 688 | 6.03 | like the drafts |
+| 15-train-journey.md | 986 | 3.06 | like the drafts |
+| 16-vegetable-garden.md | 631 | 3.40 | like the drafts |
+
+Because one bar is missed, generic-contrast likeness is shown as an indicative number without
+verdict words, `--fail-likeness` refuses a generic profile, and the PR stays a draft. The report
+still stores the verdicts, so the figures above can be reproduced. Corpus, anchor and bars were not changed
+after seeing the test set.
