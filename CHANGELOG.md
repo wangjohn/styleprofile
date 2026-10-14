@@ -16,7 +16,9 @@ All notable changes to styleprofile. The format follows
 - **Bundled generic contrast drafts.** `build --generic-contrast` and the library's
   `generic_contrast=True` add 60 original assistant-style drafts in six registers, alone or
   with your own `--contrast` drafts. Their likeness range is learned leaving out a whole
-  register at a time. Reports gain the optional `settings.generic_contrast` (version 9.1).
+  register at a time. Their likeness is shown as an indicative number, without verdict words, and
+  `--fail-likeness` refuses such a profile. Reports gain the optional
+  `settings.generic_contrast` (version 9.1).
   Drafts from your own briefs are still the better comparison; see `docs/contrast.md` and
   the evaluation in `docs/method.md`.
 

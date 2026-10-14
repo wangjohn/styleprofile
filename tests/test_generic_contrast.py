@@ -98,3 +98,23 @@ def test_groups_leave_out_a_whole_register_and_default_to_documents() -> None:
     groups = ["x", "x", "y", "y"]
     by_group = cross_validate(reference, reference_sources, contrast, documents, groups)
     assert set(by_group.contrast_folds) == {"x", "y"}
+
+
+def test_generic_likeness_is_an_indicative_number_without_verdict_words(tmp_path: Path) -> None:
+    profile = sp.build(WRITER, generic_contrast=True, syntax=False)
+    text = profile.score(LLM).to_text(full=True)
+    assert "generic LLM drafts-likeness (indicative):" in text
+    for words_ in ("leans", "like the generic", "a few generic", "Most generic LLM drafts-like"):
+        assert words_ not in text
+    own = sp.build(WRITER, contrast=LLM, syntax=False).score(LLM).to_text()
+    assert "(indicative)" not in own
+
+
+def test_fail_likeness_refuses_a_generic_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "generic.json"
+    sp.build(WRITER, generic_contrast=True, syntax=False).save(path)
+    code = main(["score", str(LLM), str(path), "--fail-likeness", "leans", "--quiet"])
+    assert code != 0
+    assert "indicative" in capsys.readouterr().err

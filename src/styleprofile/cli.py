@@ -31,6 +31,7 @@ from styleprofile import cache as caching
 from styleprofile.api import DocumentResult, Profile, ScoreResult, Settings, SettingsOverrides
 from styleprofile.calibration import MIN_JUDGED_WORDS, Lengths, flagged_text, too_short_text
 from styleprofile.core import (
+    GENERIC_LABEL,
     LikenessVerdict,
     Note,
     NoteCode,
@@ -1093,6 +1094,12 @@ def _run_score(args: argparse.Namespace) -> int:
         raise StyleProfileError(
             f"--fail-likeness needs a reference built with --contrast, and {reference_arg} "
             "has none; rebuild it with --contrast, or use --fail-above"
+        )
+    if args.fail_likeness and (profile.report.get("contrast") or {}).get("label") == GENERIC_LABEL:
+        raise StyleProfileError(
+            f"--fail-likeness needs drafts of your own briefs: {reference_arg} was built with "
+            "the bundled generic drafts, whose likeness is indicative only; rebuild it with "
+            "--contrast, or use --fail-above"
         )
     # Window and syntax overrides are warned about in the report itself.
     _notes(result.notes, verbose=args.verbose)

@@ -904,5 +904,7 @@ Test drafts against the full seven-essay profile with generic contrast:
 | 15-train-journey.md | 986 | 3.06 | like the drafts |
 | 16-vegetable-garden.md | 631 | 3.40 | like the drafts |
 
-Because one bar is missed, the PR stays a draft. Corpus, anchor and bars were not changed
+Because one bar is missed, generic-contrast likeness is shown as an indicative number without
+verdict words, `--fail-likeness` refuses a generic profile, and the PR stays a draft. The report
+still stores the verdicts, so the figures above can be reproduced. Corpus, anchor and bars were not changed
 after seeing the test set.

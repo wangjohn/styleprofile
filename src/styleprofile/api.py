@@ -9,7 +9,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Unpack
 
-from styleprofile.core import Note, NoteCode, Phase, StyleProfileError
+from styleprofile.core import GENERIC_LABEL, Note, NoteCode, Phase, StyleProfileError
 from styleprofile.corpus.ids import chunk_document
 from styleprofile.corpus.preparation import (
     _chunked,
@@ -124,9 +124,9 @@ def build(
     what separates the writer from them and scores likeness to them. A file or folder given
     twice, in ``inputs`` or ``contrast``, is read once, with a note. ``generic_contrast``
     adds the bundled generic assistant drafts, alone or alongside ``contrast``, labelled
-    "generic LLM drafts"; their likeness range is learned leaving out one register at a time.
-    Drafts from the writer's own briefs are a better comparison (``docs/contrast.md``).
-    A reference too small
+    "generic LLM drafts". Their likeness is indicative: shown as a number without verdict
+    words, with a range learned leaving out one register at a time. Drafts from the writer's
+    own briefs are a better comparison (``docs/contrast.md``). A reference too small
     to trust gets one ``NoteCode.THIN_REFERENCE`` note per reason.
 
     The profile keeps summaries only; ``keep_chunks`` also saves every chunk's metrics, for
@@ -159,7 +159,7 @@ def build(
         generic = _generic_folders() if generic_contrast else []
         if generic_contrast:
             contrast_items = [*(contrast_items or []), *generic]
-            contrast_label = "generic LLM drafts"
+            contrast_label = GENERIC_LABEL
         _stdin_once([*items, *(contrast_items or [])])
         seen: set[str] = set()
         names = SourceNames()

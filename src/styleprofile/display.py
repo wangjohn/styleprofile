@@ -27,7 +27,14 @@ from styleprofile.calibration import (
     shortfall,
     too_short_text,
 )
-from styleprofile.core import DISTANCES, LIKENESSES, LikenessVerdict, Verdict, warning_text
+from styleprofile.core import (
+    DISTANCES,
+    GENERIC_LABEL,
+    LIKENESSES,
+    LikenessVerdict,
+    Verdict,
+    warning_text,
+)
 from styleprofile.corpus.ids import base_id, document_label
 from styleprofile.drift import DELTA, LIKENESS
 from styleprofile.drift import excerpt as excerpt_text
@@ -503,11 +510,15 @@ def _likeness(
                 f"{label(metric.split('.', 1)[1])[0]} {style.distance(arrow, z_level(z))}"
             )
     words = style.bold(entry["verdict"])
-    lines = [
-        style.bold(f"{name}-likeness: ")
-        + (style.distance(words, level) if level is not None else words)
-        + f"   {entry['value']:.2f}",
-    ]
+    indicative = name == GENERIC_LABEL and level is not None
+    if indicative:
+        lines = [style.bold(f"{name}-likeness (indicative): ") + f"{entry['value']:.2f}"]
+    else:
+        lines = [
+            style.bold(f"{name}-likeness: ")
+            + (style.distance(words, level) if level is not None else words)
+            + f"   {entry['value']:.2f}",
+        ]
     # A text too short to judge has no range of its own length to quote.
     if entry["typical"] is not None and level is not None:
         lines.append(
@@ -517,7 +528,7 @@ def _likeness(
                 f"the {name} drafts {entry['target']:.2f}."
             )
         )
-    if signals and level is None:
+    if signals and (level is None or indicative):
         lines.append(f"  Indicative {name} signals: " + ", ".join(signals))
     elif signals and level:
         lines.append(f"  Strongest {name} signals: " + ", ".join(signals))
@@ -561,7 +572,7 @@ def _flagged_note(report: ScoreReport, reference: Baseline, style: _Style) -> st
         verdict["flagged"],
         verdict["chunks_judged"],
         verdict["chunks"],
-        contrast["label"] if contrast else None,
+        contrast["label"] if contrast and contrast["label"] != GENERIC_LABEL else None,
     )
     own = "its" if verdict["flagged"] == 1 else "their"
     return style.distance(f"; {words} on {own} own (see below)", FLAGGED_DISTANCE)
@@ -575,7 +586,11 @@ def _flagged_chunks(
     on its own is among the first; chunks too short to judge are never listed."""
     lines: list[str] = []
     contrast = reference["contrast"]
-    if contrast and report["reference"]["verdict"]["likeness"]:
+    if (
+        contrast
+        and contrast["label"] != GENERIC_LABEL
+        and report["reference"]["verdict"]["likeness"]
+    ):
         name = contrast["label"]
         # Against a contrast reference every chunk has a likeness.
         liked = [
@@ -1172,7 +1187,8 @@ def _document_table(
     the rest are counted instead, unless ``full``."""
     names = {doc["name"]: (shown or {}).get(doc["name"], doc["name"]) for doc in documents}
     contrast = reference["contrast"]
-    name_label = contrast["label"] if contrast else None
+    # The bundled generic drafts give an indicative number, not a verdict column.
+    name_label = contrast["label"] if contrast and contrast["label"] != GENERIC_LABEL else None
     likeness_header = f"{name_label}-likeness" if name_label else ""
     likeness_width = max(len(likeness_header), *map(len, LIKENESS_CELLS.values()))
     # indent, words, verdict, Delta and likeness, with two spaces between columns
