@@ -309,30 +309,131 @@ def test_the_cache_drops_the_least_recently_used_entries(tmp_path: Path) -> None
     assert path.stat().st_size < 1_000_000
 
 
+# The cache may skip writes by design: a writer that makes no progress for HAND_DEADLINE_S (5 s,
+# less than the 10 s TIMEOUT_S it may legitimately wait for another process's lock) is given up
+# on and what is unwritten dropped, with ``problem`` saying so. A busy CI runner (Windows jobs
+# under ``pytest -n auto``) can stall a writer that long. These processes therefore raise the
+# limits far past anything a loaded runner needs, so that skipping is not what this test sees,
+# and report ``problem`` so that the test still checks the contract if one is skipped anyway.
 WRITER_SCRIPT = """
 import sys
 from pathlib import Path
-from styleprofile.cache import MeasurementCache
-store = MeasurementCache(Path(sys.argv[1]))
+from styleprofile import cache
+cache.TIMEOUT_S = cache.HAND_DEADLINE_S = 120.0
+cache.CLOSE_TIMEOUT_S = 180.0
+store = cache.MeasurementCache(Path(sys.argv[1]))
 for number in range(300):
     store.put(f"{sys.argv[2]}{number}".encode(), number, {"n": number})
 store.close()
+print(store.problem or "")
 """
 
 
 def test_processes_can_share_the_cache(tmp_path: Path) -> None:
+    """Three processes write to one file. The contract: no process fails, the file stays sound,
+    what is in it is right, and every entry is there unless that process reported (``problem``)
+    that the cache skipped its writes. Afterwards the file can be read and written again."""
     path = tmp_path / "cache.sqlite3"
+    names = ("a", "b", "c")
     processes = [
-        subprocess.Popen([sys.executable, "-c", WRITER_SCRIPT, str(path), name])
-        for name in ("a", "b", "c")
+        subprocess.Popen(
+            [sys.executable, "-c", WRITER_SCRIPT, str(path), name],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        for name in names
     ]
-    assert [process.wait(timeout=60) for process in processes] == [0, 0, 0]
+    problems = {}
+    for name, process in zip(names, processes, strict=True):
+        output, _ = process.communicate(timeout=240)
+        assert process.returncode == 0
+        problems[name] = output.strip()
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+    db.close()
     store = MeasurementCache(path)
-    for name in ("a", "b", "c"):
-        found = store.fetch(f"{name}299".encode())
-        assert found is not None and caching.decode(found[1]) == {"n": 299}
+    present = 0
+    for name in names:
+        for number in range(300):
+            found = store.fetch(f"{name}{number}".encode())
+            if found is not None:
+                assert caching.decode(found[1]) == {"n": number}
+                present += 1
+            else:
+                assert problems[name], f"{name}{number} is missing and {name} reported no problem"
+    assert store.problem is None
+    if not any(problems.values()):
+        assert present == 900 == caching.describe(path)[2]
+    store.put(b"after", 1, {"n": 1})
     store.close()
-    assert caching.describe(path)[2] == 900
+    store = MeasurementCache(path)
+    assert store.fetch(b"after") is not None
+    store.close()
+
+
+def _hold_lock(path: Path) -> sqlite3.Connection:
+    """Another process's write transaction, as far as the cache can tell."""
+    holder = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    holder.execute("BEGIN EXCLUSIVE")
+    return holder
+
+
+def test_a_lock_released_in_time_loses_no_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "cache.sqlite3"
+    MeasurementCache(path).close()  # creates the file
+    monkeypatch.setattr(caching, "TIMEOUT_S", 60.0)
+    monkeypatch.setattr(caching, "HAND_DEADLINE_S", 60.0)
+    store = MeasurementCache(path)
+    holder = _hold_lock(path)
+    timer = threading.Timer(0.5, holder.execute, ["COMMIT"])
+    timer.start()
+    for number in range(300):
+        store.put(f"k{number}".encode(), number, {"n": number})
+    store.close()  # waits for the lock rather than giving up
+    timer.join()
+    holder.close()
+    assert store.problem is None
+    assert caching.describe(path)[2] == 300
+
+
+def test_a_lock_held_too_long_skips_the_writes_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writer may wait out the lock (TIMEOUT_S) longer than ``close`` waits for a writer
+    that finishes nothing (HAND_DEADLINE_S): then the run goes on without those writes, with
+    ``problem`` set, rather than stall. The file is untouched and works afterwards."""
+    path = tmp_path / "cache.sqlite3"
+    seed = MeasurementCache(path)
+    seed.put(b"seed", 1, {"n": 0})
+    seed.close()
+    monkeypatch.setattr(caching, "TIMEOUT_S", 60.0)
+    monkeypatch.setattr(caching, "HAND_DEADLINE_S", 0.5)
+    monkeypatch.setattr(caching, "HAND_TIMEOUT_S", 0.1)
+    store = MeasurementCache(path)
+    holder = _hold_lock(path)
+    try:
+        for number in range(300):
+            store.put(f"k{number}".encode(), number, {"n": number})
+        writer = store._writer
+        assert writer is not None  # started by the first full batch
+        started = time.monotonic()
+        store.close()  # gives up while the lock is still held
+        assert time.monotonic() - started < 30
+        assert store.problem is not None and "stopped responding" in store.problem
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    writer.join(timeout=60)
+    after = MeasurementCache(path)
+    assert after.fetch(b"seed") is not None  # what was there is intact
+    after.put(b"after", 1, {"n": 1})
+    after.close()
+    assert after.problem is None
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+    db.close()
 
 
 def test_the_cache_command_shows_and_clears_it(

@@ -21,6 +21,14 @@ All notable changes to styleprofile. The format follows
   applies eleven transforms (quotes, line endings, wrapping, dashes, ellipses, spacing,
   paragraph separators, an HTML round trip) and checks the verdicts. See "What styleprofile
   ignores" in `docs/method.md`.
+- **A flaky cache test no longer fails on busy machines.** `test_processes_can_share_the_cache`
+  sometimes found a writer's last entry missing on a loaded Windows runner. The cache did what
+  it promises: a writer stalled for over `HAND_DEADLINE_S` is given up on, its unwritten
+  entries are dropped and `problem` says so. The test asserted that nothing is ever dropped.
+  It now checks the real contract (no failure, a sound file, correct entries, every entry
+  present unless a writer reported skipping, the file usable afterwards), its processes use
+  generous timeouts, and two new tests cover a lock released in time and one held too long.
+  The cache itself is unchanged.
 
 ## [0.2.0] - 2026-10-08
 
