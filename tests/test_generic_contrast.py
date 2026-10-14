@@ -56,7 +56,7 @@ def test_generic_build_is_labelled_and_combines_with_explicit_drafts(
 ) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     generic = sp.build(WRITER, generic_contrast=True, syntax=False)
-    assert generic.report["contrast"]["label"] == "generic LLM drafts"
+    assert generic.report["contrast"]["label"] == "generic LLM"
     assert generic.report["contrast"]["sources"] == 60
     assert generic.report["settings"]["generic_contrast"] is True
     combined = sp.build(WRITER, generic_contrast=True, contrast=LLM, syntax=False)
@@ -103,8 +103,8 @@ def test_groups_leave_out_a_whole_register_and_default_to_documents() -> None:
 def test_generic_likeness_is_an_indicative_number_without_verdict_words(tmp_path: Path) -> None:
     profile = sp.build(WRITER, generic_contrast=True, syntax=False)
     text = profile.score(LLM).to_text(full=True)
-    assert "generic LLM drafts-likeness (indicative):" in text
-    for words_ in ("leans", "like the generic", "a few generic", "Most generic LLM drafts-like"):
+    assert "generic LLM-likeness (indicative):" in text
+    for words_ in ("leans", "like the generic", "a few generic", "Most generic LLM-like"):
         assert words_ not in text
     own = sp.build(WRITER, contrast=LLM, syntax=False).score(LLM).to_text()
     assert "(indicative)" not in own
@@ -118,3 +118,33 @@ def test_fail_likeness_refuses_a_generic_profile(
     code = main(["score", str(LLM), str(path), "--fail-likeness", "leans", "--quiet"])
     assert code != 0
     assert "indicative" in capsys.readouterr().err
+
+
+def test_quiet_lines_show_an_indicative_number_for_generic_contrast(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "generic.json"
+    sp.build(WRITER, generic_contrast=True, syntax=False).save(path)
+    assert main(["score", "-q", str(LLM), str(path)]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 5
+    for line in lines:
+        assert "generic LLM likeness (indicative) " in line
+        for words_ in ("leans", "like the generic", "a few generic", "drafts drafts"):
+            assert words_ not in line
+    one = tmp_path / "one.md"
+    one.write_text(next(LLM.glob("*.md")).read_text(encoding="utf-8"), encoding="utf-8")
+    assert main(["score", "-q", str(one), str(path)]) == 0
+    assert "likeness (indicative)" in capsys.readouterr().out
+
+
+def test_library_results_flag_generic_likeness_as_indicative() -> None:
+    generic = sp.build(WRITER, generic_contrast=True, syntax=False).score(LLM)
+    assert generic.indicative is True
+    assert generic.contrast_label == "generic LLM"
+    assert generic.documents and all(d.indicative for d in generic.documents)
+    assert generic.likeness_verdict is not None  # still the stored verdict, for those who want it
+    own = sp.build(WRITER, contrast=LLM, syntax=False).score(LLM)
+    assert own.indicative is False and not any(d.indicative for d in own.documents)
+    none = sp.build(WRITER, syntax=False).score(LLM)
+    assert none.indicative is False

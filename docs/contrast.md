@@ -42,7 +42,7 @@ not evidence that a human wrote the text.
 
 `styleprofile build posts/ --generic-contrast` (library: `generic_contrast=True`) adds 60
 bundled assistant-style drafts in six registers, alone or alongside your own `--contrast`
-drafts. The report calls the set "generic LLM drafts". It is a weaker comparison than drafts
+drafts. The report calls the set "generic LLM". It is a weaker comparison than drafts
 of your own briefs: the topics and lengths do not match your writer's. Its likeness range
 leaves out one register at a time, so the figures describe LLM text in a style the weights
 have not seen. Because the held-out test missed one of its bars, the likeness is shown as an

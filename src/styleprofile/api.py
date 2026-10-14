@@ -124,7 +124,7 @@ def build(
     what separates the writer from them and scores likeness to them. A file or folder given
     twice, in ``inputs`` or ``contrast``, is read once, with a note. ``generic_contrast``
     adds the bundled generic assistant drafts, alone or alongside ``contrast``, labelled
-    "generic LLM drafts". Their likeness is indicative: shown as a number without verdict
+    "generic LLM". Their likeness is indicative: shown as a number without verdict
     words, with a range learned leaving out one register at a time. Drafts from the writer's
     own briefs are a better comparison (``docs/contrast.md``). A reference too small
     to trust gets one ``NoteCode.THIN_REFERENCE`` note per reason.

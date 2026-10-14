@@ -281,7 +281,7 @@ def smoke_test(wheel: Path, work: Path, *, syntax: bool) -> None:
             "-c",
             "import styleprofile as sp; "
             "p = sp.build('examples/writer', generic_contrast=True, syntax=False); "
-            "assert p.report['contrast']['label'] == 'generic LLM drafts'; "
+            "assert p.report['contrast']['label'] == 'generic LLM'; "
             "assert p.report['contrast']['sources'] == 60; "
             "print('installed generic contrast: 60 drafts')",
         ],

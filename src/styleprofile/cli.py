@@ -789,6 +789,7 @@ def _headline(
     too_short: str | None = None,
     note: str = "",
     flagged: str = "",
+    indicative: bool = False,
 ) -> str:
     """One line with the same verdict words as the full comparison view; ``too_short``
     replaces the verdict and figures of a text too short to judge, and ``flagged`` ("4 of 40
@@ -798,7 +799,9 @@ def _headline(
     if too_short:
         return f"{name}: {too_short}"
     parts = [f"{name}: {verdict} (Delta {delta:.2f}{note})"]
-    if likeness is not None and likeness_verdict is not None and label:
+    if indicative and likeness is not None and label:
+        parts.append(f"{label} likeness (indicative) {likeness:.2f}")
+    elif likeness is not None and likeness_verdict is not None and label:
         parts.append(f"{label}-likeness {likeness_verdict.words(label)} ({likeness:.2f})")
     return "; ".join(parts) + (f" ({flagged})" if flagged else "")
 
@@ -846,7 +849,10 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
                 if doc.judged
                 else too_short_text({"chunks": doc.chunks, "words": doc.words}),
                 note=not_judged(doc.chunks, doc.chunks_judged),
-                flagged=_flag_count(doc.flagged, doc.chunks_judged, doc.chunks, label),
+                flagged=_flag_count(
+                    doc.flagged, doc.chunks_judged, doc.chunks, None if doc.indicative else label
+                ),
+                indicative=doc.indicative,
             )
             + _drifts(result, doc.name)
             for doc in ranked
@@ -874,8 +880,12 @@ def _quiet_lines(result: ScoreResult, samples: Sequence[str]) -> list[str]:
             label,
             note=note,
             flagged=_flag_count(
-                verdict["flagged"], verdict["chunks_judged"], verdict["chunks"], label
+                verdict["flagged"],
+                verdict["chunks_judged"],
+                verdict["chunks"],
+                None if result.indicative else label,
             ),
+            indicative=result.indicative,
         )
         + (_drifts(result, documents[0].name) if documents else "")
     ]
