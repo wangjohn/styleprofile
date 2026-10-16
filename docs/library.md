@@ -303,3 +303,6 @@ Human rendering uses short notes and warnings. `Profile.to_text`, `ScoreResult.t
 and `Evaluation.to_text` accept `verbose=True` for full explanations. `Note.message` and
 saved report `warnings` retain their long text; `Note.text()` selects the short form and
 `Note.text(verbose=True)` selects the original message.
+
+For optional preferences learned from rated passages, see
+[personal feedback](personal-feedback.md) and `styleprofile.feedback.FeedbackProfile`.
