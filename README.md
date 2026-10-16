@@ -231,6 +231,12 @@ A text too short to judge never fails a run. An incomparable document fails when
 flag is given. JSON records requested thresholds under `fail` and failures under `failed`;
 see [automation details](https://github.com/wangjohn/styleprofile/blob/main/docs/usage.md#fail-flags-and-automation).
 
+## Personal feedback
+
+Use `styleprofile feedback-build` to learn from rated passages and `styleprofile feedback-score`
+to get personal voice estimates with sentence evidence. Existing blind ratings can be reused;
+see [personal feedback](docs/personal-feedback.md) for the schema and development limitations.
+
 ## Using it from Python
 
 ```python
