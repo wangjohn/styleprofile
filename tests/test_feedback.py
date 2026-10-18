@@ -169,3 +169,113 @@ def test_feedback_cli_build_and_score(reference, tmp_path, capsys):
     assert result["rated_examples"] == 6
     assert result["rhetoric"]["counts"]["hypothetical_prompts"] > 0
     assert result["revision_estimate_0_to_2"] is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_missing_topic_metadata_is_resolved_per_source(reference, reverse):
+    records = examples()
+    records[1]["source_post_id"] = records[0]["source_post_id"]
+    del records[1]["topic_family"]
+    if reverse:
+        records.reverse()
+    profile = FeedbackProfile.learn(records, reference)
+    source_by_id = {r["id"]: r["source_post_id"] for r in records}
+    history = {r["id"]: r for r in profile.report["examples"]}
+    assert history["0-0"]["holdout_group"] == history["0-1"]["holdout_group"]
+    assert profile.report["diagnostics"]["groups"] == 3
+    for fold in profile.report["diagnostics"]["folds"]:
+        assert {source_by_id[i] for i in fold["train_ids"]}.isdisjoint(
+            {source_by_id[i] for i in fold["test_ids"]}
+        )
+
+
+def test_conflicting_topics_for_same_source_are_rejected_before_scoring(reference, monkeypatch):
+    records = examples()
+    records[2]["source_post_id"] = records[0]["source_post_id"]
+    monkeypatch.setattr(
+        reference, "score", lambda *a, **kw: pytest.fail("must validate groups first")
+    )
+    with pytest.raises(sp.StyleProfileError, match="conflicting topic_family"):
+        FeedbackProfile.learn(records, reference)
+
+
+def test_topic_labels_cannot_collide_with_unrelated_source_ids(reference):
+    records = examples()
+    for record in records[:2]:
+        record["source_post_id"] = "family-1"
+        del record["topic_family"]
+    profile = FeedbackProfile.learn(records, reference)
+    groups = {fold["held_out_group"] for fold in profile.report["diagnostics"]["folds"]}
+    assert groups == {"source:family-1", "topic:family-1", "topic:family-2"}
+
+
+def test_markdown_baseline_matches_ordinary_scoring(reference):
+    profile = FeedbackProfile.learn(examples(), reference)
+    text = "# Draft\n\n" + "\n\n".join(
+        f"- {line}" for line in examples()[1]["text"].split(". ") if line
+    )
+    expected = reference.score(sp.Text(text, "feedback-input"))
+    result = profile.score(text)
+    baseline = result["rhetoric"]["baseline"]
+    assert baseline["distance"] == expected.delta
+    assert baseline["contrast"] == expected.likeness
+    assert baseline["distance_label"] == expected.verdict.value
+    assert all(
+        result["rhetoric"]["text"][e["start"] : e["end"]] == e["text"]
+        for e in result["rhetoric"]["evidence"]
+    )
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", "42", '"profile"', "true"])
+def test_nonobject_profile_reports_a_cli_error(tmp_path, capsys, payload):
+    path = tmp_path / "invalid.json"
+    path.write_text(payload, encoding="utf-8")
+    with pytest.raises(sp.StyleProfileError, match="JSON object"):
+        FeedbackProfile.load(path)
+    assert main(["feedback-score", str(tmp_path / "draft.md"), str(path)]) == 1
+    error = capsys.readouterr().err
+    assert "JSON object" in error and "Traceback" not in error
+
+
+def test_feedback_file_io_uses_utf8_with_non_utf8_locale(reference, tmp_path, monkeypatch, capsys):
+    from pathlib import Path
+
+    records = examples()
+    note = "Author \u540d\u524d \u2014 concise wording."
+    records[0]["notes"] = note
+    profile = FeedbackProfile.learn(records, reference)
+    base, data, saved, draft, output = [
+        tmp_path / name
+        for name in ["base.json", "ratings.jsonl", "profile.json", "draft.md", "report.json"]
+    ]
+    reference.save(base)
+    data.write_bytes("\n".join(json.dumps(r, ensure_ascii=False) for r in records).encode("utf-8"))
+    text = records[1]["text"] + "\n\n" + note
+    draft.write_bytes(text.encode("utf-8"))
+    original_open = Path.open
+
+    def locale_open(path, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if "b" not in mode and encoding in [None, "locale"]:
+            encoding = "cp1252"
+        return original_open(path, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", locale_open)
+    profile.save(saved)
+    assert json.loads(saved.read_bytes().decode("utf-8"))["examples"][0]["notes"] == note
+    assert FeedbackProfile.load(saved).report["examples"][0]["notes"] == note
+    assert main(["feedback-build", str(data), "--reference", str(base), "-o", str(saved)]) == 0
+    assert FeedbackProfile.load(saved).report["examples"][0]["notes"] == note
+    capsys.readouterr()
+    assert main(["feedback-score", str(draft), str(saved), "--json", "-o", str(output)]) == 0
+    result = json.loads(output.read_bytes().decode("utf-8"))
+    assert note in result["rhetoric"]["text"]
+    assert json.loads(capsys.readouterr().out) == result
+
+
+def test_earlier_experimental_profile_requires_rebuilding(reference, tmp_path):
+    profile = FeedbackProfile.learn(examples(), reference)
+    profile.report["version"] = 1
+    path = tmp_path / "old.json"
+    profile.save(path)
+    with pytest.raises(sp.StyleProfileError, match="rebuild from saved ratings"):
+        FeedbackProfile.load(path)

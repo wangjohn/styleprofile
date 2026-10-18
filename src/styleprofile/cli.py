@@ -1321,7 +1321,7 @@ def _run_feedback_build(args: argparse.Namespace) -> int:
         examples = [
             json.loads(line)
             for name in args.inputs
-            for line in Path(name).read_text().splitlines()
+            for line in Path(name).read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
         if not all(isinstance(example, dict) for example in examples):
@@ -1340,10 +1340,10 @@ def _run_feedback_score(args: argparse.Namespace) -> int:
 
     from styleprofile.feedback import FeedbackProfile
 
-    report = FeedbackProfile.load(args.profile).score(Path(args.input).read_text())
+    report = FeedbackProfile.load(args.profile).score(Path(args.input).read_text(encoding="utf-8"))
     payload = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
-        Path(args.output).write_text(payload + "\n")
+        Path(args.output).write_text(payload + "\n", encoding="utf-8")
     if args.json:
         print(payload)
     else:

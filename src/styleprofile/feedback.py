@@ -23,7 +23,7 @@ from styleprofile.schema import ReferenceReport
 from styleprofile.surface import WORD, prose
 from styleprofile.surface import sentences as split_sentences
 
-VERSION = 1
+VERSION = 2
 FEATURES = (
     "distance",
     "contrast",
@@ -108,7 +108,7 @@ def rhetoric(text: str) -> dict[str, Any]:
 
 def features(text: str, reference: Profile) -> tuple[list[float], dict[str, Any]]:
     observed = rhetoric(text)
-    score = reference.score(Text(observed["text"], "feedback-input"))
+    score = reference.score(Text(text, "feedback-input"))
     if score.delta is None or score.likeness is None:
         raise StyleProfileError("feedback learning requires a comparable contrast reference")
     values = [score.delta, score.likeness, *observed["rates_per_1k"].values()]
@@ -165,12 +165,40 @@ def _predict(model: dict[str, Any], row: list[float], low: float, high: float) -
     return max(low, min(high, value))
 
 
+def _holdout_groups(records: Sequence[dict[str, Any]]) -> list[str]:
+    """Resolve optional topic metadata once per source, independently of record order."""
+    topics: dict[str, str] = {}
+    for record in records:
+        source = record.get("source_post_id")
+        if not isinstance(source, str) or not source:
+            raise StyleProfileError("every feedback example needs its source_post_id")
+        if "topic_family" not in record:
+            continue
+        topic = record["topic_family"]
+        if not isinstance(topic, str) or not topic:
+            raise StyleProfileError("topic_family must be a nonempty string when supplied")
+        if source in topics and topics[source] != topic:
+            raise StyleProfileError(
+                f"conflicting topic_family values for source_post_id {source!r}"
+            )
+        topics[source] = topic
+    # Namespaces keep a topic label from colliding with an unrelated source ID.
+    return [
+        f"topic:{topics[record['source_post_id']]}"
+        if record["source_post_id"] in topics
+        else f"source:{record['source_post_id']}"
+        for record in records
+    ]
+
+
 class FeedbackProfile:
     """Optional, portable preference layer. A saved profile embeds its base reference."""
 
     def __init__(self, report: dict[str, Any]) -> None:
+        if not isinstance(report, dict):
+            raise StyleProfileError("feedback profile must be a JSON object")
         if report.get("kind") != "feedback-profile" or report.get("version") != VERSION:
-            raise StyleProfileError("unsupported feedback profile")
+            raise StyleProfileError("unsupported feedback profile; rebuild from saved ratings")
         if report.get("features") != list(FEATURES):
             raise StyleProfileError("feedback metrics differ; rebuild from saved ratings")
         if set(report.get("models", {})) != {"voice", "revision"} or set(
@@ -195,8 +223,9 @@ class FeedbackProfile:
         records = list(examples)
         if len(records) < 6:
             raise StyleProfileError("feedback learning needs at least six rated passages")
-        ids, groups, x, voice, revision, history = set(), [], [], [], [], []
-        for record in records:
+        groups = _holdout_groups(records)
+        ids, x, voice, revision, history = set(), [], [], [], []
+        for record, group in zip(records, groups, strict=True):
             if not isinstance(record.get("id"), str) or not record["id"] or record["id"] in ids:
                 raise StyleProfileError("feedback examples need unique nonempty string IDs")
             ids.add(record["id"])
@@ -210,10 +239,6 @@ class FeedbackProfile:
                 raise StyleProfileError("feedback examples need text and notes")
             row, _ = features(record["text"], reference)
             x.append(row)
-            group = record.get("topic_family", record["source_post_id"])
-            if not isinstance(group, str) or not group:
-                raise StyleProfileError("topic_family must be a nonempty string when supplied")
-            groups.append(group)
             voice.append(float(record["voice"]))
             revision.append(float(REVISION[record["revision"]]))
             history.append(
@@ -320,11 +345,13 @@ class FeedbackProfile:
         }
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(self.report, ensure_ascii=False, indent=2) + "\n")
+        Path(path).write_text(
+            json.dumps(self.report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
 
     @classmethod
     def load(cls, path: str | Path) -> FeedbackProfile:
         try:
-            return cls(json.loads(Path(path).read_text()))
+            return cls(json.loads(Path(path).read_text(encoding="utf-8")))
         except (KeyError, TypeError, ValueError) as error:
             raise StyleProfileError(f"invalid feedback profile: {error}") from error
