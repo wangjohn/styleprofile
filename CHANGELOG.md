@@ -16,7 +16,7 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
 ### Added
 
 - **Where each counted match is.** `styleprofile.surface.match_spans(text, metric)` gives the
-  `(start, end)` character offsets of every match behind a count metric (`commas`,
+  `(start, end)` code-point offsets of every match behind a count metric (`commas`,
   `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`, `em_dashes`, `ellipses`,
   `hedges`, `boosters`, `llm_markers`, `not_just_but`) in prose text, and
   `opener_span(sentence, metric)` the span of a `transition_openers` or `and_but_so_openers`

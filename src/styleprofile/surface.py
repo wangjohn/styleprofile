@@ -498,7 +498,8 @@ def _counted(metric: str) -> tuple[re.Pattern[str], bool]:
 
 def match_spans(text: str, metric: str) -> list[tuple[int, int]]:
     """Where each match that ``<metric>_per_1k`` counts in plain ``text`` is, as
-    ``(start, end)`` character offsets into ``text``, in order.
+    ``(start, end)`` offsets into ``text``, in order. Offsets count code points (``str``
+    indices), not UTF-8 bytes or UTF-16 code units.
 
     ``metric`` is a count metric's name without ``_per_1k``: ``commas``, ``semicolons``,
     ``colons``, ``parentheses``, ``questions``, ``exclamations``, ``em_dashes``,
@@ -507,14 +508,19 @@ def match_spans(text: str, metric: str) -> list[tuple[int, int]]:
     ``len(match_spans(text, metric))`` is the count behind ``<metric>_per_1k``. Raises
     ``ValueError`` for any other name.
     """
-    pattern, straight = _counted(metric)
-    subject = _straight_apostrophes(text) if straight else text
-    return [match.span() for match in pattern.finditer(subject)]
+    _, straight = _counted(metric)
+    return _spans(text, _straight_apostrophes(text) if straight else text, metric)
+
+
+def _spans(text: str, plain: str, metric: str) -> list[tuple[int, int]]:
+    # The one place a count metric's matches are found: ``match_spans`` returns them and
+    # ``surface_metrics`` counts them. ``plain`` is ``text`` with straight apostrophes.
+    pattern, straight = _COUNTED[metric]
+    return [match.span() for match in pattern.finditer(plain if straight else text)]
 
 
 def _count(text: str, plain: str, metric: str) -> int:
-    pattern, straight = _COUNTED[metric]
-    return len(pattern.findall(plain if straight else text))
+    return len(_spans(text, plain, metric))
 
 
 def opener_span(sentence: str, metric: str) -> tuple[int, int] | None:

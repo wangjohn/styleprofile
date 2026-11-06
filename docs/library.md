@@ -256,13 +256,14 @@ dashes or hedges in a draft, use the matchers the metrics count with:
 
 ```
 
-`match_spans(text, metric)` returns `(start, end)` character offsets into `text`, in order,
+`match_spans(text, metric)` returns `(start, end)` offsets into `text`, in order,
 for `commas`, `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`,
 `em_dashes`, `ellipses`, `hedges`, `boosters`, `llm_markers` and `not_just_but`: each
 `<metric>_per_1k` without its suffix. Pass prose (`prose(markdown).text`), not raw Markdown,
 since the metrics read prose; then `len(match_spans(text, metric))` is exactly the count
-behind the rate. Curly apostrophes match phrase patterns as straight ones do, without
-shifting offsets. `opener_span(sentence, metric)` gives the opener a sentence starts with
+behind the rate. Offsets count code points, as Python indexes a `str`, so a caller that
+indexes UTF-8 bytes or UTF-16 code units converts them. Curly apostrophes match phrase
+patterns as straight ones do, without shifting offsets. `opener_span(sentence, metric)` gives the opener a sentence starts with
 for `transition_openers` or `and_but_so_openers`, or None. Both raise `ValueError` for any
 other name. The dash and ellipsis patterns themselves are `surface.EM_DASH` and
 `surface.ELLIPSIS`.

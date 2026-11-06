@@ -135,3 +135,30 @@ def test_opener_count_equals_share(text: str, metric: str) -> None:
 def test_public_patterns_keep_private_aliases() -> None:
     assert surface._EM_DASH is EM_DASH  # pyright: ignore[reportPrivateUsage]
     assert surface._ELLIPSIS is ELLIPSIS  # pyright: ignore[reportPrivateUsage]
+
+
+def test_offsets_count_code_points_past_multibyte_characters() -> None:
+    # An emoji (4 UTF-8 bytes, 2 UTF-16 units), an accented letter and curly quotes before
+    # each match: the offsets still slice the Python string to the matched text.
+    text = (
+        f"\N{GRINNING FACE} Caf\N{LATIN SMALL LETTER E WITH ACUTE} \N{LEFT SINGLE QUOTATION MARK}"
+        f"I{Q}m not sure{Q}\N{EM DASH}it{Q}s very late\N{HORIZONTAL ELLIPSIS} maybe."
+    )
+    spans = {metric: match_spans(text, metric) for metric in COUNT_METRICS}
+    assert spans["hedges"] == [(8, 20), (38, 43)]
+    assert [text[a:b] for a, b in spans["hedges"]] == [f"I{Q}m not sure", "maybe"]
+    assert [text[a:b] for a, b in spans["em_dashes"]] == ["\N{EM DASH}"]
+    assert [text[a:b] for a, b in spans["boosters"]] == ["very"]
+    assert [text[a:b] for a, b in spans["ellipses"]] == ["\N{HORIZONTAL ELLIPSIS}"]
+
+
+def test_surface_metrics_counts_through_the_span_finder(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The rates are counted from the spans themselves, so the two cannot drift apart.
+    text = "Maybe, maybe not; probably fine."
+    before = _metric_values(text)
+    found = surface._spans  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(surface, "_spans", lambda *args: [*found(*args), (0, 0)])
+    after = _metric_values(text)
+    for metric in COUNT_METRICS:
+        old, new = before[f"{metric}_per_1k"], after[f"{metric}_per_1k"]
+        assert old is not None and new is not None and new > old
