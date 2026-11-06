@@ -81,8 +81,32 @@ _ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|vs|mr|mrs|ms|dr|st|jr|sr|fig|approx)
 # Abbreviations that are also ordinary words, only before a number ("No. 5", not "said no.").
 _NUMBER_ABBREVIATION = re.compile(r"\b(?:No|Nos|[Vv]ol|pp|[Cc]h)\.$")
 _SINGLE_QUOTES = ("'", "\N{LEFT SINGLE QUOTATION MARK}", "\N{RIGHT SINGLE QUOTATION MARK}")
-_EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
-_ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
+# A dash used as punctuation: an em dash, or a hyphen pair or spaced hyphen between words.
+EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
+ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
+_EM_DASH = EM_DASH  # the names before 0.3.0
+_ELLIPSIS = ELLIPSIS
+# The pattern each count metric counts over prose text, and whether it reads the text with
+# curly apostrophes made straight (phrase patterns are written with straight ones). Both
+# ``surface_metrics`` and ``match_spans`` count from this table, so they cannot disagree.
+_COUNTED: dict[str, tuple[re.Pattern[str], bool]] = {
+    "commas": (re.compile(","), False),
+    "semicolons": (re.compile(";"), False),
+    "colons": (re.compile(":"), False),
+    "parentheses": (re.compile(r"\("), False),
+    "questions": (re.compile(r"\?"), False),
+    "exclamations": (re.compile("!"), False),
+    "em_dashes": (EM_DASH, False),
+    "ellipses": (ELLIPSIS, False),
+    "hedges": (HEDGE, True),
+    "boosters": (BOOSTER, True),
+    "llm_markers": (LLM_MARKER, True),
+    "not_just_but": (NOT_JUST_BUT, True),
+}
+_OPENERS: dict[str, re.Pattern[str]] = {
+    "transition_openers": TRANSITION_OPENER,
+    "and_but_so_openers": AND_BUT_SO_OPENER,
+}
 _FUNCTION_SET = frozenset(FUNCTION_WORDS)
 PARAGRAPH_METRICS = (
     "paragraph_sentences_mean",
@@ -459,6 +483,55 @@ def sentences(block: str) -> list[str]:
     return [part for part in parts if WORD.search(part)]
 
 
+def _straight_apostrophes(text: str) -> str:
+    # One code point for another, so offsets into the result are offsets into ``text``.
+    return text.replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
+
+
+def _counted(metric: str) -> tuple[re.Pattern[str], bool]:
+    try:
+        return _COUNTED[metric]
+    except KeyError:
+        known = ", ".join(_COUNTED)
+        raise ValueError(f"unknown count metric {metric!r}; expected one of {known}") from None
+
+
+def match_spans(text: str, metric: str) -> list[tuple[int, int]]:
+    """Where each match that ``<metric>_per_1k`` counts in plain ``text`` is, as
+    ``(start, end)`` character offsets into ``text``, in order.
+
+    ``metric`` is a count metric's name without ``_per_1k``: ``commas``, ``semicolons``,
+    ``colons``, ``parentheses``, ``questions``, ``exclamations``, ``em_dashes``,
+    ``ellipses``, ``hedges``, ``boosters``, ``llm_markers`` or ``not_just_but``. ``text``
+    is prose, as ``prose(markdown).text`` returns it; for that text,
+    ``len(match_spans(text, metric))`` is the count behind ``<metric>_per_1k``. Raises
+    ``ValueError`` for any other name.
+    """
+    pattern, straight = _counted(metric)
+    subject = _straight_apostrophes(text) if straight else text
+    return [match.span() for match in pattern.finditer(subject)]
+
+
+def _count(text: str, plain: str, metric: str) -> int:
+    pattern, straight = _COUNTED[metric]
+    return len(pattern.findall(plain if straight else text))
+
+
+def opener_span(sentence: str, metric: str) -> tuple[int, int] | None:
+    """Where the opener that ``<metric>_pct`` counts begins ``sentence``, or None.
+
+    ``metric`` is ``transition_openers`` or ``and_but_so_openers``; ``sentence`` is one
+    sentence as ``sentences`` returns it. Raises ``ValueError`` for any other name.
+    """
+    try:
+        pattern = _OPENERS[metric]
+    except KeyError:
+        known = ", ".join(_OPENERS)
+        raise ValueError(f"unknown opener metric {metric!r}; expected one of {known}") from None
+    match = pattern.match(sentence)
+    return match.span() if match else None
+
+
 def _mean(values: Sequence[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
@@ -528,7 +601,7 @@ def surface_metrics(
     word_count = len(tokens)
     per_1k = 1000 / word_count if word_count else None
     # Phrase patterns are written with straight apostrophes; curly ones must match too.
-    plain = text.replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
+    plain = _straight_apostrophes(text)
 
     sentence_texts = [sentence for block in parsed.blocks for sentence in sentences(block)]
     # Counting words needs no folding: as many as ``words`` gives.
@@ -571,14 +644,14 @@ def surface_metrics(
         "mattr_100": mattr(tokens),
         "mtld": mtld(tokens),
         "hapax_share_100": hapax_share(tokens),
-        "commas_per_1k": rate(text.count(",")),
-        "semicolons_per_1k": rate(text.count(";")),
-        "colons_per_1k": rate(text.count(":")),
-        "em_dashes_per_1k": rate(len(_EM_DASH.findall(text))),
-        "parentheses_per_1k": rate(text.count("(")),
-        "questions_per_1k": rate(text.count("?")),
-        "exclamations_per_1k": rate(text.count("!")),
-        "ellipses_per_1k": rate(len(_ELLIPSIS.findall(text))),
+        "commas_per_1k": rate(_count(text, plain, "commas")),
+        "semicolons_per_1k": rate(_count(text, plain, "semicolons")),
+        "colons_per_1k": rate(_count(text, plain, "colons")),
+        "em_dashes_per_1k": rate(_count(text, plain, "em_dashes")),
+        "parentheses_per_1k": rate(_count(text, plain, "parentheses")),
+        "questions_per_1k": rate(_count(text, plain, "questions")),
+        "exclamations_per_1k": rate(_count(text, plain, "exclamations")),
+        "ellipses_per_1k": rate(_count(text, plain, "ellipses")),
         "quotations_per_1k": rate(
             text.count("\N{LEFT DOUBLE QUOTATION MARK}") + straight_double // 2
         ),
@@ -594,18 +667,18 @@ def surface_metrics(
         "negations_per_1k": rate(
             sum(token in NEGATIONS or token.endswith("n't") for token in tokens)
         ),
-        "hedges_per_1k": rate(len(HEDGE.findall(plain))),
-        "boosters_per_1k": rate(len(BOOSTER.findall(plain))),
+        "hedges_per_1k": rate(_count(text, plain, "hedges")),
+        "boosters_per_1k": rate(_count(text, plain, "boosters")),
         "and_but_so_openers_pct": _pct(
-            sum(bool(AND_BUT_SO_OPENER.match(s)) for s in sentence_texts),
+            sum(opener_span(s, "and_but_so_openers") is not None for s in sentence_texts),
             len(sentence_texts),
         ),
         "transition_openers_pct": _pct(
-            sum(bool(TRANSITION_OPENER.match(s)) for s in sentence_texts),
+            sum(opener_span(s, "transition_openers") is not None for s in sentence_texts),
             len(sentence_texts),
         ),
-        "llm_markers_per_1k": rate(len(LLM_MARKER.findall(plain))),
-        "not_just_but_per_1k": rate(len(NOT_JUST_BUT.findall(plain))),
+        "llm_markers_per_1k": rate(_count(text, plain, "llm_markers")),
+        "not_just_but_per_1k": rate(_count(text, plain, "not_just_but")),
         "headings_per_1k": rate(parsed.headings),
         "list_items_per_1k": rate(parsed.list_items),
         "links_per_1k": rate(parsed.links),
