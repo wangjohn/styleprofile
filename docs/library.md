@@ -239,6 +239,35 @@ its numbers, so they are not `Settings` and are never saved:
   `STYLEPROFILE_NO_CACHE=1` turns it off everywhere. When it cannot be used, the run goes
   on without it and adds a `NoteCode.CACHE_UNAVAILABLE` note.
 
+## Finding what a metric counts
+
+To show a writer where a count metric's matches are, for instance to highlight the em
+dashes or hedges in a draft, use the matchers the metrics count with:
+
+```python
+>>> from styleprofile.surface import match_spans, opener_span, prose
+>>> text = prose("I think it’s fine—probably. However, it is very late...").text
+>>> [text[start:end] for start, end in match_spans(text, "hedges")]
+['I think', 'probably']
+>>> match_spans(text, "em_dashes"), match_spans(text, "ellipses")
+([(17, 18)], [(52, 55)])
+>>> opener_span("However, it is very late...", "transition_openers")
+(0, 7)
+
+```
+
+`match_spans(text, metric)` returns `(start, end)` offsets into `text`, in order,
+for `commas`, `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`,
+`em_dashes`, `ellipses`, `hedges`, `boosters`, `llm_markers` and `not_just_but`: each
+`<metric>_per_1k` without its suffix. Pass prose (`prose(markdown).text`), not raw Markdown,
+since the metrics read prose; then `len(match_spans(text, metric))` is exactly the count
+behind the rate. Offsets count code points, as Python indexes a `str`, so a caller that
+indexes UTF-8 bytes or UTF-16 code units converts them. Curly apostrophes match phrase
+patterns as straight ones do, without shifting offsets. `opener_span(sentence, metric)` gives the opener a sentence starts with
+for `transition_openers` or `and_but_so_openers`, or None. Both raise `ValueError` for any
+other name. The dash and ellipsis patterns themselves are `surface.EM_DASH` and
+`surface.ELLIPSIS`.
+
 ## Saving, loading and evaluating
 
 - `profile.save("writer.json")` and `sp.load("writer.json")` read and write the

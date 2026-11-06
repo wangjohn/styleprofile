@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "styleprofile"
-version = "0.2.0"
+version = "0.3.0"
 description = "Stylometric profiles of a writer's texts: drift from a reference and LLM-likeness."
 readme = "README.md"
 requires-python = ">=3.11"

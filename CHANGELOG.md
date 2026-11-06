@@ -4,12 +4,27 @@ All notable changes to styleprofile. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version numbers follow
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may break things.
 
-## [Unreleased]
+## [0.3.0] - Unreleased
+
+Not yet published or tagged; the date is set on release day (see `docs/releasing.md`).
 
 > [!IMPORTANT]
 > **Rebuild your profiles.** References and scores now carry report version 9.0. Different
 > majors require rebuilding: run `styleprofile build` again on the writer's texts, and
 > `styleprofile score` again for saved score reports.
+
+### Added
+
+- **Where each counted match is.** `styleprofile.surface.match_spans(text, metric)` gives the
+  `(start, end)` code-point offsets of every match behind a count metric (`commas`,
+  `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`, `em_dashes`, `ellipses`,
+  `hedges`, `boosters`, `llm_markers`, `not_just_but`) in prose text, and
+  `opener_span(sentence, metric)` the span of a `transition_openers` or `and_but_so_openers`
+  opener. `surface_metrics` counts with the same matchers, so `len(match_spans(text, m))` is
+  always the count behind `<m>_per_1k`; no number in any report changes. The dash and
+  ellipsis patterns are public as `surface.EM_DASH` and `surface.ELLIPSIS` (the old
+  `_EM_DASH` and `_ELLIPSIS` names remain as aliases), so other tools can highlight matches
+  without copying them.
 
 ### Fixed
 
