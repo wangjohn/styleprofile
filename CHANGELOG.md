@@ -24,7 +24,10 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
   and two or more triads in 43% and 9% (4.7x). Here they are measured like every other metric:
   against the writer's own rate, not as a detector. They change what profiles measure, and
   0.3.0 already requires a rebuild (report version 9.0), so they add no extra rebuild. On
-  `examples/`, Deltas move by up to 0.05 and no verdict changes.
+  `examples/`, Deltas move by up to 0.08 and no overall or per-document verdict changes; one
+  per-area verdict (voice, for the writer-and-draft sample) moves from very different to
+  clearly different. Both are narrow heuristics, described where they are defined in
+  `styleprofile.metrics`, and their dash, ellipsis and quote forms count alike.
 - **Where each counted match is.** `styleprofile.surface.match_spans(text, metric)` gives the
   `(start, end)` code-point offsets of every match behind a count metric (`commas`,
   `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`, `em_dashes`, `ellipses`,

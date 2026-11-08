@@ -50,7 +50,7 @@ Voice and stance
   LLM marker words (delve, crucial)                  0.0 /1k   0.0 - 0.0 /1k
   "Not just X, but Y"                                0.0 /1k   0.0 - 0.0 /1k
   "It's not X, it's Y"                               0.0 /1k   0.0 - 0.0 /1k
-  Three-part lists ("A, B, and C")                   4.0 /1k   0.3 - 7.7 /1k
+  Three-part lists ("A, B, and C")                   3.8 /1k   0.5 - 7.0 /1k
 
 Formatting
   Headings                                           1.6 /1k   1.5 - 1.6 /1k

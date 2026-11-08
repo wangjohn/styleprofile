@@ -23,7 +23,7 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Vocabulary                   0.68x  ███░░░░░░░░░░░░░░░░░  close
   Function words               0.62x  ███░░░░░░░░░░░░░░░░░  close
   Punctuation                  0.57x  ███░░░░░░░░░░░░░░░░░  close
-  Voice and stance             0.52x  ██░░░░░░░░░░░░░░░░░░  close
+  Voice and stance             0.56x  ███░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.38x  ██░░░░░░░░░░░░░░░░░░  close
   Sentence shape               0.26x  █░░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.00x  ░░░░░░░░░░░░░░░░░░░░  close

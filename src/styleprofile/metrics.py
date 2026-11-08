@@ -49,7 +49,12 @@ NOT_JUST_BUT = re.compile(r"\bnot (?:just|only|merely|simply)\b[^.?!]{0,80}?\bbu
 # A negation, then a restatement in the same sentence or the next one: "This isn't a
 # report, it's a map", "It's not about speed. It's about trust." The ``evidence`` group is
 # the counted span: the negated clause through the restating "it's" or "they are". A
-# negated clause that only continues ("is not ready, it is scheduled") does not count.
+# negated clause that only continues ("is not ready, it is scheduled") does not count. It is
+# deliberately narrow, the form measured on labeled drafts: the negated part starts with a
+# determiner or "about" ("not a", "not the", "not about"), and the two parts are joined by a
+# comma, semicolon, period or dash (an em or en dash, "--" or a spaced hyphen). "It's not
+# easy, it's necessary", "...it's actually a map" and "It's not X! It's Y." do not count, and
+# a new subject can ("This wasn't the plan, they were late").
 CORRECTIVE_CONTRAST = re.compile(
     r"(?:^|(?<=[.!?\n,;]))(?<!\be\.g\.)(?<!\bi\.e\.)[^\S\r\n]*(?:(?:and|but|so)[^\S\r\n]+)?"
     r"(?P<evidence>(?=[^\s,])[^.!?;:,\r\n]{0,120}?"
@@ -59,7 +64,8 @@ CORRECTIVE_CONTRAST = re.compile(
     r"(?:(?:about[^\S\r\n]+)?(?:a|an|the|your|my|our|their|his|her|its|this|that|these|those"
     r"|some|any|another|one|more|less)\b|about\b)"
     r"[^.!?;:\r\n]{0,120}?"
-    r"(?:[.;,][^\S\r\n]*|[^\S\r\n]*[\N{EM DASH}\N{EN DASH}][^\S\r\n]*|[^\S\r\n]+-[^\S\r\n]+)"
+    r"(?:[.;,][^\S\r\n]*|[^\S\r\n]*(?:[\N{EM DASH}\N{EN DASH}]|--)[^\S\r\n]*"
+    r"|[^\S\r\n]+-[^\S\r\n]+)"
     r"(?:it|they)(?:'(?:s|re)|[^\S\r\n]+(?:is|are|was|were)))"
     r"(?=[^\S\r\n]*:|[^\S\r\n]+(?!(?:not|never|also|still|too|on|at|in|until|till|from|due"
     r"|scheduled|now|actually)\b)"
@@ -67,13 +73,25 @@ CORRECTIVE_CONTRAST = re.compile(
     re.I,
 )
 # A whole sentence or semicolon clause that is a three-part list: "We listen, we learn, and
-# we act." Each part is 1-60 characters with no comma or sentence break, so a longer list's
-# last three items never count. A sentence with an introductory comma does not count either.
+# we act." Each part is 1-60 characters with no comma, colon or sentence break, and the
+# parts stay on one line, so a longer list's last three items never count and a list never
+# runs across paragraphs. A sentence that opens with an introductory word or clause ("When we
+# met, Ann and Bo came", "However, we tried, and it failed") does not count. This is a
+# punctuation heuristic: an abbreviation ("Dr. Smith, Jones, and Lee") can still start one.
+_TRIAD_CHAR = r"[^,;:.!?\N{HORIZONTAL ELLIPSIS}\r\n]"
+_TRIAD_ITEM = rf"(?={_TRIAD_CHAR}*\w){_TRIAD_CHAR}{{1,60}}"
+_TRIAD_INTRO = (
+    r"(?:when|whenever|if|however|well|because|although|though|while|after|before|since|as"
+    r"|once|unless|until|yes|no|so|but|and|or|then|still|now|also|first|finally|meanwhile"
+    r"|instead|indeed|sure|oh|okay|ok)\b"
+)
 PARALLEL_TRIAD = re.compile(
-    r"(?:^|(?<=[.!?;])|(?<=\n))(?>[^\S\r\n]*)"
-    r"(?P<evidence>(?=[^,;.!?\r\n]*\w)[^,;.!?\r\n\s][^,;.!?\r\n]{0,59},(?>\s+)"
-    r"(?=[^,;.!?\r\n]*\w)[^,;.!?\r\n]{1,60},?(?>\s+)and(?>\s+)"
-    r"(?=[^,;.!?\r\n]*\w)[^,;.!?\r\n]{1,60})(?=[;.!?]|$)",
+    r"(?:^|(?<=;)|(?<=[.!?\N{HORIZONTAL ELLIPSIS}][^\S\r\n])"
+    r"|(?<=[.!?\N{HORIZONTAL ELLIPSIS}][\"'\N{RIGHT DOUBLE QUOTATION MARK}"
+    r"\N{RIGHT SINGLE QUOTATION MARK})][^\S\r\n]))(?>[^\S\r\n]*)"
+    rf"(?!{_TRIAD_INTRO})(?P<evidence>(?=\S){_TRIAD_ITEM},(?>[^\S\r\n]+)"
+    rf"{_TRIAD_ITEM},?(?>[^\S\r\n]+)and(?>[^\S\r\n]+){_TRIAD_ITEM})"
+    r"(?=[;:.!?\N{HORIZONTAL ELLIPSIS}]|$)",
     re.I | re.M,
 )
 TRANSITION_OPENER = re.compile(

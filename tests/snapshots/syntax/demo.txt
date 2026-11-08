@@ -30,7 +30,7 @@ LLM-likeness: like the reference   0.70
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.04x  ████░░░░░░░░░░░░░░░░  somewhat different
+  Voice and stance             1.11x  ████░░░░░░░░░░░░░░░░  somewhat different
   Vocabulary                   0.72x  ███░░░░░░░░░░░░░░░░░  close
   Function words               0.66x  ███░░░░░░░░░░░░░░░░░  close
   Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close

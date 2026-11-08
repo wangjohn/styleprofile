@@ -7,7 +7,7 @@ By document   furthest from the reference first
   2 documents: 2 close
   document                      words  verdict             Delta  LLM-likeness
   examples/writer/old-maps.md     640  close                0.61  like reference
-  examples/…ter/sharpening.md     637  close                0.56  like reference
+  examples/…ter/sharpening.md     637  close                0.57  like reference
 
 Across 2 documents: close   Delta 0.59
   Lower is closer. The reference's own held-out writing at these lengths (637-640 words per chunk) scores 0.81 typically
@@ -23,9 +23,9 @@ By area   Delta ÷ the top of the reference's usual range in each area; bars on 
   Vocabulary                   0.68x  ███░░░░░░░░░░░░░░░░░  close
   Function words               0.62x  ███░░░░░░░░░░░░░░░░░  close
   Punctuation                  0.57x  ███░░░░░░░░░░░░░░░░░  close
+  Voice and stance             0.56x  ███░░░░░░░░░░░░░░░░░  close
   How sentences open           0.54x  ██░░░░░░░░░░░░░░░░░░  close
   Syntax                       0.54x  ██░░░░░░░░░░░░░░░░░░  close
-  Voice and stance             0.52x  ██░░░░░░░░░░░░░░░░░░  close
   Rhythm                       0.38x  ██░░░░░░░░░░░░░░░░░░  close
   Sentence shape               0.26x  █░░░░░░░░░░░░░░░░░░░  close
   Formatting                   0.00x  ░░░░░░░░░░░░░░░░░░░░  close
