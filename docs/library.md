@@ -258,7 +258,8 @@ dashes or hedges in a draft, use the matchers the metrics count with:
 
 `match_spans(text, metric)` returns `(start, end)` offsets into `text`, in order,
 for `commas`, `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`,
-`em_dashes`, `ellipses`, `hedges`, `boosters`, `llm_markers` and `not_just_but`: each
+`em_dashes`, `ellipses`, `hedges`, `boosters`, `llm_markers`, `not_just_but`,
+`corrective_contrasts` and `parallel_triads`: each
 `<metric>_per_1k` without its suffix. Pass prose (`prose(markdown).text`), not raw Markdown,
 since the metrics read prose; then `len(match_spans(text, metric))` is exactly the count
 behind the rate. Offsets count code points, as Python indexes a `str`, so a caller that

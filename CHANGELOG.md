@@ -18,6 +18,19 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
 - **A second held-out evaluation set for generic contrast.** `bench/eval/llm-heldout-wide/`
   holds 200 short emails and posts from two non-Claude models, for evaluation only (it is in
   the sdist, not the wheel). The WP-10b plan reports results on it alongside the 16-draft set.
+- **Two new voice metrics.** `corrective_contrasts_per_1k` counts a negation restated in the
+  same or the next sentence ("This isn't a report, it's a map", "It's not about speed. It's
+  about trust."). `parallel_triads_per_1k` counts sentences and semicolon clauses that are a
+  three-part list ("We listen, we learn, and we act"). Both are count metrics, so
+  `match_spans` finds them too. The patterns come from a rule-based AI-writing checker where,
+  on 1,124 labeled drafts, the contrast appeared in 9% of LLM drafts and 1% of human ones (8.4x),
+  and two or more triads in 43% and 9% (4.7x). Here they are measured like every other metric:
+  against the writer's own rate, not as a detector. They change what profiles measure, and
+  0.3.0 already requires a rebuild (report version 9.0), so they add no extra rebuild. On
+  `examples/`, Deltas move by up to 0.08 and no overall or per-document verdict changes; one
+  per-area verdict (voice, for the writer-and-draft sample) moves from very different to
+  clearly different. Both are narrow heuristics, described where they are defined in
+  `styleprofile.metrics`, and their dash, ellipsis and quote forms count alike.
 - **Where each counted match is.** `styleprofile.surface.match_spans(text, metric)` gives the
   `(start, end)` code-point offsets of every match behind a count metric (`commas`,
   `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`, `em_dashes`, `ellipses`,

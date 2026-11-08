@@ -28,6 +28,8 @@ COUNT_METRICS = (
     "boosters",
     "llm_markers",
     "not_just_but",
+    "corrective_contrasts",
+    "parallel_triads",
 )
 
 Q = "\N{RIGHT SINGLE QUOTATION MARK}"
@@ -40,6 +42,8 @@ TEXTS = (
     f"Moreover, it{Q}s crucial: in today{Q}s"
     " ever-evolving landscape we delve into robust, seamless tools. Furthermore, it is worth"
     " noting that this is not only fast but cheap. Kind of. Sort of? It seems so...",
+    f"This isn{Q}t a report, it{Q}s a map. It{Q}s not about speed. It{Q}s about trust. We"
+    " listen, we learn, and we act; we left early, quietly, and happily.",
     "Plain sentence with nothing to find in it at all",
     "",
 )
@@ -102,6 +106,64 @@ def test_spans_slice_to_matched_text() -> None:
         ("exclamations", "!"),
     ]:
         assert [punctuation[a:b] for a, b in match_spans(punctuation, metric)] == [mark]
+
+
+def test_corrective_contrast_spans() -> None:
+    text = (
+        f"This isn{Q}t a report, it{Q}s a map. It{Q}s not about speed. It{Q}s about trust."
+        " The plan is not ready, it is scheduled for May. It is not a cat, it is not a dog."
+    )
+    assert [text[a:b] for a, b in match_spans(text, "corrective_contrasts")] == [
+        f"This isn{Q}t a report, it{Q}s",
+        f"It{Q}s not about speed. It{Q}s",
+    ]
+    # Every dash form joins the two parts, as em dashes and "--" are the same to scoring.
+    for dash in ("\N{EM DASH}", " \N{EM DASH} ", "--", " -- ", " - ", "\N{EN DASH}"):
+        dashed = f"It is not a report{dash}it is a map."
+        assert len(match_spans(dashed, "corrective_contrasts")) == 1, dash
+    # Same spans whether apostrophes are curly or straight.
+    straight = text.replace(Q, "'")
+    assert match_spans(straight, "corrective_contrasts") == match_spans(
+        text, "corrective_contrasts"
+    )
+
+
+def test_parallel_triad_spans() -> None:
+    text = (
+        "We listen, we learn, and we act. I bought eggs, milk, bread, and jam. When we met,"
+        " Ann, Bo and Cy came; we left early, quietly, and happily.\n\nRed, green and blue."
+    )
+    assert [text[a:b] for a, b in match_spans(text, "parallel_triads")] == [
+        "We listen, we learn, and we act",
+        "we left early, quietly, and happily",
+        "Red, green and blue",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "When we met, Ann and Bo came.",
+        "If it rains, we will stay and wait.",
+        "However, we tried, and it failed.",
+        "Well, I think so, and so does she.",
+        "We listen,\n\nwe learn,\n\nand we act.",
+        "Version 3.5, 4, and 5 are supported.",
+    ],
+)
+def test_parallel_triad_rejects(text: str) -> None:
+    assert match_spans(text, "parallel_triads") == []
+
+
+def test_parallel_triad_boundaries_ignore_typography() -> None:
+    dots = "A, B and C... D, E and F."
+    glyph = dots.replace("...", "\N{HORIZONTAL ELLIPSIS}")
+    assert len(match_spans(dots, "parallel_triads")) == 2
+    assert len(match_spans(glyph, "parallel_triads")) == 2
+    colon = "Fast, cheap, and good: pick two."
+    assert [colon[a:b] for a, b in match_spans(colon, "parallel_triads")] == [
+        "Fast, cheap, and good"
+    ]
 
 
 def test_unknown_metric_raises() -> None:

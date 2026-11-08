@@ -24,18 +24,24 @@ HAS_SPACY = importlib.util.find_spec("spacy") is not None
 
 STRAIGHT = (
     'She said, "Don\'t go." He\'d "already" gone -- well... almost.\n\n'
-    "It's the writer's own 'habit', isn't it?"
+    "It's the writer's own 'habit', isn't it?\n\n"
+    "This isn't a report -- it's a map. Fast, cheap, and good. We listen, we learn, and we act..."
 )
 TYPOGRAPHIC = (
     "She said, \u201cDon\u2019t go.\u201d He\u2019d \u201calready\u201d gone \u2014 well\u2026 "
     "almost.\n\n"
-    "It\u2019s the writer\u2019s own \u2018habit\u2019, isn\u2019t it?"
+    "It\u2019s the writer\u2019s own \u2018habit\u2019, isn\u2019t it?\n\n"
+    "This isn\u2019t a report \u2014 it\u2019s a map. Fast, cheap, and good. We listen, we learn, "
+    "and we act\u2026"
 )
 
 
 def test_metrics_and_trigrams_do_not_depend_on_the_glyphs_used() -> None:
     straight, typographic = surface_metrics(STRAIGHT), surface_metrics(TYPOGRAPHIC)
     assert straight == typographic
+    # The sample exercises the constructions whose boundaries are dashes and ellipses.
+    assert straight["voice"]["corrective_contrasts_per_1k"]
+    assert straight["voice"]["parallel_triads_per_1k"]
     assert char_trigrams(STRAIGHT.replace("--", "-").replace("...", "...")) == char_trigrams(
         TYPOGRAPHIC
     )
