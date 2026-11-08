@@ -1,7 +1,7 @@
 $ styleprofile metrics
 [exit 0]
 --- stdout
-152 metrics. Syntax and sentence-opening metrics need spaCy.
+154 metrics. Syntax and sentence-opening metrics need spaCy.
 
 Size
   Words                                               Prose words, after code, tables and markup are removed.
@@ -56,6 +56,9 @@ Voice and stance
   LLM marker words (delve, crucial)            /1k    Words and phrases markedly more common in LLM prose (a drift
                                                       signal, not a detector).
   "Not just X, but Y"                          /1k    The "not just X, but Y" construction.
+  "It's not X, it's Y"                         /1k    A negation restated in the same or next sentence: "it's not X,
+                                                      it's Y".
+  Three-part lists ("A, B, and C")             /1k    Sentences or clauses that are a three-part list: "A, B, and C".
 
 Formatting
   Headings                                     /1k    Markdown headings.
