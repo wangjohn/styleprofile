@@ -46,6 +46,36 @@ LLM_MARKER = re.compile(
     re.I,
 )
 NOT_JUST_BUT = re.compile(r"\bnot (?:just|only|merely|simply)\b[^.?!]{0,80}?\bbut\b", re.I)
+# A negation, then a restatement in the same sentence or the next one: "This isn't a
+# report, it's a map", "It's not about speed. It's about trust." The ``evidence`` group is
+# the counted span: the negated clause through the restating "it's" or "they are". A
+# negated clause that only continues ("is not ready, it is scheduled") does not count.
+CORRECTIVE_CONTRAST = re.compile(
+    r"(?:^|(?<=[.!?\n,;]))(?<!\be\.g\.)(?<!\bi\.e\.)[^\S\r\n]*(?:(?:and|but|so)[^\S\r\n]+)?"
+    r"(?P<evidence>(?=[^\s,])[^.!?;:,\r\n]{0,120}?"
+    r"(?:\b(?:is|are|was|were)n't|\b(?:is|are|was|were)[^\S\r\n]+not"
+    r"|\b(?:it|that|this|he|she|what)'s[^\S\r\n]+not|\b(?:you|we|they)'re[^\S\r\n]+not)"
+    r"[^\S\r\n]+(?:(?:just|only|merely|simply|really)[^\S\r\n]+)?"
+    r"(?:(?:about[^\S\r\n]+)?(?:a|an|the|your|my|our|their|his|her|its|this|that|these|those"
+    r"|some|any|another|one|more|less)\b|about\b)"
+    r"[^.!?;:\r\n]{0,120}?"
+    r"(?:[.;,][^\S\r\n]*|[^\S\r\n]*[\N{EM DASH}\N{EN DASH}][^\S\r\n]*|[^\S\r\n]+-[^\S\r\n]+)"
+    r"(?:it|they)(?:'(?:s|re)|[^\S\r\n]+(?:is|are|was|were)))"
+    r"(?=[^\S\r\n]*:|[^\S\r\n]+(?!(?:not|never|also|still|too|on|at|in|until|till|from|due"
+    r"|scheduled|now|actually)\b)"
+    r"[\w\N{LEFT DOUBLE QUOTATION MARK}\"\N{LEFT SINGLE QUOTATION MARK}'])",
+    re.I,
+)
+# A whole sentence or semicolon clause that is a three-part list: "We listen, we learn, and
+# we act." Each part is 1-60 characters with no comma or sentence break, so a longer list's
+# last three items never count. A sentence with an introductory comma does not count either.
+PARALLEL_TRIAD = re.compile(
+    r"(?:^|(?<=[.!?;])|(?<=\n))(?>[^\S\r\n]*)"
+    r"(?P<evidence>(?=[^,;.!?\r\n]*\w)[^,;.!?\r\n\s][^,;.!?\r\n]{0,59},(?>\s+)"
+    r"(?=[^,;.!?\r\n]*\w)[^,;.!?\r\n]{1,60},?(?>\s+)and(?>\s+)"
+    r"(?=[^,;.!?\r\n]*\w)[^,;.!?\r\n]{1,60})(?=[;.!?]|$)",
+    re.I | re.M,
+)
 TRANSITION_OPENER = re.compile(
     r"^(?:however|moreover|furthermore|additionally|overall|ultimately|importantly|notably|"
     r"in fact|that said|in short|in conclusion|as a result|consequently|thus|therefore)\b",
@@ -364,6 +394,18 @@ METRICS: tuple[Metric, ...] = (
         "not_just_but_per_1k",
         '"Not just X, but Y"',
         'The "not just X, but Y" construction.',
+    ),
+    _rate(
+        "voice",
+        "corrective_contrasts_per_1k",
+        "\"It's not X, it's Y\"",
+        "A negation restated in the same or next sentence: \"it's not X, it's Y\".",
+    ),
+    _rate(
+        "voice",
+        "parallel_triads_per_1k",
+        'Three-part lists ("A, B, and C")',
+        'Sentences or clauses that are a three-part list: "A, B, and C".',
     ),
     _rate("markdown", "headings_per_1k", "Headings", "Markdown headings."),
     _rate("markdown", "list_items_per_1k", "List items", "Markdown list items."),

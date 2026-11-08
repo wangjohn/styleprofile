@@ -3,16 +3,16 @@ $ styleprofile score --all examples/draft.md '<tmp>/writer.json'
 --- stdout
 STYLE COMPARISON   1 chunk, 542 words   vs writer.json (7 chunks)
 
-Overall: close   Delta 0.82
-  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.86 typically (95% under
-  1.09).
+Overall: close   Delta 0.80
+  Lower is closer. The reference's own held-out writing at this length (542 words) scores 0.85 typically (95% under
+  1.08).
 
 LLM-likeness: like the reference   0.70
   The reference's own writing at this length (542 words) scores 0.21 typically (95% under 1.06); the LLM drafts 13.58.
 
 By area   Delta ÷ the top of the reference's usual range in each area; bars on a log scale
   close up to 1x, somewhat different to 1.5x, clearly different to 2x, very different above
-  Voice and stance             1.32x  █████░░░░░░░░░░░░░░░  somewhat different
+  Voice and stance             1.04x  ████░░░░░░░░░░░░░░░░  somewhat different
   Vocabulary                   0.72x  ███░░░░░░░░░░░░░░░░░  close
   Function words               0.66x  ███░░░░░░░░░░░░░░░░░  close
   Punctuation                  0.66x  ███░░░░░░░░░░░░░░░░░  close
@@ -40,7 +40,7 @@ Pattern divergence   (Jensen-Shannon: 0 = identical, 1 = nothing shared)
 
 Delta by area   (the reference's held-out median, and the top of its usual range)
                                                    this text      median   range top
-  Voice and stance                                      1.37        0.77        1.04
+  Voice and stance                                      1.15        0.71        1.11
   Vocabulary                                            0.65        0.59        0.90
   Function words                                        0.88        1.03        1.34
   Punctuation                                           0.75        0.51        1.13
@@ -97,6 +97,8 @@ Voice and stance
   Sentences starting However / Moreover                 2.9%        0.0%   ▲▲
   LLM marker words (delve, crucial)                  1.8 /1k     0.0 /1k   ▲▲
   "Not just X, but Y"                                0.0 /1k     0.0 /1k
+  "It's not X, it's Y"                               0.0 /1k     0.0 /1k
+  Three-part lists ("A, B, and C")                   3.7 /1k     4.0 /1k
 
 Formatting
   Headings                                           1.8 /1k     1.6 /1k

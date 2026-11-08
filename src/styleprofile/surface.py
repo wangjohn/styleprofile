@@ -19,6 +19,7 @@ from styleprofile.metrics import (
     AND_BUT_SO_OPENER,
     BOOSTER,
     CONTRACTION_SUFFIX,
+    CORRECTIVE_CONTRAST,
     FIRST_PLURAL,
     FIRST_SINGULAR,
     FUNCTION_WORDS,
@@ -28,6 +29,7 @@ from styleprofile.metrics import (
     LONG_WORD_CHARS,
     NEGATIONS,
     NOT_JUST_BUT,
+    PARALLEL_TRIAD,
     S_CONTRACTIONS,
     SECOND,
     SHORT_SENTENCE_WORDS,
@@ -89,6 +91,7 @@ _ELLIPSIS = ELLIPSIS
 # The pattern each count metric counts over prose text, and whether it reads the text with
 # curly apostrophes made straight (phrase patterns are written with straight ones). Both
 # ``surface_metrics`` and ``match_spans`` count from this table, so they cannot disagree.
+# A pattern with an ``evidence`` group counts that group's span, not the whole match.
 _COUNTED: dict[str, tuple[re.Pattern[str], bool]] = {
     "commas": (re.compile(","), False),
     "semicolons": (re.compile(";"), False),
@@ -102,6 +105,8 @@ _COUNTED: dict[str, tuple[re.Pattern[str], bool]] = {
     "boosters": (BOOSTER, True),
     "llm_markers": (LLM_MARKER, True),
     "not_just_but": (NOT_JUST_BUT, True),
+    "corrective_contrasts": (CORRECTIVE_CONTRAST, True),
+    "parallel_triads": (PARALLEL_TRIAD, False),
 }
 _OPENERS: dict[str, re.Pattern[str]] = {
     "transition_openers": TRANSITION_OPENER,
@@ -503,7 +508,8 @@ def match_spans(text: str, metric: str) -> list[tuple[int, int]]:
 
     ``metric`` is a count metric's name without ``_per_1k``: ``commas``, ``semicolons``,
     ``colons``, ``parentheses``, ``questions``, ``exclamations``, ``em_dashes``,
-    ``ellipses``, ``hedges``, ``boosters``, ``llm_markers`` or ``not_just_but``. ``text``
+    ``ellipses``, ``hedges``, ``boosters``, ``llm_markers``, ``not_just_but``,
+    ``corrective_contrasts`` or ``parallel_triads``. ``text``
     is prose, as ``prose(markdown).text`` returns it; for that text,
     ``len(match_spans(text, metric))`` is the count behind ``<metric>_per_1k``. Raises
     ``ValueError`` for any other name.
@@ -516,7 +522,8 @@ def _spans(text: str, plain: str, metric: str) -> list[tuple[int, int]]:
     # The one place a count metric's matches are found: ``match_spans`` returns them and
     # ``surface_metrics`` counts them. ``plain`` is ``text`` with straight apostrophes.
     pattern, straight = _COUNTED[metric]
-    return [match.span() for match in pattern.finditer(plain if straight else text)]
+    group = "evidence" if "evidence" in pattern.groupindex else 0
+    return [match.span(group) for match in pattern.finditer(plain if straight else text)]
 
 
 def _count(text: str, plain: str, metric: str) -> int:
@@ -685,6 +692,8 @@ def surface_metrics(
         ),
         "llm_markers_per_1k": rate(_count(text, plain, "llm_markers")),
         "not_just_but_per_1k": rate(_count(text, plain, "not_just_but")),
+        "corrective_contrasts_per_1k": rate(_count(text, plain, "corrective_contrasts")),
+        "parallel_triads_per_1k": rate(_count(text, plain, "parallel_triads")),
         "headings_per_1k": rate(parsed.headings),
         "list_items_per_1k": rate(parsed.list_items),
         "links_per_1k": rate(parsed.links),

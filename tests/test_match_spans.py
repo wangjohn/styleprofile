@@ -28,6 +28,8 @@ COUNT_METRICS = (
     "boosters",
     "llm_markers",
     "not_just_but",
+    "corrective_contrasts",
+    "parallel_triads",
 )
 
 Q = "\N{RIGHT SINGLE QUOTATION MARK}"
@@ -40,6 +42,8 @@ TEXTS = (
     f"Moreover, it{Q}s crucial: in today{Q}s"
     " ever-evolving landscape we delve into robust, seamless tools. Furthermore, it is worth"
     " noting that this is not only fast but cheap. Kind of. Sort of? It seems so...",
+    f"This isn{Q}t a report, it{Q}s a map. It{Q}s not about speed. It{Q}s about trust. We"
+    " listen, we learn, and we act; we left early, quietly, and happily.",
     "Plain sentence with nothing to find in it at all",
     "",
 )
@@ -102,6 +106,34 @@ def test_spans_slice_to_matched_text() -> None:
         ("exclamations", "!"),
     ]:
         assert [punctuation[a:b] for a, b in match_spans(punctuation, metric)] == [mark]
+
+
+def test_corrective_contrast_spans() -> None:
+    text = (
+        f"This isn{Q}t a report, it{Q}s a map. It{Q}s not about speed. It{Q}s about trust."
+        " The plan is not ready, it is scheduled for May. It is not a cat, it is not a dog."
+    )
+    assert [text[a:b] for a, b in match_spans(text, "corrective_contrasts")] == [
+        f"This isn{Q}t a report, it{Q}s",
+        f"It{Q}s not about speed. It{Q}s",
+    ]
+    # Same spans whether apostrophes are curly or straight.
+    straight = text.replace(Q, "'")
+    assert match_spans(straight, "corrective_contrasts") == match_spans(
+        text, "corrective_contrasts"
+    )
+
+
+def test_parallel_triad_spans() -> None:
+    text = (
+        "We listen, we learn, and we act. I bought eggs, milk, bread, and jam. When we met,"
+        " Ann, Bo and Cy came; we left early, quietly, and happily.\n\nRed, green and blue."
+    )
+    assert [text[a:b] for a, b in match_spans(text, "parallel_triads")] == [
+        "We listen, we learn, and we act",
+        "we left early, quietly, and happily",
+        "Red, green and blue",
+    ]
 
 
 def test_unknown_metric_raises() -> None:

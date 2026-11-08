@@ -49,6 +49,8 @@ Voice and stance
   Sentences starting However / Moreover                 0.0%   0.0% - 0.0%
   LLM marker words (delve, crucial)                  0.0 /1k   0.0 - 0.0 /1k
   "Not just X, but Y"                                0.0 /1k   0.0 - 0.0 /1k
+  "It's not X, it's Y"                               0.0 /1k   0.0 - 0.0 /1k
+  Three-part lists ("A, B, and C")                   4.0 /1k   0.3 - 7.7 /1k
 
 Formatting
   Headings                                           1.6 /1k   1.5 - 1.6 /1k
@@ -152,7 +154,7 @@ Function words
   "our"                                              0.7 /1k   0.0 - 1.5 /1k
   "their"                                            0.4 /1k   0.0 - 1.6 /1k
 
-As a reference   held-out Delta 0.70 typically, 95% under 0.90 (7 documents)
+As a reference   held-out Delta 0.68 typically, 95% under 0.89 (7 documents)
   Shorter texts: calibrated at 75 words (124 pieces), 150 words (56 pieces); not at 300 words (28 pieces from 7
   documents, worth 18 independent ones), as a length needs 20 independent pieces from 3 or more documents. Under 75
   words, no verdict.
