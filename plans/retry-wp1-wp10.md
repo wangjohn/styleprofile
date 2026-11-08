@@ -47,6 +47,21 @@ Launch prompt, with `WP-N` filled in:
 - The writer side held up: 38 of 40 synthetic held-out documents and 6 of 7 held-out essays
   read "like the reference".
 
+**Evidence from a rule-based AI-writing checker (2026-11).** A separate checker, built on
+styleprofile's measurements, fitted a generic AI-vs-human rating on 1,124 labeled drafts
+(667 LLM drafts from three models, 457 human pieces). What it learned applies to WP-10b:
+- **Length leaks.** Its LLM essays were whole pieces and its human essays were excerpts, so
+  any metric that grows with length learned the corpus instead of the writing. It had to
+  leave those metrics out. This is the same failure as #37's 447–492-word drafts.
+- **Format leaks.** LLM emails carried `Subject:` lines and `[First Name]` placeholders that
+  no human email had. Filling the placeholders in cost about a tenth of the catches.
+- **Leave-one-out by draft is too kind; group the folds.** Grouping folds by writer instead
+  of by brief tripled the human false-alarm rate (3.1% to 9.2%). Leaving a whole model out,
+  recall fell from about 90% to 66% for the hardest one. This supports step 2's
+  leave-a-register-out anchor, and suggests also reporting a leave-a-model-out number.
+- **Em dashes did not separate the sets** (2% of LLM drafts and 2% of human ones on its
+  dash rule), so don't expect "no em dashes" in register 6 to remove much signal.
+
 **New evidence on 0.2.0.** Typographic quotes flip the writer's own essays. Converting their
 straight quotes and apostrophes to curly ones, as Word, Google Docs and most blog editors do,
 moves all seven from "close" to "somewhat different" (5) or "clearly different" (2), Delta
@@ -226,6 +241,11 @@ after the corpus and the code are frozen in a commit, and report whatever it sho
    - **Dev**, which you may iterate on: `examples/llm-drafts`, and the `medium` corpus's
      contrast documents.
    - **Test**, used once: `bench/eval/llm-heldout/`, the 16 drafts from WP-10a.
+   - **Wide test**, used once with the test above: `bench/eval/llm-heldout-wide/`, 200 short
+     emails and posts from two non-Claude models (Codex and Muse). Score each file with
+     `--text-field text --group-field prompt`. Its README lists what to report: by
+     generator, by length band, the count with no verdict, and the drafts again with the
+     `Subject:` line removed and `[Placeholder]` brackets replaced by a plain name.
    - **Writer held-out:** each `examples/writer` essay held out in turn, and the `medium`
      writer documents that are every fifth when sorted, against profiles built without
      them.
@@ -235,6 +255,10 @@ after the corpus and the code are frozen in a commit, and report whatever it sho
 - **Test:** at least 13 of the 16 test drafts read "leans LLM" or beyond. The AUC of test
   drafts against writer held-out documents is at least 0.90, and length alone gives at most
   0.70.
+- **Wide test:** reported, not a gate. Of the drafts that get a verdict, give the share that
+  reads "leans LLM" or beyond for each generator, before and after removing subject lines and
+  placeholders. A result that holds only with them in place does not count as generic contrast
+  working on email.
 - **Writer:** at least 95% of the held-out writer documents (both sets together) read "like
   the reference".
 - `make check`, the bench gate and `make dist-check` pass. The report gets a minor version
