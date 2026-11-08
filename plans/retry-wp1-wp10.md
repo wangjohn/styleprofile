@@ -53,8 +53,6 @@ styleprofile's measurements, fitted a generic AI-vs-human rating on 1,124 labele
 - **Length leaks.** Its LLM essays were whole pieces and its human essays were excerpts, so
   any metric that grows with length learned the corpus instead of the writing. It had to
   leave those metrics out. This is the same failure as #37's 447–492-word drafts.
-- **Format leaks.** LLM emails carried `Subject:` lines and `[First Name]` placeholders that
-  no human email had. Filling the placeholders in cost about a tenth of the catches.
 - **Leave-one-out by draft is too kind; group the folds.** Grouping folds by writer instead
   of by brief tripled the human false-alarm rate (3.1% to 9.2%). Leaving a whole model out,
   recall fell from about 90% to 66% for the hardest one. This supports step 2's
@@ -244,8 +242,10 @@ after the corpus and the code are frozen in a commit, and report whatever it sho
    - **Wide test**, used once with the test above: `bench/eval/llm-heldout-wide/`, 200 short
      emails and posts from two non-Claude models (Codex and Muse). Score each file with
      `--text-field text --group-field prompt`. Its README lists what to report: by
-     generator, by length band, the count with no verdict, and the drafts again with the
-     `Subject:` line removed and `[Placeholder]` brackets replaced by a plain name.
+     generator, by length band, the count with no verdict, and a cleaned version of each
+     draft (the exact cleaning is in the README), compared as pairs. The set helped choose
+     two metrics (`corrective_contrasts_per_1k`, `parallel_triads_per_1k`), so it is not
+     independent of them: also report the result with those two left out.
    - **Writer held-out:** each `examples/writer` essay held out in turn, and the `medium`
      writer documents that are every fifth when sorted, against profiles built without
      them.
@@ -255,9 +255,9 @@ after the corpus and the code are frozen in a commit, and report whatever it sho
 - **Test:** at least 13 of the 16 test drafts read "leans LLM" or beyond. The AUC of test
   drafts against writer held-out documents is at least 0.90, and length alone gives at most
   0.70.
-- **Wide test:** reported, not a gate. Of the drafts that get a verdict, give the share that
-  reads "leans LLM" or beyond for each generator, before and after removing subject lines and
-  placeholders. A result that holds only with them in place does not count as generic contrast
+- **Wide test:** reported, not a gate. For each generator, give the share that reads "leans
+  LLM" or beyond among the drafts judged both as given and cleaned, in both versions, and the
+  abstentions in each. A result that holds only as given does not count as generic contrast
   working on email.
 - **Writer:** at least 95% of the held-out writer documents (both sets together) read "like
   the reference".

@@ -15,6 +15,9 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
 
 ### Added
 
+- **A second held-out evaluation set for generic contrast.** `bench/eval/llm-heldout-wide/`
+  holds 200 short emails and posts from two non-Claude models, for evaluation only (it is in
+  the sdist, not the wheel). The WP-10b plan reports results on it alongside the 16-draft set.
 - **Where each counted match is.** `styleprofile.surface.match_spans(text, metric)` gives the
   `(start, end)` code-point offsets of every match behind a count metric (`commas`,
   `semicolons`, `colons`, `parentheses`, `questions`, `exclamations`, `em_dashes`, `ellipses`,
