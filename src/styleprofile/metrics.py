@@ -197,6 +197,8 @@ GROUPS: tuple[Group, ...] = (
     Group("syntax", "Syntax", scored=True),
     Group("sentence_openers", "How sentences open", scored=True),
     Group("function_words", "Function words", scored=True),
+    # Reported, not scored: a word list learned from assistant rewrites, not from writers.
+    Group("register", "Edited register", scored=False),
 )
 GROUP_BY_NAME: dict[str, Group] = {group.name: group for group in GROUPS}
 UNSCORED_GROUPS = frozenset(group.name for group in GROUPS if not group.scored)
@@ -532,6 +534,14 @@ METRICS: tuple[Metric, ...] = (
     *(
         _rate("function_words", f"fw_{word}_per_1k", f'"{word}"', f'The word "{word}".')
         for word in FUNCTION_WORDS
+    ),
+    _rate(
+        "register",
+        "edited_register_per_1k",
+        "Edited register (weighted words)",
+        "Weighted rate of words that assistant rewrites of people's drafts add (practical,"
+        " meaningful, judgment) or remove (basically, pretty, really), from the shipped"
+        " edited_register list. Reported, not part of Delta: a drift signal, not a detector.",
     ),
 )
 METRIC_BY_NAME: dict[str, Metric] = {metric.name: metric for metric in METRICS}
