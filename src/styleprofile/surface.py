@@ -36,6 +36,8 @@ from styleprofile.metrics import (
     TRANSITION_OPENER,
     grouped,
 )
+from styleprofile.wordlists import load as load_wordlist
+from styleprofile.wordlists import weighted_rate
 
 Metrics = dict[str, dict[str, float | None]]
 
@@ -700,6 +702,7 @@ def surface_metrics(
         "bold_per_1k": rate(parsed.bold),
         "code_spans_per_1k": rate(parsed.code_spans),
         **{f"fw_{word}_per_1k": rate(function_counts[word]) for word in FUNCTION_WORDS},
+        "edited_register_per_1k": weighted_rate(tokens, load_wordlist("edited_register")),
     }
     if paragraph_metrics_missing(parsed, word_count):
         values.update(dict.fromkeys(PARAGRAPH_METRICS))

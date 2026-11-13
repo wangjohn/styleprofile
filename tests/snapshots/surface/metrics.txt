@@ -1,7 +1,7 @@
 $ styleprofile metrics
 [exit 0]
 --- stdout
-154 metrics. Syntax and sentence-opening metrics need spaCy.
+155 metrics. Syntax and sentence-opening metrics need spaCy.
 
 Size
   Words                                               Prose words, after code, tables and markup are removed.
@@ -185,3 +185,9 @@ Function words
   "your"                                       /1k    The word "your".
   "our"                                        /1k    The word "our".
   "their"                                      /1k    The word "their".
+
+Edited register
+  Edited register (weighted words)             /1k    Weighted rate of words that assistant rewrites of people's drafts
+                                                      add (practical, meaningful, judgment) or remove (basically,
+                                                      pretty, really), from the shipped edited_register list. Reported,
+                                                      not part of Delta: a drift signal, not a detector.

@@ -15,6 +15,17 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
 
 ### Added
 
+- **An edited-register rate, reported but not scored.** `edited_register_per_1k` is the
+  weighted rate of 300 words that assistant rewrites of people's drafts tend to add (positive
+  weights: practical, meaningful, judgment) or remove (negative: basically, pretty, really):
+  1000 times the sum of the tokens' weights over the token count. The list ships as
+  `styleprofile/wordlists/edited_register.json`, which says how it was learned: from 6,553
+  pairs of a human draft and an assistant rewrite of it, over 12 writing domains, all written
+  before November 2022, with topic words and names filtered out. It is learned on all of those
+  pairs; held-out figures for it come from lists learned without the text being scored. It
+  sits in its own "Edited register" area, which Delta does not weigh (like "Size"), so no
+  verdict changes. `styleprofile.wordlists` has `load(name)` and `weighted_rate(tokens,
+  weights)` for any weighted list.
 - **A second held-out evaluation set for generic contrast.** `bench/eval/llm-heldout-wide/`
   holds 200 short emails and posts from two non-Claude models, for evaluation only (it is in
   the sdist, not the wheel). The WP-10b plan reports results on it alongside the 16-draft set.

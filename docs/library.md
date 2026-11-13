@@ -269,6 +269,11 @@ for `transition_openers` or `and_but_so_openers`, or None. Both raise `ValueErro
 other name. The dash and ellipsis patterns themselves are `surface.EM_DASH` and
 `surface.ELLIPSIS`.
 
+`surface_metrics` also reports `edited_register_per_1k` in the unscored "register" area: the
+weighted rate of the shipped `edited_register` word list. `styleprofile.wordlists.load(name)`
+returns a shipped list's weights and `weighted_rate(tokens, weights)` scores tokens (from
+`words`) against any list.
+
 ## Saving, loading and evaluating
 
 - `profile.save("writer.json")` and `sp.load("writer.json")` read and write the
