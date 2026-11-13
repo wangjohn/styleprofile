@@ -37,3 +37,8 @@ def test_register_is_reported_but_not_scored():
     from styleprofile.metrics import UNSCORED_GROUPS
 
     assert "register" in UNSCORED_GROUPS
+
+
+def test_loaded_list_is_read_only():
+    with pytest.raises(TypeError):
+        load("edited_register")["practical"] = 0.0  # type: ignore[index]

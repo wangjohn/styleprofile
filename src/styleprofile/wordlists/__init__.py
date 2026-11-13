@@ -12,13 +12,16 @@ import json
 from collections.abc import Mapping, Sequence
 from functools import cache
 from importlib import resources
+from types import MappingProxyType
 
 
 @cache
 def load(name: str) -> Mapping[str, float]:
-    """The weights of a shipped list, by name (``edited_register``)."""
+    """The weights of a shipped list, by name (``edited_register``), read-only: the result is
+    cached and shared, so a caller can't change what later calls get."""
     text = resources.files("styleprofile.wordlists").joinpath(f"{name}.json").read_text("utf-8")
-    return {str(word): float(weight) for word, weight in json.loads(text)["weights"].items()}
+    weights = json.loads(text)["weights"]
+    return MappingProxyType({str(word): float(weight) for word, weight in weights.items()})
 
 
 def weighted_rate(tokens: Sequence[str], weights: Mapping[str, float]) -> float | None:
