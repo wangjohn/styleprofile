@@ -90,11 +90,11 @@ EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
 ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
 _EM_DASH = EM_DASH  # the names before 0.3.0
 # Emoji and pictographs, dingbats and miscellaneous symbols (check marks, stars).
-_EMOJI_CHARS = "\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF"
+_EMOJI_CHARS = "\U0001f000-\U0001faff\u2600-\u27bf\u2b00-\u2bff"
 EMOJI = re.compile(f"[{_EMOJI_CHARS}]")
 # A line led by an emoji, an arrow or a keycap digit (1️⃣) instead of a word, dash or number:
 # the bullet style of social posts.
-SYMBOL_BULLET = re.compile(f"^[ \\t>]*(?:[{_EMOJI_CHARS}\u2190-\u21FF]|\\d\uFE0F?\u20E3)", re.M)
+SYMBOL_BULLET = re.compile(f"^[ \\t>]*(?:[{_EMOJI_CHARS}\u2190-\u21ff]|\\d\ufe0f?\u20e3)", re.M)
 _ELLIPSIS = ELLIPSIS
 # The pattern each count metric counts over prose text, and whether it reads the text with
 # curly apostrophes made straight (phrase patterns are written with straight ones). Both
