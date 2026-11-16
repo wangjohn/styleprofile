@@ -199,6 +199,8 @@ GROUPS: tuple[Group, ...] = (
     Group("function_words", "Function words", scored=True),
     # Reported, not scored: a word list learned from assistant rewrites, not from writers.
     Group("register", "Edited register", scored=False),
+    # Reported, not scored: social-post formatting, absent from most long-form writing.
+    Group("social", "Social formatting", scored=False),
 )
 GROUP_BY_NAME: dict[str, Group] = {group.name: group for group in GROUPS}
 UNSCORED_GROUPS = frozenset(group.name for group in GROUPS if not group.scored)
@@ -542,6 +544,20 @@ METRICS: tuple[Metric, ...] = (
         "Weighted rate of words that assistant rewrites of people's drafts add (practical,"
         " meaningful, judgment) or remove (basically, pretty, really), from the shipped"
         " edited_register list. Reported, not part of Delta: a drift signal, not a detector.",
+    ),
+    _rate(
+        "social",
+        "symbol_bullets_per_1k",
+        "Emoji or arrow bullets",
+        "Lines that start with an emoji, an arrow or a keycap digit (1\ufe0f\u20e3) instead of a"
+        " word, dash or number. Reported, not part of Delta.",
+    ),
+    _rate(
+        "social",
+        "emoji_per_1k",
+        "Emoji",
+        "Emoji, pictographs and symbol characters such as check marks. Reported, not part of"
+        " Delta.",
     ),
 )
 METRIC_BY_NAME: dict[str, Metric] = {metric.name: metric for metric in METRICS}

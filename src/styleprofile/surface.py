@@ -89,6 +89,12 @@ _SINGLE_QUOTES = ("'", "\N{LEFT SINGLE QUOTATION MARK}", "\N{RIGHT SINGLE QUOTAT
 EM_DASH = re.compile(r"\N{EM DASH}|(?<=\w)--(?=\w)|(?<=\w) -{1,2} (?=\w)")
 ELLIPSIS = re.compile(r"\.\.\.|\N{HORIZONTAL ELLIPSIS}")
 _EM_DASH = EM_DASH  # the names before 0.3.0
+# Emoji and pictographs, dingbats and miscellaneous symbols (check marks, stars).
+_EMOJI_CHARS = "\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF"
+EMOJI = re.compile(f"[{_EMOJI_CHARS}]")
+# A line led by an emoji, an arrow or a keycap digit (1️⃣) instead of a word, dash or number:
+# the bullet style of social posts.
+SYMBOL_BULLET = re.compile(f"^[ \\t>]*(?:[{_EMOJI_CHARS}\u2190-\u21FF]|\\d\uFE0F?\u20E3)", re.M)
 _ELLIPSIS = ELLIPSIS
 # The pattern each count metric counts over prose text, and whether it reads the text with
 # curly apostrophes made straight (phrase patterns are written with straight ones). Both
@@ -405,6 +411,13 @@ def _read_block(raw: str, tally: _Tally, continues_list: bool = False) -> None:
     flush()
 
 
+def symbol_bullets(markdown: str) -> int:
+    """Lines outside code that start with an emoji, an arrow or a keycap digit."""
+    return sum(
+        len(SYMBOL_BULLET.findall(block.raw)) for block in classify(markdown) if not block.code
+    )
+
+
 def prose(markdown: str) -> Prose:
     """Drop front matter, code, headings, tables, and markup; keep paragraphs and list items."""
     tally = _Tally(blocks=[], paragraphs=[])
@@ -703,6 +716,8 @@ def surface_metrics(
         "code_spans_per_1k": rate(parsed.code_spans),
         **{f"fw_{word}_per_1k": rate(function_counts[word]) for word in FUNCTION_WORDS},
         "edited_register_per_1k": weighted_rate(tokens, load_wordlist("edited_register")),
+        "symbol_bullets_per_1k": rate(symbol_bullets(markdown)),
+        "emoji_per_1k": rate(len(EMOJI.findall(markdown))),
     }
     if paragraph_metrics_missing(parsed, word_count):
         values.update(dict.fromkeys(PARAGRAPH_METRICS))
