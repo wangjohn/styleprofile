@@ -15,6 +15,13 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
 
 ### Added
 
+- **Two social-formatting rates, reported but not scored.** `symbol_bullets_per_1k` counts
+  lines that start with an emoji, an arrow or a keycap digit (✅, 🔹, ↳, 1️⃣) instead of a word,
+  dash or number, the bullet style of social posts. `emoji_per_1k` counts emoji, pictographs
+  and symbol characters such as check marks. Both sit in a new "Social formatting" area, which
+  Delta does not weigh, so no verdict changes. On 81 LinkedIn posts written before November
+  2022, 12% have a symbol bullet; on 314 posts four assistant models wrote from the same
+  topics, 59% do.
 - **An edited-register rate, reported but not scored.** `edited_register_per_1k` is the
   weighted rate of 300 words that assistant rewrites of people's drafts tend to add (positive
   weights: practical, meaningful, judgment) or remove (negative: basically, pretty, really):
