@@ -15,6 +15,15 @@ Not yet published or tagged; the date is set on release day (see `docs/releasing
 
 ### Added
 
+- **Three rhetorical-shape rates, reported but not scored.** `comma_series_per_1k` counts
+  sentences or clauses that are a list of three or more parts joined by commas and a final
+  "and" or "or" ("Made, ignored, and forgotten."; "use tools, check progress, recover from
+  mistakes, and ask for help"), a superset of `parallel_triads_per_1k`.
+  `semicolon_balances_per_1k` counts sentences of two short halves (3-14 words each) hinged
+  on their only semicolon. `colon_reveals_per_1k` counts sentences that set up a clause of 5
+  or more words, then end with a short clause of 2-14 words after a colon. All three sit in a
+  new "Rhetorical shapes" area, which Delta does not weigh, so no verdict changes, and
+  `match_spans` finds each one.
 - **Two social-formatting rates, reported but not scored.** `symbol_bullets_per_1k` counts
   lines that start with an emoji, an arrow or a keycap digit (✅, 🔹, ↳, 1️⃣) instead of a word,
   dash or number, the bullet style of social posts. `emoji_per_1k` counts emoji, pictographs

@@ -1,7 +1,7 @@
 $ styleprofile metrics
 [exit 0]
 --- stdout
-157 metrics. Syntax and sentence-opening metrics need spaCy.
+160 metrics. Syntax and sentence-opening metrics need spaCy.
 
 Size
   Words                                               Prose words, after code, tables and markup are removed.
@@ -197,3 +197,14 @@ Social formatting
                                                       instead of a word, dash or number. Reported, not part of Delta.
   Emoji                                        /1k    Emoji, pictographs and symbol characters such as check marks.
                                                       Reported, not part of Delta.
+
+Rhetorical shapes
+  Lists of three or more ("A, B, C, and D")    /1k    Sentences or clauses that are a list of three or more parts joined
+                                                      by commas and a final "and" or "or". Includes every three-part
+                                                      list. Reported, not part of Delta.
+  Balanced semicolon lines                     /1k    Sentences of two short halves hinged on one semicolon: "The
+                                                      barrier collapsed; the attention did not." Reported, not part of
+                                                      Delta.
+  Colon reveals                                /1k    Sentences that set up a full clause, then end with a short clause
+                                                      after a colon: "The fix has one problem: it needs too much
+                                                      precision." Reported, not part of Delta.
