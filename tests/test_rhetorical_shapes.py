@@ -110,10 +110,14 @@ def test_rhetorical_shapes_are_reported_but_not_scored() -> None:
         "word " * 5000 + ";" + " word" * 5000,
         "word " * 5000 + ":" + " word" * 5000,
         ("a b c d e: f g, " * 2000),
+        "I.\x1f" * 10922,
+        "One two three. " * 3000,
+        "One two three four five six: seven eight nine. " * 1000,
+        "One two three; four five six. " * 1000,
     ],
 )
 def test_rhetorical_shapes_stay_fast_on_adversarial_text(text: str) -> None:
     started = time.perf_counter()
     for metric in ("comma_series", "semicolon_balances", "colon_reveals"):
         match_spans(text, metric)
-    assert time.perf_counter() - started < 2.0
+    assert time.perf_counter() - started < 0.5

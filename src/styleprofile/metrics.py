@@ -122,7 +122,7 @@ _SHAPE_WORD = r"[^\s;:.!?\N{HORIZONTAL ELLIPSIS}]+"
 # not." Longer halves, a second semicolon or a list before it do not count. Balanced semicolon
 # lines are common in human writing too; this is a measurement, not a tell on its own.
 SEMICOLON_BALANCE = re.compile(
-    _SENTENCE_START + r"(?P<evidence>(?=[^;,\r\n]*(?:,[^;,\r\n]*)?;)"
+    _SENTENCE_START + r"(?P<evidence>(?=[^;,\r\n]{0,200}(?:,[^;,\r\n]{0,200})?;)"
     rf"(?=\S){_SHAPE_WORD}(?:[^\S\r\n]+{_SHAPE_WORD}){{2,13}};"
     rf"(?>[^\S\r\n]+){_SHAPE_WORD}(?:[^\S\r\n]+{_SHAPE_WORD}){{2,13}})"
     r"(?=[.!?\N{HORIZONTAL ELLIPSIS}])",
@@ -139,7 +139,7 @@ COLON_REVEAL = re.compile(
     _SENTENCE_START + rf"(?P<evidence>(?=\S){_SETUP_WORD}"
     rf"(?:[^\S\r\n]+{_SETUP_WORD}){{4,39}}:(?>[^\S\r\n]+)"
     r"(?![\"'\N{LEFT DOUBLE QUOTATION MARK}\N{LEFT SINGLE QUOTATION MARK}])"
-    r"(?=[^,:\r\n.!?]*(?:,[^,:\r\n.!?]*)?[.!])"
+    r"(?=[^,:\r\n.!?]{0,200}(?:,[^,:\r\n.!?]{0,200})?[.!])"
     rf"{_SHAPE_WORD}(?:[^\S\r\n]+{_SHAPE_WORD}){{1,13}})"
     r"(?=[.!])",
     re.M,
