@@ -94,6 +94,56 @@ PARALLEL_TRIAD = re.compile(
     r"(?=[;:.!?\N{HORIZONTAL ELLIPSIS}]|$)",
     re.I | re.M,
 )
+# The start of a sentence: the start of a line, or after a sentence break (and any closing
+# quote) and a space. Shared by the sentence-shaped patterns below.
+_SENTENCE_START = (
+    r"(?:^|(?<=[.!?\N{HORIZONTAL ELLIPSIS}][^\S\r\n])"
+    r"|(?<=[.!?\N{HORIZONTAL ELLIPSIS}][\"'\N{RIGHT DOUBLE QUOTATION MARK}"
+    r"\N{RIGHT SINGLE QUOTATION MARK})][^\S\r\n]))(?>[^\S\r\n]*)"
+)
+# A whole sentence or semicolon clause that is a list of three or more parts joined by commas
+# and a final "and" or "or": "Made, ignored, and forgotten." and "They use tools, check
+# progress, recover from mistakes, and ask for help." Every parallel triad is one, as are
+# longer lists and "or" lists. Parts follow the triad's rules (1-60 characters, one line, no
+# introductory opener), so the count is a superset of ``parallel_triads``.
+COMMA_SERIES = re.compile(
+    r"(?:^|(?<=;)|(?<=[.!?\N{HORIZONTAL ELLIPSIS}][^\S\r\n])"
+    r"|(?<=[.!?\N{HORIZONTAL ELLIPSIS}][\"'\N{RIGHT DOUBLE QUOTATION MARK}"
+    r"\N{RIGHT SINGLE QUOTATION MARK})][^\S\r\n]))(?>[^\S\r\n]*)"
+    rf"(?!{_TRIAD_INTRO})(?P<evidence>(?=\S){_TRIAD_ITEM}(?:,(?>[^\S\r\n]+){_TRIAD_ITEM})+"
+    rf",?(?>[^\S\r\n]+)(?:and|or)(?>[^\S\r\n]+){_TRIAD_ITEM})"
+    r"(?=[;:.!?\N{HORIZONTAL ELLIPSIS}]|$)",
+    re.I | re.M,
+)
+# A word for the sentence-shaped patterns: no space and no sentence or clause break.
+_SHAPE_WORD = r"[^\s;:.!?\N{HORIZONTAL ELLIPSIS}]+"
+# A sentence of two short halves hinged on its only semicolon, each half 3-14 words, the first
+# with at most one comma: "The barrier to entry collapsed; the distribution of attention did
+# not." Longer halves, a second semicolon or a list before it do not count. Balanced semicolon
+# lines are common in human writing too; this is a measurement, not a tell on its own.
+SEMICOLON_BALANCE = re.compile(
+    _SENTENCE_START + r"(?P<evidence>(?=[^;,\r\n]*(?:,[^;,\r\n]*)?;)"
+    rf"(?=\S){_SHAPE_WORD}(?:[^\S\r\n]+{_SHAPE_WORD}){{2,13}};"
+    rf"(?>[^\S\r\n]+){_SHAPE_WORD}(?:[^\S\r\n]+{_SHAPE_WORD}){{2,13}})"
+    r"(?=[.!?\N{HORIZONTAL ELLIPSIS}])",
+    re.M,
+)
+# A sentence that sets up a full clause of 5-40 words, then a colon and a short ending of 2-14
+# words with at most one comma, ending the sentence: "This is a standard problem with such
+# solutions: they require too much precision." Short labels ("The answer: no."), quotations
+# and lists after the colon, and questions do not count. Many writers use this shape; this is
+# a measurement, not a tell on its own.
+# A set-up word may hold a semicolon but no colon or sentence break.
+_SETUP_WORD = r"[^\s:.!?\N{HORIZONTAL ELLIPSIS}]+"
+COLON_REVEAL = re.compile(
+    _SENTENCE_START + rf"(?P<evidence>(?=\S){_SETUP_WORD}"
+    rf"(?:[^\S\r\n]+{_SETUP_WORD}){{4,39}}:(?>[^\S\r\n]+)"
+    r"(?![\"'\N{LEFT DOUBLE QUOTATION MARK}\N{LEFT SINGLE QUOTATION MARK}])"
+    r"(?=[^,:\r\n.!?]*(?:,[^,:\r\n.!?]*)?[.!])"
+    rf"{_SHAPE_WORD}(?:[^\S\r\n]+{_SHAPE_WORD}){{1,13}})"
+    r"(?=[.!])",
+    re.M,
+)
 TRANSITION_OPENER = re.compile(
     r"^(?:however|moreover|furthermore|additionally|overall|ultimately|importantly|notably|"
     r"in fact|that said|in short|in conclusion|as a result|consequently|thus|therefore)\b",
@@ -201,6 +251,8 @@ GROUPS: tuple[Group, ...] = (
     Group("register", "Edited register", scored=False),
     # Reported, not scored: social-post formatting, absent from most long-form writing.
     Group("social", "Social formatting", scored=False),
+    # Reported, not scored: rhetorical sentence shapes that many writers use too.
+    Group("rhetoric", "Rhetorical shapes", scored=False),
 )
 GROUP_BY_NAME: dict[str, Group] = {group.name: group for group in GROUPS}
 UNSCORED_GROUPS = frozenset(group.name for group in GROUPS if not group.scored)
@@ -558,6 +610,27 @@ METRICS: tuple[Metric, ...] = (
         "Emoji",
         "Emoji, pictographs and symbol characters such as check marks. Reported, not part of"
         " Delta.",
+    ),
+    _rate(
+        "rhetoric",
+        "comma_series_per_1k",
+        'Lists of three or more ("A, B, C, and D")',
+        "Sentences or clauses that are a list of three or more parts joined by commas and a"
+        ' final "and" or "or". Includes every three-part list. Reported, not part of Delta.',
+    ),
+    _rate(
+        "rhetoric",
+        "semicolon_balances_per_1k",
+        "Balanced semicolon lines",
+        'Sentences of two short halves hinged on one semicolon: "The barrier collapsed; the'
+        ' attention did not." Reported, not part of Delta.',
+    ),
+    _rate(
+        "rhetoric",
+        "colon_reveals_per_1k",
+        "Colon reveals",
+        "Sentences that set up a full clause, then end with a short clause after a colon:"
+        ' "The fix has one problem: it needs too much precision." Reported, not part of Delta.',
     ),
 )
 METRIC_BY_NAME: dict[str, Metric] = {metric.name: metric for metric in METRICS}

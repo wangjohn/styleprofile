@@ -18,6 +18,8 @@ from itertools import pairwise
 from styleprofile.metrics import (
     AND_BUT_SO_OPENER,
     BOOSTER,
+    COLON_REVEAL,
+    COMMA_SERIES,
     CONTRACTION_SUFFIX,
     CORRECTIVE_CONTRAST,
     FIRST_PLURAL,
@@ -32,6 +34,7 @@ from styleprofile.metrics import (
     PARALLEL_TRIAD,
     S_CONTRACTIONS,
     SECOND,
+    SEMICOLON_BALANCE,
     SHORT_SENTENCE_WORDS,
     TRANSITION_OPENER,
     grouped,
@@ -115,6 +118,9 @@ _COUNTED: dict[str, tuple[re.Pattern[str], bool]] = {
     "not_just_but": (NOT_JUST_BUT, True),
     "corrective_contrasts": (CORRECTIVE_CONTRAST, True),
     "parallel_triads": (PARALLEL_TRIAD, False),
+    "comma_series": (COMMA_SERIES, False),
+    "semicolon_balances": (SEMICOLON_BALANCE, False),
+    "colon_reveals": (COLON_REVEAL, False),
 }
 _OPENERS: dict[str, re.Pattern[str]] = {
     "transition_openers": TRANSITION_OPENER,
@@ -524,7 +530,8 @@ def match_spans(text: str, metric: str) -> list[tuple[int, int]]:
     ``metric`` is a count metric's name without ``_per_1k``: ``commas``, ``semicolons``,
     ``colons``, ``parentheses``, ``questions``, ``exclamations``, ``em_dashes``,
     ``ellipses``, ``hedges``, ``boosters``, ``llm_markers``, ``not_just_but``,
-    ``corrective_contrasts`` or ``parallel_triads``. ``text``
+    ``corrective_contrasts``, ``parallel_triads``, ``comma_series``, ``semicolon_balances``
+    or ``colon_reveals``. ``text``
     is prose, as ``prose(markdown).text`` returns it; for that text,
     ``len(match_spans(text, metric))`` is the count behind ``<metric>_per_1k``. Raises
     ``ValueError`` for any other name.
@@ -709,6 +716,9 @@ def surface_metrics(
         "not_just_but_per_1k": rate(_count(text, plain, "not_just_but")),
         "corrective_contrasts_per_1k": rate(_count(text, plain, "corrective_contrasts")),
         "parallel_triads_per_1k": rate(_count(text, plain, "parallel_triads")),
+        "comma_series_per_1k": rate(_count(text, plain, "comma_series")),
+        "semicolon_balances_per_1k": rate(_count(text, plain, "semicolon_balances")),
+        "colon_reveals_per_1k": rate(_count(text, plain, "colon_reveals")),
         "headings_per_1k": rate(parsed.headings),
         "list_items_per_1k": rate(parsed.list_items),
         "links_per_1k": rate(parsed.links),

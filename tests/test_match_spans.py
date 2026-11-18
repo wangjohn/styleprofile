@@ -30,6 +30,9 @@ COUNT_METRICS = (
     "not_just_but",
     "corrective_contrasts",
     "parallel_triads",
+    "comma_series",
+    "semicolon_balances",
+    "colon_reveals",
 )
 
 Q = "\N{RIGHT SINGLE QUOTATION MARK}"
