@@ -115,6 +115,7 @@ def test_rhetorical_shapes_are_reported_but_not_scored() -> None:
         "One two three four five six: seven eight nine. " * 1000,
         "One two three; four five six. " * 1000,
     ],
+    ids=lambda text: f"{len(text)}-chars",
 )
 def test_rhetorical_shapes_stay_fast_on_adversarial_text(text: str) -> None:
     started = time.perf_counter()
