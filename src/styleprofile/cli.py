@@ -563,6 +563,24 @@ def _subparsers() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentP
         action="store_true",
         help="skip the spaCy parser and its metrics",
     )
+    feedback_build = commands.add_parser(
+        "feedback-build",
+        help="Learn personal voice and revision preferences from rated JSONL passages.",
+    )
+    feedback_build.add_argument("inputs", nargs="+", help="rated passage JSONL files")
+    feedback_build.add_argument(
+        "--reference", required=True, help="existing contrast reference JSON"
+    )
+    feedback_build.add_argument(
+        "-o", "--output", required=True, help="personal feedback profile JSON"
+    )
+    feedback_score = commands.add_parser(
+        "feedback-score", help="Score prose with a learned personal feedback profile and evidence."
+    )
+    feedback_score.add_argument("input", help="Markdown or plain-text draft")
+    feedback_score.add_argument("profile", help="saved personal feedback profile JSON")
+    feedback_score.add_argument("--json", action="store_true", help="print complete JSON report")
+    feedback_score.add_argument("-o", "--output", help="also save the JSON report")
     return parser, dict(commands.choices)
 
 
@@ -1294,7 +1312,60 @@ def _run_demo(args: argparse.Namespace) -> int:
     return code
 
 
+def _run_feedback_build(args: argparse.Namespace) -> int:
+    import json
+
+    from styleprofile.feedback import FeedbackProfile
+
+    try:
+        examples = [
+            json.loads(line)
+            for name in args.inputs
+            for line in Path(name).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if not all(isinstance(example, dict) for example in examples):
+            raise ValueError("each feedback JSONL record must be an object")
+        profile = FeedbackProfile.learn(examples, Profile.load(args.reference))
+    except (ValueError, TypeError) as error:
+        raise StyleProfileError(str(error)) from error
+    profile.save(args.output)
+    print(f"Saved personal feedback profile from {len(examples)} ratings to {args.output}")
+    print(profile.report["warning"])
+    return 0
+
+
+def _run_feedback_score(args: argparse.Namespace) -> int:
+    import json
+
+    from styleprofile.feedback import FeedbackProfile
+
+    report = FeedbackProfile.load(args.profile).score(Path(args.input).read_text(encoding="utf-8"))
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output:
+        Path(args.output).write_text(payload + "\n", encoding="utf-8")
+    if args.json:
+        print(payload)
+    else:
+        for field, title, scale in [
+            ("voice_estimate_1_to_5", "Personal voice estimate", 5),
+            ("revision_estimate_0_to_2", "Revision effort estimate", 2),
+        ]:
+            value = report[field]
+            print(
+                f"{title}: {value:.2f}/{scale}"
+                if value is not None
+                else f"{title}: disabled; insufficient text or no development gain"
+            )
+        for item in report["rhetoric"]["evidence"]:
+            print(f"  {item['label']}: {item['text']}")
+        print(report["warning"])
+    return 0
+
+
 RUNNERS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "feedback-build": _run_feedback_build,
+    "feedback-score": _run_feedback_score,
     "build": _run_build,
     "score": _run_score,
     "show": _run_show,
